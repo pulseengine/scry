@@ -1,0 +1,306 @@
+artifacts:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Design decisions — the architectural shape of the AI pass.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: DD-001
+    type: design-decision
+    title: Place the Core-Wasm abstract-interpretation pass between meld and loom
+    status: draft
+    tags: [pipeline-placement, core]
+    fields:
+      decision: >
+        The Core-Wasm AI pass runs on the fused Core Wasm module emitted
+        by meld and before loom's optimization passes. Its outputs are
+        consumed by loom as invariant annotations and by rivet/sigil as
+        verification evidence.
+      rationale: >
+        meld lowers the Component Model to a single fused Core Wasm
+        module — every artifact downstream of meld therefore operates on
+        Core Wasm, not on components. Placing the AI after meld means
+        it sees the actual code loom is about to transform, so its
+        invariants apply directly to loom's transformation preconditions
+        without translation. Placing it after meld also means a single
+        AI implementation covers all downstream consumers (loom, witness
+        for coverage prediction, synth for codegen invariant
+        generation) without needing component-aware logic in any of them.
+      alternatives: >
+        (a) Inline as a loom analysis pass — rejected because the AI
+            crate should be reusable by tools that don't link loom (DD-004,
+            REQ-006), and because loom's translation-validation strategy
+            is independent of how invariants were produced.
+        (b) Pre-meld on each component individually — keeps Component
+            Model structure visible to AI but cannot reason about cross-
+            component composition after fusion. Best paired with DD-002
+            rather than substituted for it.
+        (c) Post-loom — too late: the optimizer has already discarded
+            information AI could have used to certify its own
+            transformations.
+      source-ref: "https://pulseengine.eu/blog/2026-04-22-overdoing-the-verification-chain/"
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: satisfies
+        target: REQ-004
+      - type: traces-to
+        target: DD-002
+      - type: traces-to
+        target: DD-004
+      - type: traces-to
+        target: REQ-006
+
+  - id: DD-002
+    type: design-decision
+    title: Component-Model AI placement — choose between pre-meld pass, meld-preserved provenance, or hybrid
+    status: draft
+    tags: [pipeline-placement, component-model, decision-pending]
+    fields:
+      decision: >
+        TODO — see "User contribution requested" below. The Component-
+        Model AI strategy is a real architectural choice with three
+        viable options, and the right answer depends on facts about meld
+        (does it already emit provenance? would it cost much to add?)
+        that the user is best positioned to decide.
+      rationale: >
+        meld fuses Wasm components into a single Core Wasm module. Once
+        meld has run, owned/borrowed handle types, capability imports,
+        and component boundaries are erased from the Core IR. Any AI
+        that wants to reason about Component-Model-level properties
+        (use-after-drop on handles, capability flow, host-call effect
+        sets, refinement of WIT contracts) therefore needs to either
+        (a) run BEFORE meld on the still-component-shaped IR;
+        (b) consume PROVENANCE METADATA that meld preserves into the
+            fused Core Wasm (e.g. custom sections naming the originating
+            component for each function and the handle-shape of each
+            address-taken integer); or
+        (c) a HYBRID: a pre-meld pass produces a component-level
+            invariant bundle, meld preserves it through fusion, and a
+            post-meld AI verifies invariants are not invalidated.
+        Option (a) is cleanest semantically but means *two* AI
+        implementations (one component-typed, one core); option (b)
+        requires meld changes but yields a single AI implementation;
+        option (c) is the most defensible for a safety case but the
+        most engineering.
+      alternatives: >
+        (Same as the three options described in the rationale — captured
+        there explicitly so the choice is visible alongside the reasons.)
+    links:
+      - type: satisfies
+        target: REQ-003
+
+  - id: DD-003
+    type: design-decision
+    title: Adopt WasmCert-Coq + Iris-Wasm as the soundness substrate
+    status: draft
+    tags: [soundness, mechanization]
+    fields:
+      decision: >
+        The mechanized soundness story for the AI pass is anchored on
+        WasmCert-Coq (mechanized Wasm 1.0 operational semantics) with
+        Iris-Wasm (higher-order separation logic) as the substrate for
+        relational and modular soundness arguments. Initial v0 ships
+        with soundness theorems stated paper-only; mechanization in
+        Rocq follows.
+      rationale: >
+        WasmCert-Coq is the only mechanization of the official Wasm
+        operational semantics with active maintenance in 2025-2026
+        (AC-003, TE-004). Iris-Wasm (AC-004) layers higher-order
+        separation logic on it, which is exactly the right tool for
+        modular composition reasoning that meld's fusion will require.
+        PulseEngine already invests heavily in Rocq via rules_rocq_rust,
+        meld's fusion-correctness proofs, and synth's i32-semantics
+        proofs — so the toolchain investment is sunk and the proofs
+        live in the same ecosystem.
+      alternatives: >
+        (a) WasmCert-Isabelle — equally credible mechanization, but
+            PulseEngine's existing Rocq investment makes Coq the lower-
+            friction choice.
+        (b) Self-mechanize against SpecTec (AC-005) — strategically
+            attractive long-term once a SpecTec→Rocq backend exists, but
+            premature today.
+        (c) No mechanization, paper proofs only — sufficient for v0,
+            insufficient for a credit-bearing safety case claim at
+            ASIL-D / DAL-A.
+      source-ref: "https://github.com/WasmCert/WasmCert-Coq"
+    links:
+      - type: satisfies
+        target: REQ-002
+      - type: references-paper
+        target: AC-003
+      - type: references-paper
+        target: AC-004
+      - type: references-paper
+        target: AC-005
+      - type: evaluates-tech
+        target: TE-004
+
+  - id: DD-004
+    type: design-decision
+    title: Implement a reusable wasm-lattice crate decoupled from the Wasm front-end
+    status: draft
+    tags: [architecture, reusability]
+    fields:
+      decision: >
+        The abstract-domain library — intervals, octagons, region-memory,
+        reachability, taint, capability-flow, resource-lifetime — ships
+        as a separate Rust crate (working name `wasm-lattice`) with no
+        dependency on Wasm parsing or the fixpoint engine.
+      rationale: >
+        Brandl et al. ECOOP 2023 (AC-006) demonstrate exactly this
+        modular pattern: ~19 language-independent semantic components
+        in the Sturdy framework let them build dead-code / constant-
+        propagation / taint analyses each in under 210 LOC once the
+        domain library exists. Separating the lattice crate yields the
+        same payoff for PulseEngine: witness can reuse it for coverage-
+        gap prediction, synth can reuse it for ARM/RISC-V codegen
+        invariant generation, and external tools can adopt it without
+        pulling the rest of the stack.
+      alternatives: >
+        (a) Bundle the lattice into the AI front-end crate — rejected
+            because it makes downstream reuse painful and entangles
+            soundness proofs with parsing details.
+        (b) Use MIRAI's domain library directly — rejected because MIRAI
+            is research-grade and explicitly experimental (TE-002), and
+            its abstractions are MIR-shaped rather than Wasm-shaped.
+        (c) Bind CRAB via FFI — CRAB (TE-005) has the best memory model
+            in OSS, but it's C++ and FFI ergonomics in a Rust pipeline
+            would be a maintenance burden.
+    links:
+      - type: satisfies
+        target: REQ-006
+      - type: references-paper
+        target: AC-006
+      - type: evaluates-tech
+        target: TE-002
+      - type: evaluates-tech
+        target: TE-005
+
+  - id: DD-005
+    type: design-decision
+    title: Initial v0 domain set — intervals + region-memory + reachability + sound indirect-call resolution
+    status: draft
+    tags: [domains, scoping]
+    fields:
+      decision: >
+        v0 of the AI pass ships with four composed abstract domains:
+        (1) interval for i32/i64 numeric ranges,
+        (2) region-based memory model (CRAB-style, TE-005) for linear-
+            memory shape and offsets,
+        (3) reachability (powerset of program points) for dead-code,
+        (4) sound indirect-call resolution via value-domain AI on the
+            operand stack (Paccamiccio et al. technique, AC-008).
+        Octagons and floating-point polyhedra are deferred to v1.
+        Taint, capability-flow, and resource-lifetime are deferred to
+        v2 (they require either the Component-Model pass per DD-002 or
+        explicit security/component requirements).
+      rationale: >
+        The four chosen domains cover exactly the loom-relevant
+        analyses (bounds-check elision, constant folding via intervals,
+        dead-code via reachability) and exactly the soundness pre-
+        condition (call-graph soundness via AC-008). They keep v0 small
+        enough to ship with paper soundness proofs against AC-002 and
+        leave room for relational and security domains as separable
+        v1/v2 additions. Brandl et al. (AC-006) ship comparable
+        analyses each in <210 LOC once the lattice library exists, so
+        the v0 scope is consistent with one engineer-quarter of work.
+      alternatives: >
+        (a) Start with full Astrée-class domain set (intervals +
+            octagons + ellipsoids + floating-point polyhedra) —
+            rejected as gold-plating for v0; relational domains pay off
+            once we have a concrete benchmark of false-alarm rates.
+        (b) Start with taint-only (Wanilla-style, AC-007) — rejected
+            because the immediate consumers (loom, witness) want
+            numeric and shape invariants, not security labels.
+        (c) Defer indirect-call resolution to v1 — rejected because
+            without it every interprocedural analysis is unsound per
+            MF-003, undermining the soundness story.
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: satisfies
+        target: REQ-008
+      - type: references-paper
+        target: AC-002
+      - type: references-paper
+        target: AC-006
+      - type: references-paper
+        target: AC-007
+      - type: references-paper
+        target: AC-008
+      - type: evaluates-tech
+        target: TE-005
+      - type: addresses-finding
+        target: MF-003
+      - type: traces-to
+        target: DD-002
+
+  - id: DD-006
+    type: design-decision
+    title: Use compositional summary-based interprocedural analysis to scale to fused modules
+    status: draft
+    tags: [scalability]
+    fields:
+      decision: >
+        Interprocedural analysis uses per-function abstract summaries
+        in the Stiévenart-De Roover (AC-010) style: each function gets
+        a summary describing the abstract effect of its parameters and
+        globals on its outputs and side effects. Summaries are computed
+        bottom-up over the (sound) call graph and reused at every call
+        site. Recursive components are handled by widening at the
+        recursion frontier.
+      rationale: >
+        meld produces fused Wasm modules that can be substantially
+        larger than any single component. Monolithic whole-program AI
+        does not scale to those sizes. Compositional summaries are the
+        established technique (AC-010 reports ≥64% of summaries
+        computed precisely under one minute on 196 kLOC of Wasm) and
+        compose well with the call-graph soundness guarantee from
+        DD-005.
+      alternatives: >
+        (a) Pure monolithic analysis — simpler, but does not scale.
+        (b) Per-component analysis only — rejected because it cannot
+            see post-fusion call sites that cross component boundaries.
+        (c) Top-down call-string-bounded analysis — alternative
+            interprocedural strategy; rejected for v0 because bottom-up
+            summaries cache better in CI re-analysis.
+    links:
+      - type: satisfies
+        target: REQ-007
+      - type: references-paper
+        target: AC-010
+      - type: traces-to
+        target: DD-005
+
+  - id: DD-007
+    type: design-decision
+    title: Emit AI results as sigil-signed in-toto predicates linked from rivet
+    status: draft
+    tags: [attestation, integration, rivet, sigil]
+    fields:
+      decision: >
+        Each AI run emits an in-toto predicate signed by sigil,
+        containing: (input-module SHA-256, lattice-library version,
+        analyzer version, configured domain set, configured widening
+        thresholds, full set of proven invariants in a stable on-disk
+        schema, any unsound-construct fallbacks encountered). Rivet
+        schemas allow a `verified-by` link from a requirement to the
+        attestation's content-addressed identifier.
+      rationale: >
+        The PulseEngine attestation story (sigil) already covers fusion
+        proofs (meld), optimization proofs (loom), and coverage reports
+        (witness) — AI attestations slot into the same scheme without
+        new infrastructure. Content-addressing the attestation lets
+        rivet trace from a requirement's "verified" status back to the
+        exact AI run that established it, satisfying ISO 26262-8 §11
+        traceability and DO-178C §11.20 software verification record
+        expectations.
+      alternatives: >
+        (a) Plain JSON output, no signing — rejected because un-signed
+            verification evidence cannot bear safety-case weight.
+        (b) Sign individual invariants — rejected as over-granular;
+            atomic-run signing is sufficient and matches the rest of
+            the PulseEngine attestation story.
+    links:
+      - type: satisfies
+        target: REQ-005

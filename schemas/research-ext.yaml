@@ -1,0 +1,89 @@
+# Local extension to the built-in `research` schema.
+#
+# Adds typed link predicates so that:
+#
+#   * technology-evaluations and market-findings can structurally
+#     cite academic-references (`references-paper`),
+#   * engineering and safety-case artifacts can address market-findings
+#     (`addresses-finding`),
+#   * engineering and safety-case artifacts can name technology-
+#     evaluations as considered context (`evaluates-tech`).
+#
+# The upstream `research` schema only models flow FROM research artifacts
+# (academic-reference.informs, market-finding.motivates,
+# technology-evaluation.enables) TO engineering artifacts. That direction
+# alone leaves prose citations untyped and produces structural orphans
+# on the research side. The link types added here provide the inverse
+# direction without redeclaring any existing artifact type.
+#
+# Link-type merge behavior (per rivet docs/schemas.md):
+#   "Link types are unioned by name. Duplicates are deduplicated."
+# So adding new uniquely-named link types is a non-destructive extension.
+
+schema:
+  name: research-ext
+  version: "0.1.0"
+  namespace: "http://pulseengine.dev/ns/research-ext#"
+  extends: [research, common]
+  description: >
+    Local extension to `research` adding cross-artifact citation
+    predicates (research <-> engineering, research <-> safety-case).
+
+link-types:
+
+  - name: references-paper
+    inverse: referenced-by-paper
+    description: >
+      Source artifact references a published academic work, technical
+      report, or standards document by structurally linking to an
+      `academic-reference` artifact. Backs prose citations with a typed
+      predicate that `rivet validate`, `rivet impact`, and the dashboard
+      can follow.
+    source-types:
+      - technology-evaluation
+      - market-finding
+      - competitive-analysis
+      - requirement
+      - design-decision
+      - feature
+      - safety-goal
+      - safety-strategy
+      - safety-solution
+      - safety-context
+      - safety-justification
+    target-types:
+      - academic-reference
+
+  - name: addresses-finding
+    inverse: addressed-by
+    description: >
+      Source artifact (requirement, design-decision, feature, or
+      safety-case element) addresses a `market-finding` — a regulation,
+      pain-point, tool-gap, or opportunity. Establishes the why-now
+      traceability from market context to the engineering response.
+    source-types:
+      - requirement
+      - design-decision
+      - feature
+      - safety-goal
+      - safety-strategy
+      - safety-justification
+    target-types:
+      - market-finding
+
+  - name: evaluates-tech
+    inverse: evaluated-by-tech
+    description: >
+      Source artifact references a `technology-evaluation` as relevant
+      context — typically a design-decision that names the considered
+      alternatives by linking to their evaluations.
+    source-types:
+      - requirement
+      - design-decision
+      - feature
+      - safety-goal
+      - safety-strategy
+      - safety-solution
+      - safety-justification
+    target-types:
+      - technology-evaluation

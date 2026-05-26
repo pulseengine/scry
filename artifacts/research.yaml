@@ -1,0 +1,594 @@
+artifacts:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Academic references — the canonical literature this work builds on.
+  # IDs use the prefix AC- (academic citation).
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: AC-001
+    type: academic-reference
+    title: "Abstract interpretation: a unified lattice model for static analysis of programs (Cousot & Cousot, POPL 1977)"
+    status: draft
+    tags: [foundation, abstract-interpretation]
+    description: >
+      Founding paper of abstract interpretation; see `key-finding` for
+      the technical summary and `relevance` for how it anchors the
+      soundness story of any PulseEngine Wasm AI pass.
+    fields:
+      authors: "Patrick Cousot, Radhia Cousot"
+      year: 1977
+      venue: "ACM POPL 1977, pp. 238-252"
+      url: "https://dl.acm.org/doi/10.1145/512950.512973"
+      key-finding: >
+        Founding paper of abstract interpretation. Establishes the lattice
+        framework: a concrete semantics ⟨P(Σ), ⊆⟩ and an abstract semantics
+        ⟨A, ⊑⟩ connected by a Galois connection (α, γ), with sound monotone
+        transfer functions and widening operators ▽ to ensure termination
+        on non-Noetherian abstract domains. Every "sound static analysis"
+        claim of the form "the analysis over-approximates the collecting
+        semantics" cites this paper.
+      relevance: >
+        Foundational. Any soundness theorem for a PulseEngine Wasm AI pass
+        will be proved by reduction to this framework.
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: REQ-002
+      - type: traces-to
+        target: DD-003
+
+  - id: AC-002
+    type: academic-reference
+    title: "Bringing the Web up to Speed with WebAssembly (Haas, Rossberg, Schuff et al., PLDI 2017)"
+    status: draft
+    tags: [wasm, semantics, foundation]
+    fields:
+      authors: "Andreas Haas, Andreas Rossberg, Derek L. Schuff, Ben L. Titzer, Michael Holman, Dan Gohman, Luke Wagner, Alon Zakai, JF Bastien"
+      year: 2017
+      venue: "ACM PLDI 2017 (Distinguished Paper); revised in CACM 2018"
+      url: "https://dl.acm.org/doi/10.1145/3062341.3062363"
+      key-finding: >
+        Founding small-step operational semantics for WebAssembly: abstract
+        syntax, typing rules, reduction rules, abstract store. WebAssembly
+        is unusual among industrial languages in having a formal small-step
+        semantics from day one — this is what makes mechanization and sound
+        static analysis tractable at all.
+      relevance: >
+        The concrete semantics that any sound Wasm abstract interpreter
+        must over-approximate. Defines the abstract syntax and reduction
+        rules that an AI transfer function set must cover.
+    links:
+      - type: traces-to
+        target: REQ-002
+      - type: traces-to
+        target: DD-003
+
+  - id: AC-003
+    type: academic-reference
+    title: "Two Mechanisations of WebAssembly 1.0 (Watt, Rao, Pichon-Pharabod, Bodin, Gardner, FM 2021)"
+    status: draft
+    tags: [wasm, mechanization, coq, isabelle]
+    fields:
+      authors: "Conrad Watt, Xiaojia Rao, Jean Pichon-Pharabod, Martin Bodin, Philippa Gardner"
+      year: 2021
+      venue: "Formal Methods 2021"
+      url: "https://hal.science/hal-03353748"
+      key-finding: >
+        Presents both WasmCert-Isabelle and WasmCert-Coq — mechanizations
+        of the official Wasm 1.0 semantics. WasmCert-Isabelle ships a
+        verified executable interpreter and verified instantiation phase;
+        WasmCert-Coq targets end-to-end verified interpretation with
+        executable parser and numerics. WasmRef-Isabelle has been adopted
+        as a fuzzing oracle for the wasmtime engine.
+      relevance: >
+        The natural mechanized soundness substrate for any verified Wasm
+        AI pass. Mechanically checking that PulseEngine transfer functions
+        over-approximate the concrete semantics would reduce to a proof
+        against WasmCert-Coq.
+    links:
+      - type: traces-to
+        target: REQ-002
+      - type: traces-to
+        target: DD-003
+      - type: traces-to
+        target: TE-004
+
+  - id: AC-004
+    type: academic-reference
+    title: "Iris-Wasm: Robust and Modular Verification of WebAssembly Programs (Rao, Georges, Legoupil, Watt, Pichon-Pharabod, Gardner, Birkedal, PLDI 2023)"
+    status: draft
+    tags: [wasm, separation-logic, verification, composition]
+    fields:
+      authors: "Xiaojia Rao, Aïna Linn Georges, Maxime Legoupil, Conrad Watt, Jean Pichon-Pharabod, Philippa Gardner, Lars Birkedal"
+      year: 2023
+      venue: "PACMPL PLDI 2023, paper #151:1-25"
+      url: "https://dl.acm.org/doi/10.1145/3591265"
+      key-finding: >
+        Builds higher-order separation logic on WasmCert-Coq using Iris.
+        Supports per-module modular specification and modular composition
+        under a simple JavaScript-style host language. Artifact at
+        Zenodo 7808708.
+      relevance: >
+        The closest existing work to "verified modular composition of Wasm
+        components". Most relevant baseline if PulseEngine wants to layer
+        abstract interpretation on a verified module-composition story —
+        the same separation-logic frame can support a relational AI.
+    links:
+      - type: traces-to
+        target: DD-003
+      - type: traces-to
+        target: TE-004
+
+  - id: AC-005
+    type: academic-reference
+    title: "Bringing the WebAssembly Standard up to Speed with SpecTec (Youn et al., PLDI 2024)"
+    status: draft
+    tags: [wasm, spec-tooling, automation]
+    fields:
+      authors: "Dongjun Youn, Wonho Shin, Donghyun Lee, Sukyoung Ryu, Joachim Breitner, Philippa Gardner, Sam Lindley, Matija Pretnar, Xiaojia Rao, Conrad Watt, Andreas Rossberg"
+      year: 2024
+      venue: "PACMPL PLDI 2024, vol 8, pp. 1559-1584"
+      url: "https://dl.acm.org/doi/10.1145/3656440"
+      key-finding: >
+        SpecTec is a DSL from which the Wasm spec is generated: the typeset
+        document, prose pseudocode, and a meta-level interpreter all come
+        from a single source. Adopted by the Wasm Community Group for
+        future spec editions. Backends for test generation and ITP planned.
+      relevance: >
+        Long-term lever for soundness-by-construction: if PulseEngine
+        derives AI transfer functions from the SpecTec source rather than
+        hand-writing them, soundness against the operational semantics
+        becomes a mechanically discharged side-condition rather than a
+        proof obligation.
+    links:
+      - type: traces-to
+        target: DD-003
+
+  - id: AC-006
+    type: academic-reference
+    title: "Modular Abstract Definitional Interpreters for WebAssembly (Brandl, Erdweg, Keidel, Hansen, ECOOP 2023)"
+    status: draft
+    tags: [wasm, abstract-interpretation, primary-art]
+    fields:
+      authors: "Katharina Brandl, Sebastian Erdweg, Sven Keidel, Nils Hansen"
+      year: 2023
+      venue: "ECOOP 2023, LIPIcs vol 263, paper 5"
+      url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ECOOP.2023.5"
+      key-finding: >
+        Decomposes Wasm semantics into ~19 language-independent components
+        in the Sturdy Haskell framework. Configurable definitional
+        interpreter for full Wasm 1.0 in 1628 LOC. Dead-code, constant
+        propagation, and taint analyses each built in under 210 LOC.
+        Evaluated on 1458 wild Wasm binaries.
+      relevance: >
+        Proves AI for Wasm Core Model is practical. Demonstrates the
+        modular-domain pattern that would underpin a reusable
+        `wasm-lattice` crate. Sets the LOC bar for what a single analysis
+        should cost to add once the lattice library exists.
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: REQ-006
+      - type: traces-to
+        target: DD-004
+      - type: traces-to
+        target: DD-005
+
+  - id: AC-007
+    type: academic-reference
+    title: "Wanilla: Sound Noninterference Analysis for WebAssembly (Scherer, Blaabjerg, Sjösten, Maffei, CCS 2025)"
+    status: draft
+    tags: [wasm, abstract-interpretation, security, ifc, primary-art]
+    fields:
+      authors: "Lukas Scherer, Anders Blaabjerg, Andreas Sjösten, Matteo Maffei"
+      year: 2025
+      venue: "ACM CCS 2025"
+      url: "https://arxiv.org/abs/2509.08758"
+      key-finding: >
+        Claims to be the first automatic, sound, fully static noninterference
+        analysis for Wasm. Lifts an existing reachability analysis to
+        noninterference by tracking taints on values and using value-
+        sensitive relational reasoning. Targets memory integrity and
+        module-vs-context information flow as hyperproperties.
+      relevance: >
+        Demonstrates that sound AI-based hyperproperty checking on Wasm is
+        achievable in 2025 — the timing of the PulseEngine commitment is
+        well-aligned with state of the art. Wanilla is also a candidate
+        prior-art baseline for taint analysis in the PulseEngine AI pass.
+    links:
+      - type: traces-to
+        target: DD-005
+
+  - id: AC-008
+    type: academic-reference
+    title: "Building Call Graph of WebAssembly Programs via Abstract Semantics (Paccamiccio, Raimondi, Loreti, 2024)"
+    status: draft
+    tags: [wasm, abstract-interpretation, call-graph, primary-art]
+    fields:
+      authors: "Christian Paccamiccio, Franco Raimondi, Michele Loreti"
+      year: 2024
+      venue: "ITASEC 2024 / CEUR-WS Vol-3731; arXiv:2407.14527; followed by SSRN id=5110464 (Hybrid Call Graph Analysis, 2025)"
+      url: "https://arxiv.org/abs/2407.14527"
+      key-finding: >
+        Uses abstract interpretation to track stack values, resolving
+        indirect call_indirect targets and producing a sounder call graph
+        than the existing static analyzers — which the ISSTA 2023 study
+        showed are empirically unsound for any binary using indirect calls
+        (83% of real Wasm).
+      relevance: >
+        Directly relevant to a PulseEngine analysis that wants to support
+        sound whole-program properties on fused components: indirect-call
+        resolution is the precondition for any sound interprocedural pass.
+    links:
+      - type: traces-to
+        target: REQ-008
+      - type: traces-to
+        target: DD-005
+
+  - id: AC-009
+    type: academic-reference
+    title: "The WebAssembly Component Model (Menon & Wagner, WAW 2025 at POPL)"
+    status: draft
+    tags: [wasm, component-model, formalization, gap]
+    fields:
+      authors: "Lucy Menon, Luke Wagner"
+      year: 2025
+      venue: "WebAssembly Workshop 2025, co-located with POPL 2025, January 20"
+      url: "https://popl25.sigplan.org/details/waw-2025-papers/4/The-WebAssembly-Component-Model"
+      key-finding: >
+        Opens the formalization of the Component Model: introduces the
+        underlying formalism, the basic metatheoretic structure, and the
+        per-feature formalization status. Argues that because the
+        Component Model is a linking/interface language whose execution
+        intertwines with Core Wasm, traditional soundness theorems may be
+        insufficient — soundness structures inspired by multilanguage
+        semantics are required.
+      relevance: >
+        The single most relevant pointer for a Component-Model-level AI.
+        Establishes that the Component Model formalization is in active
+        in-house development at the spec authors' level but no published
+        long paper or mechanization yet exists — i.e., the gap PulseEngine
+        could fill is real and named by the spec authors themselves.
+    links:
+      - type: traces-to
+        target: REQ-003
+
+  - id: AC-010
+    type: academic-reference
+    title: "Compositional Information Flow Analysis for WebAssembly Programs (Stiévenart & De Roover, SCAM 2020)"
+    status: draft
+    tags: [wasm, abstract-interpretation, summary-based]
+    fields:
+      authors: "Quentin Stiévenart, Coen De Roover"
+      year: 2020
+      venue: "IEEE SCAM 2020, pp. 13-24"
+      url: "https://soft.vub.ac.be/~qstieven/scam2020/scam2020-wasm-information-flow-paper.pdf"
+      key-finding: >
+        First compositional static analysis for Wasm: per-function summaries
+        describing how parameter and global state info can flow to outputs.
+        Evaluated on 34 programs / 196 kLOC. ≥64% of summaries computed
+        precisely in under a minute. Authored alongside the Wassail OCaml
+        toolkit (acieroid/wassail).
+      relevance: >
+        Compositional summarization is the pattern PulseEngine would need
+        to scale AI across the fused components meld produces — analyzing
+        the whole composition monolithically does not scale.
+    links:
+      - type: traces-to
+        target: REQ-007
+      - type: traces-to
+        target: DD-006
+
+  - id: AC-011
+    type: academic-reference
+    title: "The octagon abstract domain (Miné, HOSC 2006)"
+    status: draft
+    tags: [abstract-interpretation, numerical-domain, foundation]
+    fields:
+      authors: "Antoine Miné"
+      year: 2006
+      venue: "Higher-Order and Symbolic Computation 19(1), pp. 31-100"
+      url: "https://arxiv.org/abs/cs/0703084"
+      key-finding: >
+        Defines the octagon abstract domain ±x ± y ≤ c. Sub-cubic
+        complexity, implemented via modified Difference Bound Matrices.
+        The workhorse mid-precision relational domain between non-relational
+        intervals and exponential-cost polyhedra.
+      relevance: >
+        The right default relational domain for tracking Wasm linear-memory
+        offset relationships and indirect-call table-index constraints
+        without paying the polyhedra cost.
+    links:
+      - type: traces-to
+        target: DD-005
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Technology evaluations — concrete tools and substrates we could
+  # adopt, integrate with, or measure ourselves against.
+  # IDs use the prefix TE-.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: TE-001
+    type: technology-evaluation
+    title: "Astrée (AbsInt GmbH) — industrial abstract interpreter"
+    status: draft
+    tags: [abstract-interpretation, commercial, reference-point]
+    description: >
+      Astrée is Patrick Cousot's group's flagship industrial abstract
+      interpreter, commercialized by AbsInt. Used by Airbus on flight
+      control. Combines intervals, octagons, ellipsoids (for digital
+      filters), and floating-point polyhedra. Proven that sound AI scales
+      to safety-critical C/Ada with zero false alarms when domains are
+      tuned to the code style.
+    fields:
+      technology: "Astrée"
+      category: framework
+      maturity: production
+      rust-compatible: false
+      wasm-compatible: false
+      license: "Commercial (AbsInt GmbH)"
+      recommendation: assess
+    links:
+      - type: references-paper
+        target: AC-001
+      - type: references-paper
+        target: AC-011
+      - type: traces-to
+        target: REQ-001
+
+  - id: TE-002
+    type: technology-evaluation
+    title: "MIRAI (Meta/Facebook experimental) — abstract interpreter for Rust MIR"
+    status: draft
+    tags: [abstract-interpretation, rust, research]
+    description: >
+      MIRAI operates on Rust MIR, performing abstract interpretation with
+      a tag-based domain and SMT-backed path conditions. The original
+      Meta team was disbanded; the project is now explicitly experimental
+      but still receives commits. Most useful as a Rust-side AI reference
+      point — not as a long-term basis to build on.
+    fields:
+      technology: "MIRAI"
+      category: framework
+      maturity: research
+      rust-compatible: true
+      wasm-compatible: false
+      license: "MIT"
+      recommendation: trial
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: REQ-006
+
+  - id: TE-003
+    type: technology-evaluation
+    title: "Wassail (Stiévenart) — open-source AI toolkit for Wasm in OCaml"
+    status: draft
+    tags: [abstract-interpretation, wasm, primary-candidate]
+    description: >
+      Wassail provides building blocks for both lightweight (CFG, querying)
+      and heavyweight (dataflow, summary-based interprocedural) analyses
+      of Wasm. OCaml. Currently the most reusable open-source AI-for-Wasm
+      toolkit. Documented unsoundness on indirect calls is the known
+      limitation Paccamiccio et al. (AC-008) attack.
+    fields:
+      technology: "Wassail"
+      category: library
+      maturity: beta
+      rust-compatible: false
+      wasm-compatible: true
+      license: "MIT"
+      recommendation: assess
+    links:
+      - type: references-paper
+        target: AC-010
+      - type: references-paper
+        target: AC-008
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: REQ-008
+
+  - id: TE-004
+    type: technology-evaluation
+    title: "WasmCert-Coq + Iris-Wasm — mechanized semantics + separation logic"
+    status: draft
+    tags: [mechanization, soundness-substrate, coq]
+    description: >
+      The combination of WasmCert-Coq (mechanized Wasm 1.0 operational
+      semantics) and Iris-Wasm (higher-order separation logic atop it) is
+      the most credible substrate against which a PulseEngine AI pass
+      could be mechanically proven sound. Coq. Active research project.
+    fields:
+      technology: "WasmCert-Coq + Iris-Wasm"
+      category: framework
+      maturity: research
+      rust-compatible: false
+      wasm-compatible: true
+      license: "BSD"
+      recommendation: adopt
+    links:
+      - type: references-paper
+        target: AC-003
+      - type: references-paper
+        target: AC-004
+      - type: traces-to
+        target: REQ-002
+      - type: traces-to
+        target: DD-003
+
+  - id: TE-005
+    type: technology-evaluation
+    title: "CRAB / CLAM — region-based memory model AI library"
+    status: draft
+    tags: [abstract-interpretation, memory-model, library]
+    description: >
+      CRAB (used by SeaHorn via CLAM) ships a region-based memory model
+      where pointers carry regions and joins use separation-logic-inspired
+      connectives. C++ library. Default zones domain. The cleanest
+      published design reference for handling Wasm linear memory in an AI.
+    fields:
+      technology: "CRAB / CLAM"
+      category: library
+      maturity: stable
+      rust-compatible: false
+      wasm-compatible: false
+      license: "Apache-2.0"
+      recommendation: assess
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: DD-005
+
+  - id: TE-006
+    type: technology-evaluation
+    title: "Kani — bounded model checker for Rust"
+    status: draft
+    tags: [bounded-model-checking, rust, existing-stack]
+    description: >
+      Kani performs bit-precise bounded model checking on Rust code, with
+      monthly releases sponsored by AWS. Already part of the PulseEngine
+      stack (used by meld, loom, kiln, witness for unsafe-heavy proofs).
+      Bounded (depth-limited) — complements abstract interpretation, does
+      not replace it.
+    fields:
+      technology: "Kani"
+      category: framework
+      maturity: production
+      rust-compatible: true
+      wasm-compatible: false
+      license: "Apache-2.0 / MIT"
+      recommendation: adopt
+    links:
+      - type: traces-to
+        target: DD-001
+
+  - id: TE-007
+    type: technology-evaluation
+    title: "Verus — SMT-backed deductive verifier for Rust"
+    status: draft
+    tags: [deductive-verification, rust, existing-stack]
+    description: >
+      Verus extends Rust with specification syntax and discharges proofs
+      via SMT (Z3). Used in PulseEngine for functional correctness
+      claims. Like Kani, it complements rather than replaces AI: deductive
+      proof needs hand-written invariants, while AI infers over-
+      approximate invariants automatically.
+    fields:
+      technology: "Verus"
+      category: framework
+      maturity: beta
+      rust-compatible: true
+      wasm-compatible: false
+      license: "MIT"
+      recommendation: adopt
+    links:
+      - type: traces-to
+        target: DD-001
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Market findings — the why-now and why-us context.
+  # IDs use the prefix MF-.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: MF-001
+    type: market-finding
+    title: "DO-178C / DO-333 names abstract interpretation as a distinct technique class alongside testing and proof"
+    status: draft
+    tags: [regulation, do-333, do-178c]
+    description: >
+      DO-333 ("Formal Methods Supplement to DO-178C") recognizes three
+      formal-methods technique classes: deductive proof, model checking,
+      and abstract interpretation. ISO 26262-6 §9 and IEC 61508-3 Annex B
+      treat AI similarly as a credit-bearing static-analysis technique.
+      A safety case relying only on testing + bounded model checking +
+      deductive proof leaves the third class unstaffed. PulseEngine's
+      2026-04-22 blog post "Overdoing the verification chain" makes
+      exactly this point.
+    fields:
+      domain: aerospace
+      finding-type: regulation
+      source: "https://pulseengine.eu/blog/2026-04-22-overdoing-the-verification-chain/"
+      confidence: high
+    links:
+      - type: motivates
+        target: REQ-001
+
+  - id: MF-002
+    type: market-finding
+    title: "No publicly available abstract interpreter for the Wasm Component Model"
+    status: draft
+    tags: [tool-gap, component-model]
+    description: >
+      Existing AI work on Wasm (Brandl et al. ECOOP 2023, Wanilla CCS
+      2025, Paccamiccio et al. 2024, WasmChecker 2025) all targets the
+      Core Model. The Component Model — resources, owned/borrowed
+      handles, capability flow through imports, async via WasmFX-style
+      effect handlers — has no published AI tooling and no mechanized
+      formalization. The Menon/Wagner WAW 2025 talk states the
+      formalization is in active in-house development at the spec
+      authors' level. This is a real, named gap in the literature.
+    fields:
+      domain: iiot
+      finding-type: tool-gap
+      source: "https://popl25.sigplan.org/details/waw-2025-papers/4/The-WebAssembly-Component-Model"
+      confidence: high
+    links:
+      - type: references-paper
+        target: AC-009
+      - type: motivates
+        target: REQ-003
+
+  - id: MF-003
+    type: market-finding
+    title: "Call-graph soundness in Wasm is empirically broken across all current static analyzers"
+    status: draft
+    tags: [pain-point, soundness]
+    description: >
+      Lehmann et al. (ISSTA 2023, "That's a Tough Call") showed that all
+      then-existing Wasm static analyzers — including Wassail — produce
+      unsound call graphs in the presence of call_indirect, which 83% of
+      real Wasm binaries use, with 64% of those resolving through
+      untyped memory. Any AI on fused PulseEngine components must
+      address this — and an AI-based approach (per AC-008) is the
+      principled fix.
+    fields:
+      domain: automotive
+      finding-type: pain-point
+      source: "https://2023.issta.org/details/issta-2023-papers/16/That-s-a-Tough-Call-A-Study-of-the-Challenges-of-Call-Graph-Construction-for-Wasm"
+      confidence: high
+    links:
+      - type: references-paper
+        target: AC-008
+      - type: motivates
+        target: REQ-008
+
+  - id: MF-004
+    type: market-finding
+    title: "Public commitment to ship abstract interpretation in the PulseEngine stack — pulseengine.eu, 2026-04-22"
+    status: draft
+    tags: [commitment, internal]
+    description: >
+      The 2026-04-22 blog post "Overdoing the verification chain" lists
+      the PulseEngine 10-layer verification stack against the six safety
+      domains (DO-178C, ISO 26262, IEC 61508, EN 50128, IEC 62304, ECSS)
+      and explicitly marks abstract interpretation as "❌ not yet" — the
+      single missing layer. Three candidate paths are named: Astrée
+      (commercial, C/Ada only), MIRAI (Meta, research-grade Rust MIR),
+      and Charon-based value analysis — the first two are written up
+      separately as technology-evaluations. This artifact set anchors
+      that public commitment in typed traceability.
+    fields:
+      domain: aerospace
+      finding-type: opportunity
+      source: "https://pulseengine.eu/blog/2026-04-22-overdoing-the-verification-chain/"
+      confidence: high
+    links:
+      - type: motivates
+        target: REQ-001
+      - type: motivates
+        target: FEAT-001

@@ -1,0 +1,438 @@
+artifacts:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Requirements — what the abstract-interpretation pass must do.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: REQ-001
+    type: requirement
+    title: Provide a sound abstract-interpretation pass over the Wasm Core Model
+    status: draft
+    description: >
+      The PulseEngine pipeline shall include a sound abstract-interpretation
+      pass that operates on validated Wasm Core Model modules. "Sound" in
+      the AI sense (per AC-001): the abstract semantics computed by the
+      analyzer over-approximates the set of concrete reachable behaviors —
+      the analyzer is allowed to flag unreachable behavior (false alarm)
+      but must not miss any real reachable behavior.
+    tags: [core, abstract-interpretation, soundness]
+    fields:
+      priority: must
+      category: functional
+    links:
+      - type: references-paper
+        target: AC-001
+
+  - id: REQ-002
+    type: requirement
+    title: Soundness shall be stated and (longer term) mechanically proven against the official Wasm semantics
+    status: draft
+    description: >
+      The soundness statement for the AI pass shall be formulated as
+      over-approximation of the collecting semantics derived from the
+      official Wasm operational semantics (AC-002). For each abstract
+      domain shipped, a soundness theorem of the form
+        ∀σ ∈ ⟦M⟧concrete : α(σ) ⊑ ⟦M⟧abstract
+      shall be stated in the design documentation. Mechanized proof
+      against WasmCert-Coq (AC-003, TE-004) is the long-term target;
+      the v0 ship is allowed to carry the soundness theorem as a
+      paper-only claim with a clearly named obligation in the safety case.
+    tags: [soundness, mechanization]
+    fields:
+      priority: must
+      category: non-functional
+    links:
+      - type: references-paper
+        target: AC-002
+      - type: references-paper
+        target: AC-003
+      - type: evaluates-tech
+        target: TE-004
+
+  - id: REQ-003
+    type: requirement
+    title: Extend the AI pass to the Wasm Component Model
+    status: draft
+    description: >
+      The AI pass shall, in a second phase, lift to the Wasm Component
+      Model: resource lifetimes for owned/borrowed handles, capability
+      flow through component imports, host-call effect tracking, and
+      (Preview 3) async/WasmFX-style continuation reasoning. The Menon
+      & Wagner WAW 2025 talk (AC-009) notes the Component Model is a
+      linking/interface language whose execution intertwines with Core
+      Wasm — soundness structures may need to be inspired by multi-
+      language semantics. The PulseEngine AI pass shall be designed to
+      accommodate that.
+    tags: [component-model, capability, resource-lifetime]
+    fields:
+      priority: must
+      category: functional
+    links:
+      - type: references-paper
+        target: AC-009
+      - type: addresses-finding
+        target: MF-002
+
+  - id: REQ-004
+    type: requirement
+    title: Surface AI invariants as machine-consumable annotations for the loom optimizer
+    status: draft
+    description: >
+      The AI pass shall emit per-instruction and per-function abstract
+      invariants in a stable schema consumable by loom. Loom shall use
+      these invariants to strengthen the preconditions of its
+      transformations (e.g. constant folding can be triggered when the
+      AI proves a value lives in a singleton interval; bounds-check
+      elision when a load offset is proven in-range). The schema shall
+      be versioned and signed (see REQ-005).
+    tags: [pipeline-integration, loom]
+    fields:
+      priority: must
+      category: interface
+    links:
+      - type: traces-to
+        target: REQ-005
+
+  - id: REQ-005
+    type: requirement
+    title: AI results shall be attestable end-to-end (sigil) and traceable in rivet
+    status: draft
+    description: >
+      Every AI run shall produce a signed attestation (sigil DSSE/in-toto
+      predicate) recording: input module hash, configured domain set,
+      version of the analyzer, version of the lattice library, set of
+      proven invariants, and any flagged unsound-construct fallbacks.
+      The attestation shall be linkable from rivet artifacts so that a
+      requirement of the form "memory access X is in-bounds" can be
+      `verified-by` a specific AI run.
+    tags: [attestation, sigil, rivet]
+    fields:
+      priority: must
+      category: non-functional
+
+  - id: REQ-006
+    type: requirement
+    title: The AI pass shall be reusable independently of the Wasm front-end
+    status: draft
+    description: >
+      The lattice library (intervals, octagons, region-based memory,
+      reachability, taint, capability-flow, resource-lifetime) shall be
+      packaged as a separate crate from the Wasm-specific frontend so
+      that it can be reused by adjacent PulseEngine tools (witness for
+      coverage-gap prediction; synth for invariant generation during
+      ARM/RISC-V codegen). This mirrors the Brandl et al. ECOOP 2023
+      pattern (AC-006) of language-independent abstract components.
+    tags: [architecture, reusability]
+    fields:
+      priority: should
+      category: non-functional
+    links:
+      - type: references-paper
+        target: AC-006
+
+  - id: REQ-007
+    type: requirement
+    title: The AI pass shall scale to fused multi-component Wasm modules
+    status: draft
+    description: >
+      Meld produces fused multi-component Wasm modules that can grow
+      considerably larger than any single component. The AI pass shall
+      use compositional summary-based interprocedural analysis (per
+      AC-010) so analysis time scales sub-linearly in fused module size,
+      reusing summaries across components when their interfaces match.
+    tags: [scalability, compositional]
+    fields:
+      priority: must
+      category: non-functional
+    links:
+      - type: references-paper
+        target: AC-010
+
+  - id: REQ-008
+    type: requirement
+    title: The AI pass shall produce sound call graphs in the presence of call_indirect
+    status: draft
+    description: >
+      Call-graph soundness in Wasm is empirically broken across existing
+      tools (MF-003). The PulseEngine AI pass shall produce a sound call
+      graph by computing call-site target sets under a value-domain
+      abstract interpretation of the operand stack — the technique
+      established by Paccamiccio et al. 2024 (AC-008). The resulting
+      call graph shall be the substrate for all subsequent
+      interprocedural analyses.
+    tags: [call-graph, soundness]
+    fields:
+      priority: must
+      category: functional
+    links:
+      - type: references-paper
+        target: AC-008
+      - type: addresses-finding
+        target: MF-003
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Features — user-visible capabilities the AI pass delivers.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: FEAT-001
+    type: feature
+    title: Sound abstract-interpretation pass for the Wasm Core Model
+    status: draft
+    description: >
+      A new build-pipeline stage between meld (fusion) and loom
+      (optimization) that performs sound AI over the fused Wasm Core
+      Model module, emitting invariants as input to loom and as
+      verification evidence for rivet.
+    tags: [core, pipeline]
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - "Given a fused Wasm module, When the AI pass runs with the interval domain, Then it terminates and emits per-instruction interval invariants for all i32/i64 locals and operand-stack entries."
+        - "Given a fused Wasm module containing call_indirect, When the AI pass runs, Then the produced call graph contains every concretely reachable target and is annotated 'sound' (sound w.r.t. AC-008 technique)."
+        - "Given a Wasm module known to violate memory bounds on some input, When the AI pass runs with the region-memory + interval combination, Then the analyzer reports the unsafe load with a witnessing abstract counterexample."
+        - "Given the AI pass output, When fed into loom, Then loom triggers at least bounds-check elision and constant folding using AI invariants where applicable."
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: satisfies
+        target: REQ-004
+      - type: satisfies
+        target: REQ-007
+      - type: satisfies
+        target: REQ-008
+
+  - id: FEAT-002
+    type: feature
+    title: Component-Model AI extension — handles, capability flow, host effects
+    status: draft
+    description: >
+      A second-phase extension lifting the AI to the Wasm Component
+      Model: tracks resource handles as a linear/affine lattice (fresh /
+      borrowed / owned / dropped), capability flow through composition
+      graphs, and host-call effect sets per component function.
+    tags: [component-model, capability]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a composed component graph using owned/borrowed handles, When the AI pass runs, Then every use-after-drop on owned handles is reported at link time."
+        - "Given a composition graph and a WASI import set, When the AI pass runs, Then for each component the analyzer reports the may-reach set of host imports."
+        - "Given a WIT interface annotated with refinement predicates, When the AI pass runs, Then the analyzer either discharges the predicate or reports a sound counterexample."
+    links:
+      - type: satisfies
+        target: REQ-003
+
+  - id: FEAT-003
+    type: feature
+    title: Reusable wasm-lattice crate
+    status: draft
+    description: >
+      A standalone Rust crate providing the abstract domain library
+      (interval, octagon, region-memory, reachability, taint, capability,
+      resource-lifetime), domain combinators (product, reduced product),
+      and widening operators — independent of the Wasm front-end and
+      reusable by witness, synth, and third-party tools.
+    tags: [library, reusability]
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - "Given the wasm-lattice crate as a dependency, When a downstream tool implements transfer functions for its own IR, Then the lattice, joins, widenings, and fixpoint engine are all reusable without modification."
+        - "Given each shipped abstract domain, When the test suite runs, Then a soundness lemma (paper-only acceptable for v0) is stated in rustdoc and a corresponding property-based test executes."
+    links:
+      - type: satisfies
+        target: REQ-006
+
+  - id: FEAT-004
+    type: feature
+    title: Signed AI attestation produced and consumed in the rivet chain
+    status: draft
+    description: >
+      Each AI run produces a sigil/in-toto attestation recording inputs,
+      configuration, and proven invariants. Rivet schemas allow linking
+      a requirement to the attestation as `verified-by` evidence,
+      closing the loop from "module is bounds-safe" requirement to a
+      mechanically reproducible AI run.
+    tags: [attestation, integration, v0.6]
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - "Given an AI run, When the run completes successfully, Then a sigil-signed in-toto attestation is emitted containing input hash, domain set, analyzer version, and the invariant set."
+        - "Given a requirement marked verified-by an AI attestation, When rivet validate runs, Then the attestation existence and signature are verified before the requirement can transition to 'verified' status."
+    links:
+      - type: satisfies
+        target: REQ-005
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Provisional features for v0.2 — v1.0. status: proposed.
+  # These back the release-plan table in README.md and docs/roadmap.md
+  # with mechanically validated rivet artifacts.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: FEAT-005
+    type: feature
+    title: "v0.2 — Region-based linear-memory model (CRAB-style)"
+    status: proposed
+    description: >
+      Add a region-based memory abstraction to the wasm-lattice crate:
+      Wasm linear memory is modelled as a set of regions, with per-
+      region offset tracking via the interval domain. Joins do not
+      collapse unrelated regions into a single interval, preserving
+      precision for bounds-check invariants.
+    tags: [domains, memory, v0.2]
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - "Given a Wasm module with stack and heap accesses, When scry runs with the region+interval product, Then each load/store carries a region-tagged interval invariant on its offset."
+        - "Given the region domain, When proptest generates random concrete memory traces, Then the concrete final state is ⊑-included in the abstract result for every trace."
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: references-paper
+        target: AC-006
+      - type: evaluates-tech
+        target: TE-005
+
+  - id: FEAT-006
+    type: feature
+    title: "v0.3 — Sound call_indirect resolution + reachability domain"
+    status: proposed
+    description: >
+      Implement the Paccamiccio et al. 2024 technique: track the
+      operand stack with the interval domain (and constant lattice
+      where intervals collapse to singletons) so that call_indirect
+      target sets are resolved soundly. Add a reachability domain
+      (powerset of program points) for dead-code detection.
+    tags: [call-graph, reachability, v0.3]
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - "Given a Wasm module using call_indirect, When scry runs, Then the produced call graph contains every concretely reachable target and is annotated 'sound'."
+        - "Given a differential corpus of Wasm modules, When scry's call graph is compared to Wassail's, Then scry never under-approximates and reports the precision delta."
+    links:
+      - type: satisfies
+        target: REQ-008
+      - type: references-paper
+        target: AC-008
+      - type: addresses-finding
+        target: MF-003
+
+  - id: FEAT-007
+    type: feature
+    title: "v0.4 — Compositional summary-based interprocedural AI"
+    status: proposed
+    description: >
+      Implement per-function abstract summaries in the Stiévenart-De
+      Roover 2020 style: each function gets a summary describing the
+      abstract effect of its parameters and globals on its outputs and
+      side effects. Summaries are computed bottom-up over the (sound)
+      call graph from FEAT-006 and reused at every call site.
+      Recursive components are handled by widening at the recursion
+      frontier.
+    tags: [interprocedural, scalability, v0.4]
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - "Given a fused module of size >= 50k instructions, When scry runs with summary-based interprocedural analysis, Then analysis completes in time sub-linear in fused module size."
+        - "Given a benchmark suite of real PulseEngine fused modules, When summary precision is measured, Then >= 60% of summaries are computed precisely (Stiévenart 2020 reference number)."
+    links:
+      - type: satisfies
+        target: REQ-007
+      - type: references-paper
+        target: AC-010
+      - type: depends-on
+        target: FEAT-006
+
+  - id: FEAT-008
+    type: feature
+    title: "v0.5 — loom integration: invariant schema + consumption"
+    status: proposed
+    description: >
+      Define a stable on-disk JSON schema (v1) for scry's per-
+      instruction and per-function abstract invariants. Add loom's
+      side: ingest the JSON, attach invariants to loom's IR, use
+      them to strengthen the preconditions of bounds-check elision,
+      constant folding, and DCE transformations.
+    tags: [integration, loom, v0.5]
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - "Given a meld→scry→loom pipeline run, When loom reports its applied transformations, Then loom names the scry invariants that enabled each invariant-dependent transformation."
+        - "Given the invariant schema, When loom is given a malformed or version-mismatched invariant file, Then loom refuses to apply invariant-dependent transformations and produces a clear error."
+    links:
+      - type: satisfies
+        target: REQ-004
+
+  - id: FEAT-009
+    type: feature
+    title: "v0.8 — Taint / noninterference domain (Wanilla-class)"
+    status: proposed
+    description: >
+      Add a security-label lattice (Low ⊑ High) lifted pointwise over
+      values and memory; lift to a relational analysis sufficient for
+      termination-insensitive noninterference per the Wanilla CCS 2025
+      technique. The taint domain composes with the interval and region
+      domains rather than replacing them.
+    tags: [security, taint, v0.8]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a Wasm module with declared High inputs and Low outputs, When scry runs the taint domain, Then any sound noninterference violation is reported and the absence of a report implies noninterference (under termination-insensitive assumptions)."
+        - "Given the Wanilla benchmark corpus, When scry's taint analysis is compared to Wanilla's, Then scry produces equivalent or stricter results on shared benchmarks."
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: references-paper
+        target: AC-007
+
+  - id: FEAT-010
+    type: feature
+    title: "v0.9 — Octagon domain + mechanized soundness for interval domain"
+    status: proposed
+    description: >
+      Add the octagon abstract domain (Miné HOSC 2006) for relational
+      reasoning over Wasm memory offsets and call-table indices. In
+      parallel: land the first mechanized soundness theorem in Rocq,
+      proving the v0.1 interval domain over-approximates the
+      WasmCert-Coq operational semantics.
+    tags: [domains, mechanization, v0.9]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a Wasm module where two locals are related by an octagon constraint, When scry runs with the interval+octagon product, Then the relational constraint is preserved across loop iterations without false widening."
+        - "Given the Rocq development atop WasmCert-Coq, When the soundness theorem of the interval domain is built, Then `make` succeeds with no admits or axioms."
+    links:
+      - type: satisfies
+        target: REQ-002
+      - type: references-paper
+        target: AC-011
+      - type: references-paper
+        target: AC-003
+      - type: evaluates-tech
+        target: TE-004
+
+  - id: FEAT-011
+    type: feature
+    title: "v1.0 — Six-domain credit dossier + SpecTec backend prototype"
+    status: proposed
+    description: >
+      Land the full mechanized soundness proof for the v0.1+v0.2+v0.3
+      domain stack (interval + region-memory + reachability +
+      call-graph) against WasmCert-Coq. Build a prototype SpecTec
+      backend that derives a sound interval-domain transfer function
+      directly from the SpecTec source — proof of concept for
+      soundness-by-construction. Assemble the six-domain credit
+      dossier (DO-178C/DO-333, ISO 26262-6, IEC 61508, IEC 62304,
+      EN 50128, ECSS).
+    tags: [release, mechanization, dossier, v1.0]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given the full v0.1-v0.3 domain stack, When the Rocq mechanized soundness theorem is built, Then `make` succeeds with no admits or axioms."
+        - "Given the SpecTec backend prototype, When the SpecTec source for i32 arithmetic is provided, Then a sound interval transfer function is generated and proven sound against the SpecTec-derived concrete semantics."
+        - "Given the six-domain credit dossier, When an assessor reviews the per-standard evidence-to-requirement mapping, Then every requirement in REQ-001..008 traces to mechanized or paper-verified evidence with a sigil-signed digest."
+    links:
+      - type: satisfies
+        target: REQ-002
+      - type: references-paper
+        target: AC-005
+      - type: references-paper
+        target: AC-003

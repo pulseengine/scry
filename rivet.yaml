@@ -1,0 +1,23 @@
+project:
+  name: scry
+  version: "0.1.0"
+  description: >
+    scry — sound abstract interpretation for WebAssembly in the
+    PulseEngine pipeline. Closes the third DO-333 technique-class gap
+    (alongside Kani bounded model checking and Verus/Rocq deductive
+    proof) by over-approximating the reachable behaviors of fused Wasm
+    Core Model modules emitted by meld, and (phase 2) by lifting that
+    analysis to Component-Model-level properties: resource lifetimes,
+    capability flow, and host-call effects. This project directory
+    holds the research, requirements, design, and safety-case artifacts;
+    the implementation will live in its own repo.
+  schemas:
+    - common
+    - dev
+    - research
+    - research-ext     # local — adds references-paper / addresses-finding / evaluates-tech
+    - safety-case
+
+sources:
+  - path: artifacts
+    format: generic-yaml

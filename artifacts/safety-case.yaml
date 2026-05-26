@@ -1,0 +1,344 @@
+artifacts:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # GSN safety case — structured argument for why adding sound abstract
+  # interpretation to the PulseEngine pipeline closes a credit-bearing
+  # gap in the verification chain.
+  #
+  # IDs:
+  #   G-  safety-goal
+  #   S-  safety-strategy
+  #   Sn- safety-solution
+  #   C-  safety-context
+  #   J-  safety-justification
+  # ──────────────────────────────────────────────────────────────────────
+
+  # ── Context — scope and assumptions ──────────────────────────────────
+
+  - id: C-001
+    type: safety-context
+    title: Scope — Wasm Core Model 2.0 + Component Model Preview 2
+    status: draft
+    fields:
+      context-type: scope
+      statement: >
+        The argument applies to WebAssembly Core Model 2.0 (multi-memory,
+        bulk-memory, reference types, GC, tail calls where supported by
+        the runtime) and to the Component Model Preview 2 (WIT,
+        Canonical ABI, resources with owned/borrowed handles, sync
+        functions, async per Preview 3 once stabilized). It does not
+        cover non-standard host extensions or experimental proposals
+        outside the merged spec text.
+    links:
+      - type: scopes
+        target: G-001
+
+  - id: C-002
+    type: safety-context
+    title: Assumption — WasmCert-Coq mechanization is faithful to the official Wasm semantics
+    status: draft
+    fields:
+      context-type: assumption
+      statement: >
+        Soundness proofs (mechanized or paper) for the AI pass are
+        formulated against the official Wasm operational semantics
+        (AC-002) as mechanized in WasmCert-Coq (AC-003). The argument
+        assumes the WasmCert-Coq mechanization is faithful to the spec.
+        This assumption is shared with all WasmCert-based verification
+        work in the literature (e.g. Iris-Wasm, AC-004) and is regarded
+        as well-established by the Wasm community.
+    links:
+      - type: scopes
+        target: G-002
+      - type: references-paper
+        target: AC-002
+      - type: references-paper
+        target: AC-003
+      - type: references-paper
+        target: AC-004
+
+  - id: C-003
+    type: safety-context
+    title: Assumption — the upstream PulseEngine layers (meld, loom, sigil) are themselves verified or attested per their own safety cases
+    status: draft
+    fields:
+      context-type: assumption
+      statement: >
+        The AI pass relies on the input Wasm module being well-formed
+        per Wasm validation, on meld having produced a sound fused
+        module, on sigil's signing being trustworthy, and on loom
+        respecting the invariants the AI provides. Each of those
+        properties is the responsibility of the respective tool's own
+        safety case — this argument extends but does not duplicate
+        them.
+    links:
+      - type: scopes
+        target: G-001
+
+  # ── Top-level safety goal ────────────────────────────────────────────
+
+  - id: G-001
+    type: safety-goal
+    title: The PulseEngine verification chain covers all three DO-333 technique classes for safety-critical Wasm
+    status: draft
+    fields:
+      claim: >
+        For Wasm components built and deployed via the PulseEngine
+        pipeline, the verification chain provides credit-bearing
+        evidence across all three DO-333 / ISO 26262-6 §9 formal-
+        methods technique classes: deductive proof, model checking,
+        and abstract interpretation. No credit-bearing technique class
+        is unstaffed by the chain.
+      goal-type: system-level
+      asil: D
+
+  # ── Strategy decomposing the top-level goal ──────────────────────────
+
+  - id: S-001
+    type: safety-strategy
+    title: Argue by mapping each PulseEngine layer to the DO-333 technique class it satisfies
+    status: draft
+    fields:
+      rationale: >
+        Decompose G-001 by demonstrating that each of the three DO-333
+        technique classes is independently satisfied by a named
+        PulseEngine layer with stated soundness properties:
+          (i) Deductive proof — satisfied by Verus and Rocq proofs in
+              meld, loom, synth, kiln, witness.
+          (ii) Model checking — satisfied by Kani bounded model
+              checking integrated across meld, loom, kiln, and by Z3
+              translation validation in loom.
+          (iii) Abstract interpretation — satisfied by the new AI pass
+              (FEAT-001 + FEAT-002 + FEAT-003 + FEAT-004) that this
+              safety case introduces.
+      method: decomposition
+    links:
+      - type: decomposes
+        target: G-001
+      - type: traces-to
+        target: FEAT-001
+      - type: traces-to
+        target: FEAT-002
+      - type: traces-to
+        target: FEAT-003
+      - type: traces-to
+        target: FEAT-004
+
+  # ── Sub-goals (the three technique classes) ──────────────────────────
+
+  - id: G-002
+    type: safety-goal
+    title: The abstract-interpretation layer soundly over-approximates all reachable behaviors of fused Wasm Core Model modules
+    status: draft
+    fields:
+      claim: >
+        For every fused Wasm Core Model module M produced by meld and
+        analyzed by the PulseEngine AI pass with a configured domain
+        set D, the abstract semantics ⟦M⟧_D over-approximates the
+        collecting semantics of M w.r.t. the official Wasm operational
+        semantics: every concrete reachable state σ ∈ ⟦M⟧concrete
+        satisfies α(σ) ⊑ ⟦M⟧_D. The analyzer may report unreachable
+        states (false alarms) but cannot miss reachable ones.
+      goal-type: element-level
+      asil: D
+    links:
+      - type: sub-goal-of
+        target: G-001
+
+  - id: G-003
+    type: safety-goal
+    title: Component-Model-specific properties are sound on link-time analysis
+    status: draft
+    fields:
+      claim: >
+        For Wasm Component Model compositions, the AI pass detects at
+        link-time: (a) all concretely reachable use-after-drop on owned
+        handles, (b) all concretely reachable host-import calls from
+        each component, (c) all WIT refinement-contract violations
+        where refinement predicates are declared. As with the parent
+        sound-over-approximation goal, the analyzer may report
+        unreachable violations but cannot miss real ones.
+      goal-type: element-level
+      asil: D
+      undeveloped: true
+    links:
+      - type: sub-goal-of
+        target: G-001
+
+  - id: G-004
+    type: safety-goal
+    title: Existing PulseEngine deductive-proof and model-checking layers cover the other two DO-333 technique classes
+    status: draft
+    fields:
+      claim: >
+        For every PulseEngine artifact downstream of meld, deductive
+        proof (Verus, Rocq) covers functional correctness claims, and
+        bounded model checking (Kani) plus translation validation (Z3
+        in loom) cover finite-depth UB and per-pass equivalence claims
+        — together satisfying the deductive-proof and model-checking
+        technique classes of DO-333.
+      goal-type: element-level
+      asil: D
+      undeveloped: true
+    links:
+      - type: sub-goal-of
+        target: G-001
+
+  # ── Solutions (evidence) for the AI sub-goal ─────────────────────────
+
+  - id: Sn-001
+    type: safety-solution
+    title: Soundness theorem statement for each shipped abstract domain
+    status: draft
+    fields:
+      evidence-type: analysis
+      evidence-ref: "FEAT-003 (wasm-lattice crate) rustdoc + design.yaml DD-003"
+      confidence: medium
+    links:
+      - type: supports
+        target: G-002
+      - type: traces-to
+        target: FEAT-003
+      - type: traces-to
+        target: DD-003
+
+  - id: Sn-002
+    type: safety-solution
+    title: Mechanized Rocq proof of soundness against WasmCert-Coq (longer-term)
+    status: draft
+    description: >
+      Future evidence — placeholder for the mechanized proof obligation
+      stated by REQ-002 and DD-003. Confidence will rise from medium
+      to high once the mechanization lands. Until then, this solution
+      stands as the named proof obligation in the safety case rather
+      than as discharged evidence.
+    fields:
+      evidence-type: formal-proof
+      evidence-ref: "TBD — Rocq development atop WasmCert-Coq, tracked separately"
+      confidence: low
+    links:
+      - type: supports
+        target: G-002
+      - type: traces-to
+        target: REQ-002
+      - type: traces-to
+        target: DD-003
+
+  - id: Sn-003
+    type: safety-solution
+    title: Property-based tests covering the soundness lemma on each abstract domain
+    status: draft
+    description: >
+      For each abstract domain shipped in wasm-lattice (interval,
+      region-memory, reachability, indirect-call resolution), a
+      property-based test (proptest / quickcheck) generates concrete
+      Wasm fragments and checks that the concrete execution result is
+      ⊑-included in the analyzer's abstract result. Not a proof, but
+      a credible falsification harness that catches transfer-function
+      mistakes before they ship.
+    fields:
+      evidence-type: test-report
+      evidence-ref: "FEAT-001 acceptance criteria (#3 in particular)"
+      confidence: medium
+    links:
+      - type: supports
+        target: G-002
+      - type: traces-to
+        target: FEAT-001
+
+  - id: Sn-004
+    type: safety-solution
+    title: Sigil-signed in-toto attestations per AI run, traceable from rivet
+    status: draft
+    fields:
+      evidence-type: analysis
+      evidence-ref: "FEAT-004"
+      confidence: high
+    links:
+      - type: supports
+        target: G-002
+      - type: traces-to
+        target: FEAT-004
+
+  # ── Justifications ───────────────────────────────────────────────────
+
+  - id: J-001
+    type: safety-justification
+    title: Why abstract interpretation rather than more model checking
+    status: draft
+    fields:
+      rationale: >
+        Bounded model checking (Kani, in the PulseEngine stack) refutes
+        bugs up to a fixed depth on a finite domain of input values:
+        it gives high-confidence partial coverage. Deductive proof
+        (Verus, Rocq) gives full correctness conditional on the
+        invariants being hand-written. Abstract interpretation gives
+        the third, complementary thing: AUTOMATIC universal-
+        quantification over inputs without bounded depth, by way of
+        sound over-approximation. The three classes have different
+        strengths and DO-333 / ISO 26262-6 explicitly recognize them
+        as distinct credit classes. Adding AI is not a duplication of
+        BMC or proof — it is the missing leg of the tripod.
+    links:
+      - type: justifies
+        target: G-001
+
+  - id: J-002
+    type: safety-justification
+    title: Why now — the 2025-2026 state of the art makes Wasm AI tractable
+    status: draft
+    fields:
+      rationale: >
+        AI for Wasm Core became a real engineering possibility between
+        2020 and 2025: Stiévenart & De Roover SCAM 2020 (AC-010)
+        established compositional summarization; Brandl et al. ECOOP
+        2023 (AC-006) showed full Wasm 1.0 can be abstracted modularly
+        in ~1600 LOC; Wanilla CCS 2025 (AC-007) demonstrated sound
+        hyperproperty AI; Paccamiccio et al. 2024 (AC-008) showed
+        sound indirect-call resolution. The PulseEngine commitment in
+        the 2026-04-22 blog post (MF-004) is well-timed relative to
+        the state of the art. For the Component Model, the gap is
+        wider (MF-002) — but the Menon/Wagner WAW 2025 work (AC-009)
+        provides the formalization scaffolding the post-meld extension
+        of the AI pass can build on.
+    links:
+      - type: justifies
+        target: G-001
+      - type: references-paper
+        target: AC-006
+      - type: references-paper
+        target: AC-007
+      - type: references-paper
+        target: AC-008
+      - type: references-paper
+        target: AC-009
+      - type: references-paper
+        target: AC-010
+      - type: addresses-finding
+        target: MF-002
+      - type: addresses-finding
+        target: MF-004
+
+  - id: J-003
+    type: safety-justification
+    title: Why region-based memory model is the right shape for Wasm linear memory
+    status: draft
+    fields:
+      rationale: >
+        Wasm linear memory is a single contiguous byte array shared by
+        the shadow stack, heap, and static data. Pure interval domains
+        cannot distinguish "load from stack frame" from "load from
+        heap object" — both are loads at a numeric offset. A region-
+        based memory model (CRAB-style, TE-005) abstracts memory as a
+        set of regions and tracks per-region offsets, which is exactly
+        the shape needed to give precise in-bounds invariants without
+        joining unrelated memory regions into one giant interval.
+        Brandl et al. (AC-006) use a comparable region-shaped memory
+        in their modular interpreter.
+    links:
+      - type: justifies
+        target: G-002
+      - type: evaluates-tech
+        target: TE-005
+      - type: references-paper
+        target: AC-006
