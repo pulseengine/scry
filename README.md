@@ -36,11 +36,14 @@ deductive-proof and bounded-model-checking layers do not staff.
   [Cousot framework](https://dl.acm.org/doi/10.1145/512950.512973)
   (POPL 1977) — explicitly named as the unstaffed layer in the
   [2026-04-22 overdo post](https://pulseengine.eu/blog/2026-04-22-overdoing-the-verification-chain/).
-- **post-meld by default, pre-meld when needed**. scry runs on the fused
-  Core Wasm module meld emits, so its invariants apply directly to
-  loom's transformation preconditions. Component-Model-level analysis
-  (handles, capabilities, host effects) runs upstream of meld on the
-  still-WIT-typed components.
+- **post-meld for Core Wasm, pre-meld for Component Model**. scry's
+  Core analysis runs on the fused module meld emits, so its invariants
+  apply directly to loom's transformation preconditions. Component-
+  Model analysis (handles, capabilities, host effects) runs upstream
+  of meld on the still-WIT-typed components; meld emits a minimal
+  `component-provenance` custom section so scry can project the
+  Component-Model invariants onto fused-module locations for loom,
+  witness, and the sigil/rivet evidence chain (DD-002).
 - **a reusable lattice library**. the abstract domains (interval,
   region-memory, reachability, taint, capability, resource-lifetime)
   ship as a separate crate (`wasm-lattice`) reusable by
@@ -198,7 +201,7 @@ are in `artifacts/requirements.yaml`; provisional ones for v0.2+ carry
 | v0.4 | compositional summary-based interprocedural AI per Stiévenart & De Roover SCAM 2020 | scaling benchmark on real fused PulseEngine modules; summary-precision metrics | (extends v0.3) | FEAT-007 |
 | v0.5 | loom integration: invariant schema v1; loom consumes scry output to trigger bounds-check elision + constant folding | end-to-end test on a meld→scry→loom pipeline; loom reports invariants-derived transforms | (extends v0.3) | FEAT-008 |
 | v0.6 | sigil attestation per scry run; rivet integration; full evidence-to-requirement traceability | DSSE-signed in-toto predicates; `rivet validate` links scry attestations as `verified-by` evidence | (extends v0.3) | FEAT-004 |
-| v0.7 | Component Model AI: per the placement decision in DD-002, pre-meld pass tracking owned/borrowed handle states + capability-flow + host-call effect sets | sound resource-lifetime detection on real WAC compositions; capability-graph soundness check | `scry-component-handles` | FEAT-002 |
+| v0.7 | Component Model AI (per DD-002): scry analyzes original component sources; meld emits `component-provenance` custom section; scry projects invariants onto fused-module locations. Tracks owned/borrowed handle states, capability flow, host-call effects | sound resource-lifetime detection on real WAC compositions; capability-graph soundness check; meld `component-provenance` round-trip test | `scry-component-handles` | FEAT-002 |
 | v0.8 | taint domain (Wanilla-class noninterference) for security-property analysis | proptest on relational noninterference; differential vs Wanilla on shared corpus | (extends v0.3) | FEAT-009 |
 | v0.9 | octagon + relational numerical domains for false-alarm reduction; mechanized soundness proof of interval domain in Rocq against WasmCert-Coq | Rocq build green; reduced false-alarm rate measured on benchmark corpus | (extends v0.3) | FEAT-010 |
 | v1.0 | six-domain credit dossier; full mechanized soundness for the v0.1+v0.2+v0.3 domain stack; SpecTec-derived transfer-function backend prototype | rivet coverage at 100% across the full G-001 sub-tree; `rivet validate --qualification-mode` green | (HW+dossier) | FEAT-011 |
@@ -272,10 +275,12 @@ each row is a market where the same chain (meld + scry + loom + witness
 
 shared cross-layer flows:
 
-- scry-pre-meld results survive meld via custom-section provenance
-  metadata (DD-002 option B), or are produced by a separate pre-meld
-  pass (option A) — the placement choice is open in DD-002 and is the
-  v0.7 design gate.
+- scry's Component-Model analysis runs on the original component
+  sources upstream of meld; meld emits a minimal `component-provenance`
+  custom section that maps fused-module function indices back to
+  their originating component+function. scry uses this mapping to
+  project Component-Model invariants onto fused-module locations
+  (DD-002, closed 2026-05-26).
 - the `wasm-lattice` crate is consumed by witness for coverage-gap
   prediction (an over-approximation of unreachable branches narrows
   the witness MC/DC coverage frontier).
@@ -287,7 +292,7 @@ shared cross-layer flows:
 | decision | what's open | where |
 |---|---|---|
 | DD-001 | pipeline placement: post-meld between meld and loom | `artifacts/design.yaml#DD-001` |
-| DD-002 | **OPEN** — Component-Model AI placement (pre-meld pass / meld-preserved provenance / hybrid). decision pending; the three options are written up. | `artifacts/design.yaml#DD-002` |
+| DD-002 | Component-Model AI placement: option (b) closed 2026-05-26 — scry analyzes original component sources; meld emits minimal `component-provenance` custom section | `artifacts/design.yaml#DD-002` |
 | DD-003 | soundness substrate: WasmCert-Coq + Iris-Wasm | `artifacts/design.yaml#DD-003` |
 | DD-004 | reusable wasm-lattice crate decoupled from Wasm front-end | `artifacts/design.yaml#DD-004` |
 | DD-005 | v0 domain set: interval + region-memory + reachability + sound call-graph | `artifacts/design.yaml#DD-005` |
