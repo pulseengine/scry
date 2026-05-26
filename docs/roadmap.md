@@ -23,7 +23,7 @@
 | **v0.4** | compositional summary-based interprocedural AI; scales to fused multi-component modules | DD-006; AC-010 (Stiévenart compositional summaries); REQ-007 | provisional: FEAT-007 |
 | **v0.5** | loom integration: invariant schema v1; loom consumes scry output for bounds-check elision + constant fold | REQ-004; DD-001 | provisional: FEAT-008 |
 | **v0.6** | sigil signed in-toto attestation per scry run; rivet `verified-by` integration; end-to-end overdo evidence | DD-007; REQ-005; FEAT-004 | provisional: FEAT-004 (already drafted) |
-| **v0.7** | Component Model AI: per the DD-002 placement choice (pre-meld / meld-provenance / hybrid), track owned/borrowed handle states + capability flow + host-call effects; `scry-component-handles` runnable | **DD-002 (open)**; AC-009 (Menon & Wagner WAW 2025); MF-002 (Component Model AI gap); REQ-003; FEAT-002 | provisional: FEAT-002 (already drafted); **DD-002 must close** |
+| **v0.7** | Component Model AI per DD-002 (closed 2026-05-26): scry analyzes original component sources; meld emits `component-provenance` custom section (~300 LOC bolt-on); scry projects invariants onto fused-module locations. Tracks owned/borrowed handle states + capability flow + host-call effects. `scry-component-handles` runnable | DD-002 (closed); AC-009 (Menon & Wagner WAW 2025); MF-002 (Component Model AI gap); REQ-003; FEAT-002 | provisional: FEAT-002 |
 | **v0.8** | taint domain (Wanilla-class noninterference) | AC-007 (Wanilla CCS 2025) | provisional: FEAT-009 |
 | **v0.9** | octagon / relational numerical domains; mechanized soundness proof of the interval domain in Rocq against WasmCert-Coq | AC-011 (Miné octagon); DD-003; TE-004 (WasmCert-Coq + Iris-Wasm) | provisional: FEAT-010 |
 | **v1.0** | six-domain credit dossier; mechanized soundness for the v0.1+v0.2+v0.3 stack; SpecTec-derived transfer-function backend prototype | AC-005 (SpecTec); G-001 (top-level safety goal closes) | provisional: FEAT-011 |
@@ -54,12 +54,15 @@ The four design decisions that locked in this pass (`DD-001`, `DD-003`,
   proofs). v0.9 lands the first mechanized soundness theorem for the
   interval domain; v1.0 extends to the full v0.1-v0.3 stack.
 
-The one decision that **remains open** is `DD-002` — Component Model
-AI placement. The three options (pre-meld pass / meld-preserved
-provenance / hybrid) are written up with their trade-offs in
-`artifacts/design.yaml`; closing DD-002 is the v0.7 gate. The choice
-shapes whether scry-component is a separate binary, an additional
-mode of the main scry binary, or a hybrid that requires a meld change.
+`DD-002` (Component Model AI placement) was closed 2026-05-26 in
+favour of **option (b)**: scry analyzes original component sources
+upstream of meld; meld emits a minimal `component-provenance` custom
+section (~300 LOC bolt-on, infrastructure already present); scry
+projects the resulting invariants onto fused-module locations using
+the section. The boundary is clean: meld owns Core Wasm fusion
+correctness (proven in Rocq); scry owns Component-Model semantics
+(proven separately). See `artifacts/design.yaml#DD-002` for the full
+rationale and the meld investigation that grounded the call.
 
 ## V-model traceability
 

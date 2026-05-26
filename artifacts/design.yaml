@@ -52,39 +52,82 @@ artifacts:
 
   - id: DD-002
     type: design-decision
-    title: Component-Model AI placement — choose between pre-meld pass, meld-preserved provenance, or hybrid
-    status: draft
-    tags: [pipeline-placement, component-model, decision-pending]
+    title: Component-Model AI placement — adopt option (b), meld emits a minimal component-provenance custom section
+    status: approved
+    tags: [pipeline-placement, component-model]
+    description: >
+      Closes the open architectural choice on where scry's Component-
+      Model analysis sits relative to meld. The chosen option (b)
+      splits responsibility cleanly: scry runs Component-Model
+      analysis on the original component sources upstream of meld;
+      meld emits a minimal `component-provenance` custom section
+      mapping fused-module function indices back to their originating
+      component+function; scry projects the resulting invariants onto
+      fused-module locations using that section. See the rationale
+      and alternatives fields for the full reasoning and the
+      investigation of meld that grounded the call.
     fields:
       decision: >
-        TODO — see "User contribution requested" below. The Component-
-        Model AI strategy is a real architectural choice with three
-        viable options, and the right answer depends on facts about meld
-        (does it already emit provenance? would it cost much to add?)
-        that the user is best positioned to decide.
+        scry runs its Component-Model analysis (resource lifetimes,
+        capability flow, host-call effects, WIT refinement) on the
+        original component sources upstream of meld. meld grows a
+        minimal custom section `component-provenance` that records the
+        per-function origin mapping (fused-module function index →
+        originating-component id + originating-function index). The
+        post-meld scry stage uses this mapping to associate the
+        Component-Model invariants with locations in the fused Core
+        Wasm module so they are consumable by loom, witness, and the
+        sigil/rivet evidence chain. meld is otherwise unchanged; the
+        Component-Model semantics live entirely inside scry.
       rationale: >
-        meld fuses Wasm components into a single Core Wasm module. Once
-        meld has run, owned/borrowed handle types, capability imports,
-        and component boundaries are erased from the Core IR. Any AI
-        that wants to reason about Component-Model-level properties
-        (use-after-drop on handles, capability flow, host-call effect
-        sets, refinement of WIT contracts) therefore needs to either
-        (a) run BEFORE meld on the still-component-shaped IR;
-        (b) consume PROVENANCE METADATA that meld preserves into the
-            fused Core Wasm (e.g. custom sections naming the originating
-            component for each function and the handle-shape of each
-            address-taken integer); or
-        (c) a HYBRID: a pre-meld pass produces a component-level
-            invariant bundle, meld preserves it through fusion, and a
-            post-meld AI verifies invariants are not invalidated.
-        Option (a) is cleanest semantically but means *two* AI
-        implementations (one component-typed, one core); option (b)
-        requires meld changes but yields a single AI implementation;
-        option (c) is the most defensible for a safety case but the
-        most engineering.
+        Investigation of meld confirmed two facts that collapse the
+        decision: (1) meld already emits a custom section
+        (`wsc.transformation.attestation`) and already tracks per-
+        function origin tuples internally (`MergedFunction.origin :=
+        (comp_idx, mod_idx, func_idx)` in `merger.rs`) — it just
+        discards them after fusion. Adding a `component-provenance`
+        custom section is ~300 LOC of bolt-on work, not a deep
+        architectural change. (2) meld's Rocq proofs (~13.3k LoV
+        across 23 files) prove forward simulation + trap simulation
+        between the composed component graph and the fused Core Wasm
+        module — i.e. they cover Core Wasm SEMANTIC preservation.
+        They do not cover Component-Model invariants (handle
+        lifetimes, capability flow, WIT refinement) by DESIGN, not by
+        gap: those properties are not in meld's scope.
+        This makes option (c) unnecessary — there is no fusion-
+        correctness gap to re-verify, only a Component-Model semantic
+        layer that belongs in scry. Option (a)'s "two analyzer
+        implementations" tax is also unnecessary: with the minimal
+        provenance custom section, a single scry implementation can
+        analyze the original components and project results onto the
+        fused module. The boundary becomes cleanly typed: meld owns
+        Core Wasm fusion correctness (proven in Rocq); scry owns
+        Component-Model semantics (proven separately). The custom
+        section is the typed contract between them.
       alternatives: >
-        (Same as the three options described in the rationale — captured
-        there explicitly so the choice is visible alongside the reasons.)
+        (a) Pre-meld pass only — rejected because the post-meld
+            consumers (loom, witness, sigil-signed evidence) need to
+            associate invariants with locations in the fused module,
+            which requires SOME meld-side mapping. Without that
+            mapping, option (a) leaves the Component-Model invariants
+            disconnected from the downstream chain.
+        (c) Pre-meld pass + meld preservation + post-meld
+            re-verification — rejected because meld's Rocq proof
+            covers exactly what re-verification would check at the
+            Core Wasm level. Re-verifying Component-Model invariants
+            through fusion would require LIFTING the meld proof to
+            cover Component-Model semantics, which is a much larger
+            piece of work than just doing the analysis in scry once
+            with origin mapping.
+        (b.1 vs b.2 scope) — the chosen variant is (b.1): minimal
+            provenance (function-origin map only). The alternative
+            (b.2) would also record resource type names and handle
+            shapes in the custom section. That is rejected for v0.7
+            because scry can derive those from the original component
+            sources directly; preserving them in meld output is
+            useful for a no-source post-hoc analysis story but is
+            out-of-scope for the v0.7 milestone.
+      source-ref: "Investigation of meld at /Users/r/git/pulseengine/meld/ — emitter in src/lib.rs:1259-1437, merger origin tuples in src/merger.rs:59-63, Rocq proofs in proofs/rocq/ (esp. fusion_spec.v)"
     links:
       - type: satisfies
         target: REQ-003

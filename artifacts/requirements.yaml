@@ -207,19 +207,29 @@ artifacts:
     status: draft
     description: >
       A second-phase extension lifting the AI to the Wasm Component
-      Model: tracks resource handles as a linear/affine lattice (fresh /
+      Model. Per DD-002, the analysis runs on the original component
+      sources upstream of meld; meld emits a minimal
+      `component-provenance` custom section mapping fused-module
+      function indices back to their originating component+function;
+      scry projects the resulting invariants onto the fused module so
+      they are consumable by loom, witness, and sigil/rivet evidence.
+      Tracks resource handles as a linear/affine lattice (fresh /
       borrowed / owned / dropped), capability flow through composition
       graphs, and host-call effect sets per component function.
-    tags: [component-model, capability]
+    tags: [component-model, capability, v0.7]
     fields:
       phase: phase-2
       acceptance-criteria:
-        - "Given a composed component graph using owned/borrowed handles, When the AI pass runs, Then every use-after-drop on owned handles is reported at link time."
-        - "Given a composition graph and a WASI import set, When the AI pass runs, Then for each component the analyzer reports the may-reach set of host imports."
-        - "Given a WIT interface annotated with refinement predicates, When the AI pass runs, Then the analyzer either discharges the predicate or reports a sound counterexample."
+        - "Given a composed component graph using owned/borrowed handles, When scry runs its component-mode analysis on the original component sources, Then every use-after-drop on owned handles is reported with a witnessing abstract counterexample."
+        - "Given a fused module emitted by meld with the `component-provenance` custom section present, When scry runs its post-meld projection step, Then every Component-Model invariant from the pre-meld analysis is associated with a concrete location in the fused Core Wasm module."
+        - "Given a composition graph and a WASI import set, When scry runs, Then for each component the analyzer reports the may-reach set of host imports."
+        - "Given a WIT interface annotated with refinement predicates, When scry runs, Then the analyzer either discharges the predicate or reports a sound counterexample."
+        - "Given meld with the `component-provenance` custom section emitter, When meld is given a composition and the section is decoded, Then the section round-trips losslessly and contains one entry per fused-module function."
     links:
       - type: satisfies
         target: REQ-003
+      - type: traces-to
+        target: DD-002
 
   - id: FEAT-003
     type: feature
