@@ -330,12 +330,31 @@ every cited paper is a `academic-reference` rivet artifact in
   — the spec authors' opening of Component Model formalization; the
   named gap scry's v0.7+ phase 2 attacks. `AC-009`.
 
+## further reading
+
+- **[`docs/intro-to-abstract-interpretation.md`](docs/intro-to-abstract-interpretation.md)**
+  — friendly explainer of abstract interpretation and "soundness"
+  for readers who've never met the term. Builds intuition with a
+  worked `safe_index` example, explains the lattice/widening trick,
+  and connects to what scry actually does on Wasm. ~10 minutes to
+  read, no math required.
+- **[`docs/architecture.md`](docs/architecture.md)** — how scry v0.1
+  fits together end-to-end: the two-component WIT split, the 8-layer
+  Bazel build pipeline, the WAC composition contract, the runtime
+  cross-component probe, and where each stage of the PulseEngine
+  verification loop sits today. With mermaid diagrams.
+- **[`docs/roadmap.md`](docs/roadmap.md)** — per-version plan with
+  research links and the composition narrative (witness-style).
+  Verus + Rocq proof toolchain wires in at v0.2 (see `FEAT-012`).
+- **[`CHANGELOG.md`](CHANGELOG.md)** — Keep-a-Changelog format,
+  read by `release.yml` to populate GitHub Release notes.
+
 ## where to look in this tree
 
 ```
 unknown-project/                           (will be renamed to `scry/`)
 ├── README.md                              (this file)
-├── rivet.yaml                             (project + schemas)
+├── rivet.yaml                             (project + schemas + docs)
 ├── schemas/
 │   └── research-ext.yaml                  (local schema: references-paper /
 │                                           addresses-finding / evaluates-tech
@@ -350,6 +369,14 @@ unknown-project/                           (will be renamed to `scry/`)
 │                                           4 solutions + 3 contexts +
 │                                           3 justifications)
 └── docs/
+    ├── intro-to-abstract-interpretation.md (friendly explainer —
+    │                                        what AI is, what "sound"
+    │                                        means, where scry fits;
+    │                                        ~10 min, no math)
+    ├── architecture.md                    (how scry v0.1 works:
+    │                                       components · pipeline ·
+    │                                       composition · runtime probe
+    │                                       — with mermaid diagrams)
     └── roadmap.md                         (per-version research links +
                                             composition narrative —
                                             witness-style)

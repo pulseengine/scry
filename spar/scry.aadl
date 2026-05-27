@@ -1,0 +1,179 @@
+-- scry — sound abstract interpretation for WebAssembly.
+--
+-- v0.1 scope: two Wasm components (process LatticeProcess +
+-- process AnalyzerProcess) composed via WAC into a single
+-- distributable Wasm component (system Scry.V01).
+--
+-- The lattice component exports interval-domain operations; the
+-- analyzer component imports them and runs the abstract-
+-- interpretation fixpoint. Cross-component import is the v0.1
+-- dogfood gate per DD-008.
+--
+-- This AADL model is the source-of-truth architecture; the
+-- corresponding WIT files (crates/wasm-lattice/wit/wasm-lattice.wit
+-- and crates/scry-analyzer/wit/scry.wit) are hand-derived from it
+-- for v0.1 — see DD-010 for the rationale and the migration path
+-- to spar-codegen.
+
+package Scry
+public
+
+  -- ══════════════════════════════════════════════════════════════════
+  -- Data types carried across component boundaries
+  -- ══════════════════════════════════════════════════════════════════
+
+  data WasmModuleBytes
+    -- A validated Wasm Core Model module, passed as a byte stream.
+    properties
+      Data_Size => 64 MByte;
+  end WasmModuleBytes;
+
+  data AnalysisConfig
+    -- JSON-encoded analyzer configuration: enabled domains, widening
+    -- thresholds, output format.
+    properties
+      Data_Size => 4 KByte;
+  end AnalysisConfig;
+
+  data InvariantBundle
+    -- JSON-encoded per-instruction and per-function abstract
+    -- invariants.
+    properties
+      Data_Size => 16 MByte;
+  end InvariantBundle;
+
+  data AnalysisDiagnostic
+    properties
+      Data_Size => 512 Bytes;
+  end AnalysisDiagnostic;
+
+  data Interval
+    -- One closed integer interval. Crosses the
+    -- LatticeProcess→AnalyzerProcess port.
+    properties
+      Data_Size => 16 Bytes;  -- two s64 fields
+  end Interval;
+
+  -- ══════════════════════════════════════════════════════════════════
+  -- Threads — one per component's primary worker
+  -- ══════════════════════════════════════════════════════════════════
+
+  thread LatticeOps
+    -- Wraps the interval-domain operations exported by wasm-lattice.
+    -- Stateless; each call is independent. Dispatch protocol is
+    -- "Hybrid" because the host-side wasm runtime invokes the
+    -- exported functions on demand.
+    features
+      -- v0.1 operations: bottom/top/join/widen/leq/meet/
+      -- constant-i32/i32-add/i32-sub/i32-mul. Modelled as a single
+      -- in/out port pair to keep the AADL compact; the actual WIT
+      -- enumerates each function.
+      op_in:  in event data port;
+      op_out: out event data port Interval;
+    properties
+      Dispatch_Protocol => Sporadic;
+      Compute_Execution_Time => 0 us .. 100 us;
+      Deadline => 1 ms;
+      Stack_Size => 64 KByte;
+  end LatticeOps;
+
+  thread IntervalAnalyzer
+    -- v0.1 abstract interpreter. Sporadic: woken by an analyze
+    -- request, completes when the fixpoint stabilises (or the
+    -- bounded-iteration limit is hit), emits the invariant bundle
+    -- and any diagnostics, then returns to idle. Calls into
+    -- LatticeOps for every transfer function.
+    features
+      module_in:       in event data port WasmModuleBytes;
+      config_in:       in event data port AnalysisConfig;
+      invariants_out:  out event data port InvariantBundle;
+      diagnostics_out: out event data port AnalysisDiagnostic;
+      -- Connection to LatticeOps. Modelled as a port pair; in the
+      -- Component Model this is a WIT cross-component import.
+      lattice_call_out: out event data port;
+      lattice_result_in: in event data port Interval;
+    properties
+      Dispatch_Protocol => Sporadic;
+      Compute_Execution_Time => 0 ms .. 100 ms;
+      Deadline => 5000 ms;
+      Stack_Size => 8 MByte;
+  end IntervalAnalyzer;
+
+  -- ══════════════════════════════════════════════════════════════════
+  -- Processes — each maps 1:1 to a wasm32-wasip2 Wasm component
+  -- ══════════════════════════════════════════════════════════════════
+
+  process LatticeProcess
+    -- The wasm-lattice Wasm component. Pure-computation: exports
+    -- the `pulseengine:wasm-lattice/domain` interface; imports
+    -- nothing.
+    features
+      op_in:  in event data port;
+      op_out: out event data port Interval;
+  end LatticeProcess;
+
+  process implementation LatticeProcess.IntervalV01
+    subcomponents
+      lattice_thread: thread LatticeOps;
+    connections
+      c_op_in:  port op_in -> lattice_thread.op_in;
+      c_op_out: port lattice_thread.op_out -> op_out;
+  end LatticeProcess.IntervalV01;
+
+  process AnalyzerProcess
+    -- The scry-analyzer Wasm component. Exports the
+    -- `pulseengine:scry/analyzer` interface; imports the lattice
+    -- domain from LatticeProcess.
+    features
+      module_in:       in event data port WasmModuleBytes;
+      config_in:       in event data port AnalysisConfig;
+      invariants_out:  out event data port InvariantBundle;
+      diagnostics_out: out event data port AnalysisDiagnostic;
+      lattice_call_out: out event data port;
+      lattice_result_in: in event data port Interval;
+  end AnalyzerProcess;
+
+  process implementation AnalyzerProcess.IntervalV01
+    subcomponents
+      analyzer_thread: thread IntervalAnalyzer;
+    connections
+      c_module:        port module_in -> analyzer_thread.module_in;
+      c_config:        port config_in -> analyzer_thread.config_in;
+      c_invariants:    port analyzer_thread.invariants_out -> invariants_out;
+      c_diagnostics:   port analyzer_thread.diagnostics_out -> diagnostics_out;
+      c_lattice_call:  port analyzer_thread.lattice_call_out -> lattice_call_out;
+      c_lattice_result: port lattice_result_in -> analyzer_thread.lattice_result_in;
+  end AnalyzerProcess.IntervalV01;
+
+  -- ══════════════════════════════════════════════════════════════════
+  -- System — scry as deployed (the wac_compose output)
+  -- ══════════════════════════════════════════════════════════════════
+
+  system Scry
+    features
+      module_in:       in event data port WasmModuleBytes;
+      config_in:       in event data port AnalysisConfig;
+      invariants_out:  out event data port InvariantBundle;
+      diagnostics_out: out event data port AnalysisDiagnostic;
+  end Scry;
+
+  system implementation Scry.V01
+    -- v0.1: two-component composition. The wac_compose target
+    -- //:scry wires the cross-process port pair (analyzer↔lattice)
+    -- automatically; only the system-level ports are externally
+    -- visible to the host runtime.
+    subcomponents
+      lattice:  process LatticeProcess.IntervalV01;
+      analyzer: process AnalyzerProcess.IntervalV01;
+    connections
+      -- External (host-facing) ports
+      s_module:        port module_in -> analyzer.module_in;
+      s_config:        port config_in -> analyzer.config_in;
+      s_invariants:    port analyzer.invariants_out -> invariants_out;
+      s_diagnostics:   port analyzer.diagnostics_out -> diagnostics_out;
+      -- Internal cross-component wiring (analyzer → lattice)
+      s_lattice_call:  port analyzer.lattice_call_out -> lattice.op_in;
+      s_lattice_result: port lattice.op_out -> analyzer.lattice_result_in;
+  end Scry.V01;
+
+end Scry;

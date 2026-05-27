@@ -1,0 +1,21 @@
+[package]
+name = "scry-analyzer"
+description = "v0.1 scry interval-domain abstract interpreter as a Wasm component."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bitflags = { workspace = true }
+
+# v0.1 scaffold has no other external deps; wasmparser + sha2 land
+# with the real analyzer implementation in a follow-on PR (FEAT-001
+# acceptance criterion 1 — over-approximation of concrete execution).
+# The macro-generated bindings crate
+# (scry_analyzer_component_bindings) is injected by
+# rules_wasm_component.

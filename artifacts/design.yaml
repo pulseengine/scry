@@ -347,3 +347,143 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-005
+
+  - id: DD-008
+    type: design-decision
+    title: scry ships as a WebAssembly Component Model component (dogfood)
+    status: approved
+    tags: [packaging, dogfood, component-model]
+    description: >
+      The scry analyzer ships as a wasm32-wasip2 Component Model
+      component, not a native binary. Implementation runs inside a
+      Wasm runtime (kiln in production; wasmtime for local
+      development); WIT interfaces define its inputs and outputs.
+    fields:
+      decision: >
+        scry's primary deliverable is a Wasm Component Model component
+        published as a `pulseengine:scry@x.y.z` package. The
+        `analyzer.analyze` function is exported via WIT; consumers
+        invoke scry through any Component Model host (kiln,
+        wasmtime, wasm-tools, browser-side via jco). A thin native
+        CLI wrapper may be provided for convenience but is not the
+        primary distribution.
+      rationale: >
+        PulseEngine's value claim is that the same Wasm Component
+        Model toolchain produces credit-bearing safety evidence
+        across six standards. Shipping scry as a Wasm component is
+        the most direct way to validate that claim: scry's own
+        artifact passes through meld (or trivially through its
+        absence at v0.1), is signed by sigil, has its branches
+        measured by witness, and is allocated to a kiln runtime via
+        spar AADL — exactly the chain scry is supposed to analyze
+        for other consumers. Dogfooding catches integration issues
+        in the chain before external users hit them and provides
+        the most credible existence proof of the chain's viability.
+      alternatives: >
+        (a) Native Rust binary — rejected for v0.1 because it would
+            require a parallel "scry-as-component" effort later to
+            actually dogfood the chain, doubling the implementation
+            cost.
+        (b) Hybrid: native binary + optional Wasm component — the
+            chosen approach is the Wasm component plus an optional
+            native CLI wrapper for ergonomics. Pursuing both as
+            first-class deliverables doubles the test matrix without
+            doubling the value.
+    links:
+      - type: satisfies
+        target: REQ-001
+
+  - id: DD-009
+    type: design-decision
+    title: Build scry with Bazel + rules_wasm_component (canonical PulseEngine path)
+    status: approved
+    tags: [build, bazel, rules_wasm_component]
+    description: >
+      Adopt the PulseEngine-canonical Bazel rule family
+      `rules_wasm_component` (v1.0.0) for the scry component build
+      from the first commit. No Cargo-only path for the component
+      itself; a host-side Cargo workspace may still exist for test
+      harnesses or generators.
+    fields:
+      decision: >
+        scry's component build is driven by `rules_wasm_component`
+        v1.0.0. `MODULE.bazel` declares the dependency; `BUILD.bazel`
+        uses `rust_wasm_component_bindgen` to produce the
+        `pulseengine:scry@0.1.0` Wasm artifact. WIT files live at
+        `wit/scry.wit`. The Bazel rule wires `wit-bindgen` into the
+        build automatically; no `build.rs` is needed.
+      rationale: >
+        Every shipping PulseEngine project uses
+        `rules_wasm_component` (wohl, falcon, the meld/loom/synth
+        examples). It is v1.0.0 stable, eliminates Cargo version
+        skew across the family, and pulls in the hermetic toolchain
+        the rest of the chain already trusts. Adopting it from day
+        one avoids a Cargo→Bazel migration later. Witness's Cargo-
+        only `crates/witness-component/` is a deliberate dogfooding
+        exception rather than the family template.
+      alternatives: >
+        (a) Pure Cargo with `--target wasm32-wasip2` — rejected
+            because every downstream PulseEngine consumer (meld,
+            kiln, sigil) integrates via Bazel; supporting Cargo
+            adds friction with no compensating benefit for a brand-
+            new project.
+        (b) Bazel with hand-rolled `genrule` calling `wasm-tools`
+            directly — rejected because `rules_wasm_component`
+            already encapsulates the right pattern (wit-bindgen,
+            cdylib, post-processing) and is the test-anchor for the
+            rest of the family's Bazel builds.
+      source-ref: "https://github.com/pulseengine/rules_wasm_component"
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: traces-to
+        target: DD-008
+
+  - id: DD-010
+    type: design-decision
+    title: v0.1 — hand-write WIT to match the AADL model; integrate spar-codegen in a later version
+    status: approved
+    tags: [build, wit, spar, methodology]
+    description: >
+      For v0.1, the WIT world at `wit/scry.wit` is hand-derived from
+      the AADL model at `spar/scry.aadl`. The AADL is the
+      documentation source of truth; the WIT is what the Bazel
+      build actually consumes. spar-codegen WIT generation is
+      integrated in a later version (tracked as a follow-on task),
+      at which point the hand-written WIT is replaced by generated
+      output.
+    fields:
+      decision: >
+        Both `spar/scry.aadl` (AADL architecture model) and
+        `wit/scry.wit` (Wasm Component Model interface definition)
+        are checked in. Hand-write WIT for v0.1; AADL is the
+        documentary and structural source-of-truth. A CI check
+        (added at a later version) verifies the hand-written WIT
+        structurally matches the AADL model.
+      rationale: >
+        The PulseEngine methodology calls for WIT to be generated
+        from AADL via spar (per the pulseengine-feature-loop skill).
+        `spar-codegen/src/wit_gen.rs` is complete (since 2026-03-22)
+        but is not operationally integrated: no Bazel rule wraps
+        it, no shipping PulseEngine project actually uses it for
+        build-time WIT generation today (wohl has AADL + hand-
+        written WIT side-by-side). For v0.1 the pragmatic path is
+        to hand-write WIT against the AADL model and treat them as
+        twins. Wiring the spar-codegen Bazel rule is a separate,
+        scoped piece of work that should not block v0.1 ship.
+      alternatives: >
+        (a) Block v0.1 on full spar-codegen integration — rejected
+            because it conflates two distinct pieces of work (the
+            scry analyzer itself; the spar→WIT Bazel pipeline) and
+            would slip the dogfood-first v0.1 by a quarter or more.
+        (b) Skip the AADL model and write only WIT — rejected
+            because AADL gives us the architecture model spar
+            analyses (timing, ports, modes) need to attach to;
+            without it the rivet traceability story loses its top
+            layer.
+      source-ref: "spar-codegen status: /Users/r/git/pulseengine/spar/crates/spar-codegen/src/wit_gen.rs (complete) ; no Bazel rule yet in rules_wasm_component"
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: traces-to
+        target: DD-009

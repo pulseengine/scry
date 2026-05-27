@@ -1,0 +1,32 @@
+"""scry-analyzer — the v0.1 interval-domain abstract interpreter as
+a Wasm component. Imports the `pulseengine:wasm-lattice/domain`
+interface from `//crates/wasm-lattice` (per DD-008's dogfood story).
+"""
+
+load("@rules_wasm_component//rust:defs.bzl", "rust_wasm_component_bindgen")
+load("@rules_wasm_component//wit:defs.bzl", "wit_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# WIT interface this component exports — declares the cross-package
+# import of pulseengine:wasm-lattice via deps. The Bazel rule builds
+# the proper `deps/` directory layout under bazel-bin so wit-bindgen
+# can resolve `use pulseengine:wasm-lattice/domain@0.1.0` at codegen
+# time.
+wit_library(
+    name = "scry_analyzer_wit",
+    package_name = "pulseengine:scry@0.1.0",
+    srcs = ["wit/scry.wit"],
+    world = "scry",
+    deps = ["//crates/wasm-lattice:wasm_lattice_wit"],
+)
+
+# The Wasm component. The `_bindings` crate produced by the macro is
+# `scry_analyzer_component_bindings`; it carries both the exported
+# `analyzer` interface and the imported `domain` namespace.
+rust_wasm_component_bindgen(
+    name = "scry_analyzer_component",
+    srcs = ["src/lib.rs"],
+    profiles = ["release"],
+    wit = ":scry_analyzer_wit",
+)

@@ -1,0 +1,126 @@
+// scry — sound abstract interpretation for WebAssembly.
+//
+// v0.1 WIT world. Hand-derived from spar/scry.aadl (see DD-010).
+// The `scry` world imports the `domain` interface from the
+// `pulseengine:wasm-lattice` component (see DD-004 for the
+// reusability rationale and DD-008 for the dogfood rationale of
+// cross-component WIT). meld will fuse `wasm-lattice` and the
+// `scry-analyzer` component into a single distributable artifact;
+// callers see a single component exporting the `analyzer` interface.
+
+package pulseengine:scry@0.1.0;
+
+interface analyzer {
+    use pulseengine:wasm-lattice/domain@0.1.0.{interval};
+
+    /// Abstract value of one Wasm value-stack entry or local at a
+    /// given program point. v0.1 carries only the interval domain
+    /// over i32 (i64 lifted to i64-interval lands with the i64
+    /// transfer functions in v0.2); later versions add region-
+    /// tagged memory shapes (FEAT-005), taint labels (FEAT-009).
+    variant abstract-value {
+        /// i32 value abstracted as an integer interval.
+        i32-interval(interval),
+        /// i64 value abstracted as an integer interval.
+        i64-interval(interval),
+        /// Anything else (i.e. anything outside the v0.1 scope).
+        unknown,
+    }
+
+    /// Per-local invariant at a given program-counter offset within
+    /// a function.
+    record local-invariant {
+        local-index: u32,
+        value: abstract-value,
+    }
+
+    /// All locals at one program point in one function.
+    record program-point {
+        func-index: u32,
+        pc: u32,
+        locals: list<local-invariant>,
+    }
+
+    /// The complete v0.1 invariant bundle for a module.
+    record invariant-bundle {
+        /// JSON schema URL the consumer should validate against.
+        /// Held constant per scry minor version.
+        schema: string,
+        /// SHA-256 of the input Wasm module, hex-encoded. Lets a
+        /// downstream consumer cross-check that the invariants apply
+        /// to the module they are about to transform.
+        module-sha256: string,
+        /// Per-instruction abstract state for each visited program
+        /// point. Order is not significant.
+        points: list<program-point>,
+    }
+
+    /// Severity of a single diagnostic emitted alongside the
+    /// invariant bundle.
+    enum diagnostic-severity {
+        info,
+        warning,
+        unsoundness-fallback,
+    }
+
+    /// A diagnostic about something the analyzer encountered: an
+    /// unsupported instruction it gave up on (degrades to `unknown`),
+    /// a widening warning, a soundness-affecting fallback.
+    record diagnostic {
+        severity: diagnostic-severity,
+        func-index: u32,
+        pc: u32,
+        message: string,
+    }
+
+    /// v0.1 analyzer configuration. Kept narrow; v0.2+ will add
+    /// fields for region-memory parameters, octagon thresholds, etc.
+    record analysis-config {
+        /// Maximum number of fixpoint iterations per loop header
+        /// before widening kicks in. Default if not set by the
+        /// caller: 3.
+        widening-threshold: option<u32>,
+        /// Whether to emit diagnostics for unsupported instructions
+        /// (default true). Useful to suppress noise in tests.
+        emit-diagnostics: bool,
+    }
+
+    /// Full analyzer output for one analyze call.
+    record analysis-result {
+        invariants: invariant-bundle,
+        diagnostics: list<diagnostic>,
+    }
+
+    /// Reasons an analyze call can fail without producing a partial
+    /// invariant bundle. Soundness-affecting issues during a
+    /// successful run are reported via `diagnostic`, not here.
+    variant analyze-error {
+        /// The input bytes did not decode as a valid Wasm module.
+        invalid-module(string),
+        /// Configuration was inconsistent (e.g. widening-threshold = 0).
+        invalid-config(string),
+        /// Internal analyzer invariant broken. Indicates a bug in
+        /// scry, not in the input.
+        internal(string),
+    }
+
+    /// Run the v0.1 interval-domain abstract interpreter on the
+    /// given Wasm Core Model module and return per-instruction
+    /// abstract invariants for i32/i64 locals along with any
+    /// diagnostics. Implemented atop the
+    /// `pulseengine:wasm-lattice/domain` interface for all
+    /// lattice operations and transfer functions.
+    ///
+    /// Sound: every concrete reachable state of `module-bytes` is
+    /// captured by the returned abstract state. False alarms are
+    /// possible; missed real behaviour is not (see DD-005, REQ-001).
+    analyze: func(
+        module-bytes: list<u8>,
+        config: analysis-config,
+    ) -> result<analysis-result, analyze-error>;
+}
+
+world scry {
+    import pulseengine:wasm-lattice/domain@0.1.0;
+    export analyzer;
+}
