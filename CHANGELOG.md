@@ -7,6 +7,35 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-05-27
+
+Headline: **compliance bundle ships, finally**. Patch release fixing
+the v0.2.0 release-tail gap that left the `compliance-evidence.tar.gz`
+asset off the GitHub Release. No analyzer or toolchain changes.
+
+### Fixed
+
+- **`release.yml` compliance step** (#11, closes #10): bumped the
+  `pulseengine/rivet/.github/actions/compliance@v0.6.0` invocation's
+  `rivet-version` input from `v0.3.0` to `v0.13.1`. v0.3.0 was too
+  old to parse scry's `schemas/research-ext.yaml` local schema
+  extension, so the action's internal `rivet validate` failed with
+  37 errors and no archive was emitted on the v0.2.0 release run.
+  Also dropped the unrecognised `single-page` and
+  `include-data-formats` inputs that produced warnings on the same
+  call (they don't exist in the action's v0.6.0 schema; valid
+  inputs are `report-label`, `homepage`, `other-versions`, `theme`,
+  `offline`, `rivet-version`, `output`, `archive`, `archive-name`,
+  `project-dir`).
+
+### Falsifiable kill-criterion for v0.2.1
+
+This release is wrong if the GitHub Release for v0.2.1 does NOT
+include an asset matching `scry-0.2.1-compliance-evidence.tar.gz`
+with a valid cosign signature. v0.2.0's release shipped 13 assets
+without the bundle; v0.2.1 must ship 16 (the bundle + its `.sig` +
+its `.pem`).
+
 ## [0.2.0] — 2026-05-27
 
 Headline: **real analysis ships**. The v0.1.0 scaffold's hardcoded
@@ -247,6 +276,7 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/pulseengine/scry/releases/tag/v0.2.1
 [0.2.0]: https://github.com/pulseengine/scry/releases/tag/v0.2.0
 [0.1.0]: https://github.com/pulseengine/scry/releases/tag/v0.1.0
