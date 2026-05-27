@@ -8,6 +8,14 @@
 // taint (FEAT-009), and octagon (FEAT-010) lattices land in later
 // versions as additional interfaces on this same component.
 //
+// v0.3 (FEAT-005) adds the region abstract type — a (region-id,
+// offset-interval) pair plus the matching lattice ops. The region
+// surface is additive over v0.1: existing consumers ignoring `region`
+// keep building. The package version stays at @0.1.0 because semver
+// allows additive changes within a 0.x minor; bumping to @0.2.0 would
+// force scry.wit's `use` to track and ripple through composition.wac
+// (which we explicitly don't touch in this PR).
+//
 // Per DD-004, this is a separate component (not just a crate) so that
 // downstream tools (witness coverage-gap prediction, synth codegen
 // invariant generation) can depend on the lattice via WIT without
@@ -83,6 +91,78 @@ interface domain {
 
     /// Sound abstract `i32.mul`.
     i32-mul: func(a: interval, b: interval) -> interval;
+
+    // ── Region-memory domain (FEAT-005, v0.3) ──────────────────────
+    //
+    // A `region` abstracts a pointer into Wasm linear memory as a
+    // pair `(region-id, offset)`: the `region-id` is an opaque
+    // symbol identifying the logical memory area (think: distinct
+    // base pointer per stack-allocated buffer), and `offset` is the
+    // interval-domain abstraction of the byte offset within that
+    // area. Two `region` values with the same `region-id` are
+    // necessarily aliased — they point into the same logical area;
+    // values with different `region-id`s are *possibly* aliased
+    // (the lattice is non-relational across region-ids in v0.3).
+    //
+    // The "contents" of a region (what an `i32.load` would actually
+    // read) is *not* part of the region value in v0.3 — the
+    // analyzer keeps a separate per-region metadata map and v0.3
+    // pessimistically returns `top` for loads. The narrow v0.3 win
+    // is using the offset interval to *prove* that a load is in
+    // bounds (bounds-check elision; the loom use case per
+    // FEAT-008 / REQ-004) without yet claiming a precise value.
+
+    /// A pointer abstracted as `(region-id, offset)`. The
+    /// `region-id` field is opaque — only equality of region-ids
+    /// is meaningful (regions are quotients of "same base
+    /// pointer"). The `offset` field is the interval-domain
+    /// abstraction of the byte offset within the region.
+    record region {
+        region-id: u32,
+        offset: interval,
+    }
+
+    /// Construct a fresh region pointer at offset `0` with the
+    /// given `region-id`. Callers (the analyzer) are responsible
+    /// for allocating fresh `region-id`s and keeping the
+    /// region-metadata map consistent.
+    region-create: func(region-id: u32) -> region;
+
+    /// Shift a region pointer by an interval (e.g. the result of
+    /// `i32.add base, k`). Returns a new region with the same
+    /// `region-id` and `offset = offset + delta` (interval add
+    /// per `i32-add`). The region-id is preserved unchanged.
+    region-offset: func(r: region, delta: interval) -> region;
+
+    /// `a ⊑ b` for regions. Defined only when `a.region-id ==
+    /// b.region-id` — different region-ids are incomparable
+    /// (i.e. cross-region `leq` is conservatively `false`, since
+    /// the lattice has no join of two different region-ids short
+    /// of `top`, which is not representable as a `region` value
+    /// in v0.3).
+    region-leq: func(a: region, b: region) -> bool;
+
+    /// `a ⊔ b` for regions. Defined only when `a.region-id ==
+    /// b.region-id`; if region-ids differ the result is the
+    /// *first* operand with its offset widened to interval top
+    /// (a conservative choice — the analyzer should generally
+    /// fall back to non-region-tagged abstract values in this
+    /// case, but the operator stays total to satisfy the
+    /// abstract-domain interface).
+    region-join: func(a: region, b: region) -> region;
+
+    /// `a ⊓ b` for regions. Defined only when `a.region-id ==
+    /// b.region-id`; otherwise the result is the first operand
+    /// with `offset = bottom` (i.e. empty — signals that the
+    /// meet is uninhabitable, which the analyzer can detect via
+    /// `is-bottom` on the offset).
+    region-meet: func(a: region, b: region) -> region;
+
+    /// Standard widening on the offset component; region-ids are
+    /// preserved (and the widen is degenerate / top-offset if the
+    /// region-ids differ). Required for fixpoint termination
+    /// when region-tagged values flow into loop headers.
+    region-widen: func(a: region, b: region) -> region;
 }
 
 world wasm-lattice {

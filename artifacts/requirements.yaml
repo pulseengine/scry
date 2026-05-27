@@ -344,20 +344,44 @@ artifacts:
 
   - id: FEAT-005
     type: feature
-    title: "v0.2 — Region-based linear-memory model (CRAB-style)"
-    status: proposed
+    title: "v0.3 — Region-based linear-memory model (CRAB-style)"
+    status: draft
     description: >
-      Add a region-based memory abstraction to the wasm-lattice crate:
-      Wasm linear memory is modelled as a set of regions, with per-
-      region offset tracking via the interval domain. Joins do not
-      collapse unrelated regions into a single interval, preserving
+      Add a region-based memory abstraction to the wasm-lattice
+      component and use it from scry-analyzer. Wasm linear memory is
+      modelled as a set of regions, each a `(region-id, offset-
+      interval)` pair; the lattice operations (`region-create`,
+      `region-offset`, `region-leq`, `region-join`, `region-meet`,
+      `region-widen`) are exported from the
+      `pulseengine:wasm-lattice/domain` interface and dogfooded
+      across the WIT boundary per DD-008. Joins do not collapse
+      unrelated regions into a single interval, preserving
       precision for bounds-check invariants.
-    tags: [domains, memory, v0.2]
+
+      v0.3 narrow scope (this draft): the analyzer recognises the
+      canonical "base + constant offset" pointer pattern Wasm
+      compilers emit for stack-allocated locals (i.e. an
+      `i32.load` / `i32.store` whose address operand is a
+      singleton i32 interval), synthesises a region pointer via
+      the new lattice ops, proves the access is in-bounds against
+      the parsed memory section's declared page count, and emits
+      a precise diagnostic (`Info` for proven-safe, `Warning` for
+      cannot-prove) instead of v0.2's blanket
+      `UnsoundnessFallback`. The loaded value itself is still
+      `top` for v0.3 — precise per-region content tracking lands
+      in v0.4+ alongside FEAT-007's summary-based
+      interprocedural analysis. Per-stack-frame region splitting
+      and proptest soundness sweeps land in the same v0.4+ band
+      (see acceptance-criteria item 4 below).
+    tags: [domains, memory, v0.3]
     fields:
       phase: phase-1
       acceptance-criteria:
-        - "Given a Wasm module with stack and heap accesses, When scry runs with the region+interval product, Then each load/store carries a region-tagged interval invariant on its offset."
-        - "Given the region domain, When proptest generates random concrete memory traces, Then the concrete final state is ⊑-included in the abstract result for every trace."
+        - "Given `crates/scry-analyzer/test-fixtures/fixture-03-region-bounds.wat` (a `(memory 1)` module with `i32.const 100; i32.const 4; i32.add; i32.load`), When scry analyzes it, Then `i32.load` at pc=3 emits a single `Info` diagnostic of the form `i32.load bounds-check elision safe at pc=3: access [104, 108) fits in default region of 65536 bytes` and no `UnsoundnessFallback` diagnostic for the load."
+        - "Given a Wasm module whose `i32.load` address interval cannot be proven inside the declared memory pages (e.g. an address `>= 65536` in a one-page module), When scry analyzes it, Then a `Warning` diagnostic is emitted naming the address interval, the load width, and the declared region size — but locals are NOT scrubbed to top (precision preserved for the rest of the function)."
+        - "Given the wasm-lattice WIT package at `crates/wasm-lattice/wit/wasm-lattice.wit`, When the Bazel `wit_library` target builds, Then the new `region` record plus `region-create` / `region-offset` / `region-leq` / `region-join` / `region-meet` / `region-widen` ops resolve and the cross-component import from `crates/scry-analyzer/wit/scry.wit` (`use pulseengine:wasm-lattice/domain@0.1.0.{interval, region}`) succeeds."
+        - "Given the v0.4+ FEAT-007 milestone, When summary-based interprocedural AI lands, Then the v0.3 region scaffold extends to per-stack-frame regions and a richer per-region content domain without a wasm-lattice WIT break — i.e. v0.3 is the structural foundation for v0.4+ memory precision."
+        - "Given the region domain, When proptest generates random concrete memory traces (deferred to v0.4+ alongside the richer content model), Then the concrete final state is ⊑-included in the abstract result for every trace."
     links:
       - type: satisfies
         target: REQ-001
@@ -365,6 +389,12 @@ artifacts:
         target: AC-006
       - type: evaluates-tech
         target: TE-005
+      - type: depends-on
+        target: FEAT-001
+      - type: traces-to
+        target: DD-008
+      - type: traces-to
+        target: FEAT-007
 
   - id: FEAT-006
     type: feature
