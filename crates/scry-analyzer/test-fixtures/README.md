@@ -29,12 +29,14 @@ serve three roles:
 
 ## Files
 
-| file                              | purpose                                       |
-|-----------------------------------|-----------------------------------------------|
-| `fixture-01-constant-fold.wat`    | pure constant folding: `(10 + 32) * 2 = 84`   |
-| `fixture-01-constant-fold.md`     | expected per-instruction operand-stack state  |
-| `fixture-02-with-param.wat`       | unknown parameter + constant: result is top   |
-| `fixture-02-with-param.md`        | expected per-instruction operand-stack state  |
+| file                              | purpose                                                  |
+|-----------------------------------|----------------------------------------------------------|
+| `fixture-01-constant-fold.wat`    | pure constant folding: `(10 + 32) * 2 = 84`              |
+| `fixture-01-constant-fold.md`     | expected per-instruction operand-stack state             |
+| `fixture-02-with-param.wat`       | unknown parameter + constant: result is top              |
+| `fixture-02-with-param.md`        | expected per-instruction operand-stack state             |
+| `fixture-03-region-bounds.wat`    | v0.3 region-aware `i32.load` on a constant base+offset   |
+| `fixture-03-region-bounds.md`     | expected operand-stack + diagnostic surface              |
 
 ## Adding fixtures
 
@@ -44,11 +46,21 @@ type) plus one adjacent `.md` with two sections:
 1. **Source** — verbatim copy of the `.wat`.
 2. **Expected post-analysis state** — per-instruction table of the
    operand stack and locals after each instruction, matching the
-   v0.2 AC#1 transfer functions.
+   v0.2 AC#1 transfer functions plus v0.3 (FEAT-005) memory ops.
 
-Keep fixtures inside the v0.2 AC#1 supported instruction set:
-`i32.const`, `i64.const`, `local.get`, `local.set`, `local.tee`,
-`i32.add`, `i32.sub`, `i32.mul`, `end`, `return`. Anything else
-hits the fallback path (UnsoundnessFallback diagnostic + locals
-degraded to top) which is also a valid thing to demonstrate but
-should be called out explicitly in the `.md`.
+Keep fixtures inside the v0.3 supported instruction set:
+
+* **Arithmetic core** (v0.2 AC#1): `i32.const`, `i64.const`,
+  `local.get`, `local.set`, `local.tee`, `i32.add`, `i32.sub`,
+  `i32.mul`, `end`, `return`.
+* **Region-aware memory** (v0.3 FEAT-005, when the address operand
+  is a singleton i32 interval — the canonical base+offset pattern):
+  `i32.load`, `i32.store`, `i64.load`, `i64.store`. The fixture's
+  `.md` should record whether each memory op is expected to emit
+  an `Info` (bounds-check elision safe) or `Warning` (cannot
+  prove in-region) diagnostic. Non-singleton addresses still
+  hit the v0.2 fallback (`UnsoundnessFallback` + locals scrubbed
+  to top), which is also a valid thing to demonstrate.
+
+Anything else hits the fallback path which should be called out
+explicitly in the `.md`.

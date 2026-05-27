@@ -54,6 +54,20 @@ public
       Data_Size => 16 Bytes;  -- two s64 fields
   end Interval;
 
+  data MemoryRegion
+    -- v0.3 (FEAT-005): a region-tagged pointer abstraction —
+    -- (region-id, offset-interval) pair — exported by the
+    -- LatticeProcess as part of the region-memory domain and
+    -- consumed by the AnalyzerProcess to prove bounds-check
+    -- elision on the canonical base+offset pointer pattern
+    -- Wasm compilers emit for stack-allocated locals. The
+    -- interval component is the same Interval data type
+    -- declared above; this record adds the 4-byte region-id
+    -- discriminator.
+    properties
+      Data_Size => 20 Bytes;  -- u32 region-id + 16-byte Interval
+  end MemoryRegion;
+
   -- ══════════════════════════════════════════════════════════════════
   -- Threads — one per component's primary worker
   -- ══════════════════════════════════════════════════════════════════
