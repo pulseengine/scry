@@ -7,27 +7,117 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-27
+
+Headline: **real analysis ships**. The v0.1.0 scaffold's hardcoded
+invariant bundle is replaced by a working interval-domain
+abstract-interpretation fixpoint over Wasm Core Model arithmetic,
+running through the `pulseengine:wasm-lattice/domain` cross-component
+import on every transfer ([[FEAT-001]] acceptance criterion #1). The
+PulseEngine proof toolchain (`rules_verus` + `rules_rocq_rust`) is
+wired into the Bazel build, with one provable theorem per family on
+the lattice algebra ([[FEAT-012]]). Releases now ship rivet
+compliance evidence as a cosign-signed asset, and PRs touching the
+artifact graph get a sticky `rivet-delta` comment so reviewers can
+see what changed without diffing YAML.
+
 ### Added
 
-- **`rivet-delta.yml` PR check** — sticky comment on every PR touching
-  `artifacts/`, `schemas/`, `spar/`, or `rivet.yaml`. Reports `rivet
-  validate` head-vs-base, stats delta, full `rivet diff`, and `spar
-  parse` result for the AADL model. Pattern adapted from rivet's
-  own `rivet-delta.yml`. Informational only — does not gate the PR.
-- **Rivet compliance evidence in releases** — `release.yml` now
-  invokes the canonical `pulseengine/rivet/.github/actions/compliance@v0.6.0`
-  composite action (same one sigil and spar use) and tarballs the
-  result as `scry-<version>-compliance-evidence.tar.gz`. The bundle
-  is signed by cosign alongside the other release assets.
+- **Real interval-domain fixpoint** ([[FEAT-001]] AC#1, #8).
+  `crates/scry-analyzer/src/lib.rs` rewritten: parses the input Wasm
+  module with `wasmparser`, walks straight-line arithmetic in each
+  function, maintains an abstract operand stack and per-local
+  abstract state, and emits a `ProgramPoint` snapshot per
+  instruction. Every interval transfer (`I32Const`, `I32Add`,
+  `I32Sub`, `I32Mul`, `LocalGet`/`Set`/`Tee`) dispatches through
+  the imported `pulseengine:wasm-lattice/domain` interface,
+  preserving the [[DD-008]] dogfood on every call. `module_sha256`
+  populated via `sha2`. Unsupported ops (control flow, memory,
+  calls, refs, GC, SIMD) emit `DiagnosticSeverity::UnsoundnessFallback`
+  and widen the locals to `domain::top()` — soundness over
+  precision ([[REQ-001]]). Test fixtures under
+  `crates/scry-analyzer/test-fixtures/` document expected
+  invariants for two arithmetic-only Wasm modules.
+- **Verus + Rocq proof toolchain wired into Bazel** ([[FEAT-012]],
+  #7). `MODULE.bazel` pulls `rules_verus@a49f72ef` and
+  `rules_rocq_rust@090b875c` (synth-canonical pins) plus
+  `rules_nixpkgs_core@0.13.0` for the hermetic Rocq build. New
+  `proofs/verus/` contains a Verus theorem on `join` commutativity;
+  new `proofs/rocq/` contains a Rocq theorem on interval-lattice
+  ⊑-reflexivity discharged by `lia`. New CI jobs
+  `Rocq Formal Proofs` (PASS) and `Verus Formal Proofs`
+  (informational at v0.2 — upstream `rules_verus` sysroot bug
+  documented inline, doesn't block the merge). Mechanized
+  soundness proof of the interval domain against WasmCert-Coq
+  remains deferred to [[FEAT-010]] in v0.9.
+- **Rivet compliance evidence in releases** (v0.2-prep, #6).
+  `release.yml` invokes the canonical
+  `pulseengine/rivet/.github/actions/compliance@v0.6.0` composite
+  action (same one sigil and spar use) and tarballs the result as
+  `scry-<version>-compliance-evidence.tar.gz`. v0.2.0 is the first
+  release to ship the bundle; cosign signs it alongside the other
+  release assets.
+- **`rivet-delta` PR check** (v0.2-prep, #6). Sticky comment on every
+  PR touching `artifacts/`, `schemas/`, `spar/`, or `rivet.yaml`.
+  Reports `rivet validate` head-vs-base, the artifact-count delta,
+  full `rivet diff`, and `spar parse` result. Pattern adapted from
+  rivet's own `rivet-delta.yml`. Informational only.
+- **`README.md`** updated post-v0.1.0 (#4).
 
 ### Changed
 
 - **`actions/checkout` upgraded from `@v4` to `@v6`** across both
-  `ci.yml` and `release.yml`. Removes the Node.js 20 deprecation
-  warning. Other Node 20 actions (`actions/cache`, `Swatinem/rust-cache`,
+  workflows (v0.2-prep, #6). Removes the Node.js 20 deprecation
+  warning for the one action where Node 24 support exists today.
+  Other Node 20 actions (`actions/cache`, `Swatinem/rust-cache`,
   `sigstore/cosign-installer`, `bazelbuild/setup-bazelisk`,
-  `actions/attest-build-provenance`) have no Node 24-compatible
-  release yet; warnings remain for those until upstream ships.
+  `actions/attest-build-provenance`, `peter-evans/*`) have no
+  Node 24-compatible release yet; warnings remain for those until
+  upstream ships.
+- **CI workflow gains a Nix install step on the Bazel-build job**
+  (#7). Adding `register_toolchains("@rocq_toolchains//:all")` in
+  `MODULE.bazel` forces nix-build resolution for every `bazel
+  build`, not just the proofs targets. The install step makes the
+  main composed-component build green again. Matches the synth
+  `ci.yml` pattern.
+- **`crates/scry-analyzer/Cargo.toml`** adds `wasmparser = "0.247"`
+  and `sha2 = "0.10"` workspace deps (#8). Both with
+  `default-features = false` for `#![no_std]`.
+
+### Known limitations / deferred
+
+- **No host wasmtime test harness** — [[FEAT-001]] acceptance
+  criterion #3, still pending. The Wasm fixtures in
+  `crates/scry-analyzer/test-fixtures/` document expected invariants
+  but aren't yet executed against the analyzer in CI. Promoting
+  the placeholder `Clippy` + `Test` CI jobs to real `cargo` runs
+  lands with this.
+- **No region-based memory model** — [[FEAT-005]]; the analyzer
+  emits `UnsoundnessFallback` on the first memory op.
+- **No control flow** — `if`/`loop`/`br_if` etc. emit
+  `UnsoundnessFallback` and widen the function's locals to
+  `domain::top()`. Widening for loops is a v0.3+ concern.
+- **No sound `call_indirect`** — [[FEAT-006]] in v0.3.
+- **`Verus Formal Proofs` CI job fails** — informational only;
+  `librustc_driver-*.so` shared-library issue inside
+  `rules_verus@a49f72ef`. The same pin works for synth; reason
+  is under investigation. The Rocq proof path is fully green and
+  is the more important leg for the FEAT-010 mechanized soundness
+  roadmap.
+
+### Falsifiable kill-criterion for v0.2.0
+
+This release is wrong if, on any well-formed Wasm Core Model module
+whose execution scry-analyzer's `analyze` interprets to completion
+without emitting an `UnsoundnessFallback` diagnostic, the returned
+`invariant_bundle.points` contains *any* `ProgramPoint` whose
+abstract local state excludes a value that the program actually
+computes for some concrete input. The forthcoming host wasmtime
+harness ([[FEAT-001]] AC#3) will be the mechanical falsifier — until
+it lands, the fixtures in `crates/scry-analyzer/test-fixtures/`
+document the expected invariants for two arithmetic-only modules
+and a careful reader can hand-check them against the JSON
+`analysis-result` the analyzer emits.
 
 ## [0.1.0] — 2026-05-27
 
@@ -157,5 +247,6 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/pulseengine/scry/releases/tag/v0.2.0
 [0.1.0]: https://github.com/pulseengine/scry/releases/tag/v0.1.0
