@@ -1,0 +1,33 @@
+[package]
+name = "scry-host-tests"
+description = "Native wasmtime host harness for the scry analyzer Wasm component (FEAT-001 AC#3)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+# This crate is intentionally a near-empty library — all the real
+# logic lives in `tests/soundness.rs` so it runs under `cargo test`
+# without needing any runtime consumer. The lib stub exists so the
+# crate has a build artifact and clippy has something concrete to
+# lint on the library-target path.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Host-only deps. None of these are referenced from the Wasm-component
+# crates (wasm-lattice, scry-analyzer); cargo-bazel's @scry_crates
+# repository resolves them for native triples only, so they never get
+# pulled into the wasm32-wasip2 build of //:scry.
+#
+# Listed under [dependencies] (not [dev-dependencies]) so the public
+# library target compiles against the same dependency surface that
+# the integration tests see — clippy on the lib path picks up the
+# same crates, and a future host-side helper module can be moved out
+# of the test file without re-juggling the dep tables.
+anyhow = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wat = { workspace = true }

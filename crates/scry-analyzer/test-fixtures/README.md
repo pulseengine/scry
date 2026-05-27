@@ -27,6 +27,39 @@ serve three roles:
    lands: no edits to these files; the harness just loads them via
    `wat::parse_str` and asserts on the `analysis-result`.
 
+## How the host harness uses these fixtures
+
+As of FEAT-001 AC#3 (the `crates/scry-host-tests` crate), the host
+wasmtime harness consumes every `.wat` here twice on every CI run:
+
+1. **Abstract side** — assemble the `.wat` to Wasm bytes with
+   `wat::parse_file`, pass them to the composed scry component's
+   `analyzer.analyze` function in a `wasmtime::component::Linker`,
+   and decode the returned `analysis-result` via the dynamic
+   component `Val` API.
+2. **Concrete side** — instantiate the same `.wat` as a runnable
+   core Wasm module in a second wasmtime engine, call the fixture's
+   exported entry point with hand-picked inputs, and capture the
+   actual i32 result.
+
+The harness then cross-asserts that every concrete input lies inside
+the matching abstract `local-invariant` interval — a mechanical
+falsifier for the v0.2.0 CHANGELOG kill-criterion. If a future
+fixture's concrete output ever escapes its abstract interval, the
+soundness theorem is mechanically refuted and CI goes red on that
+exact fixture.
+
+The fixture format is therefore frozen on two dimensions:
+
+* The `.wat` file must export a function named in the harness's
+  fixture table (`compute` for fixture-01, `doit` for fixture-02).
+* The exported function must return a single `i32` so the dynamic
+  result decoder doesn't need a per-fixture signature.
+
+If you add a fixture that breaks either invariant, add a matching
+fixture entry to `crates/scry-host-tests/tests/soundness.rs` rather
+than working around it here.
+
 ## Files
 
 | file                              | purpose                                       |

@@ -200,7 +200,16 @@ artifacts:
       land in later versions; loom integration (FEAT-008) consumes
       the resulting invariant bundle. Built with Bazel +
       rules_wasm_component (per DD-009).
-    tags: [core, pipeline, v0.1, v0.2, component-model]
+
+      v0.3 (FEAT-001 AC#3) lands the host wasmtime harness in
+      `crates/scry-host-tests` — a native cargo crate that loads the
+      composed `bazel-bin/scry.wasm` in a wasmtime embedding, runs
+      each fixture under both the abstract analyzer and a concrete
+      core-module wasmtime instance, and mechanically asserts that
+      every concrete value lies in the matching abstract interval.
+      That harness is the falsifier the v0.2.0 CHANGELOG kill-
+      criterion promised but only hand-checked.
+    tags: [core, pipeline, v0.1, v0.2, v0.3, component-model]
     fields:
       phase: phase-1
       acceptance-criteria:
