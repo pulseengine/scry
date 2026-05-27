@@ -144,12 +144,12 @@ impl FuncCtx {
 }
 
 /// Extract the inner `Interval` from an `AbstractValue::I32Interval`.
-/// A `RegionPointer` also has an i32-shaped offset interval; for
-/// arithmetic transfer functions that don't preserve region-ness
-/// (`i32-sub`, `i32-mul`, etc.) we project to the plain offset
-/// interval. Anything else (i64, unknown) means we lost track of
-/// the i32 shape; caller must treat the result as `domain::top()`
-/// and emit a fallback diagnostic.
+/// A `RegionPointer`'s payload also has an i32-shaped offset
+/// interval; for arithmetic transfer functions that don't preserve
+/// region-ness (`i32-sub`, `i32-mul`, etc.) we project to the plain
+/// offset interval. Anything else (i64, unknown) means we lost
+/// track of the i32 shape; caller must treat the result as
+/// `domain::top()` and emit a fallback diagnostic.
 fn as_i32_interval(v: &AbstractValue) -> Option<Interval> {
     match v {
         AbstractValue::I32Interval(iv) => Some(*iv),
@@ -172,7 +172,7 @@ fn snapshot_locals(locals: &[AbstractValue]) -> Vec<LocalInvariant> {
 
 /// `AbstractValue` derives no Copy/Clone in the generated bindings (it
 /// carries a Rust enum variant with a payload). Hand-roll a shallow
-/// clone because `Interval` and `Region` are both `Copy`.
+/// clone because `Interval` and `RegionPointerPayload` are both `Copy`.
 fn clone_value(v: &AbstractValue) -> AbstractValue {
     match v {
         AbstractValue::I32Interval(iv) => AbstractValue::I32Interval(*iv),

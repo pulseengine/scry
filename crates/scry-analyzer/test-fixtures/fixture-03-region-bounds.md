@@ -130,10 +130,16 @@ Pins the v0.3 (FEAT-005) win in concrete terms:
   `region-join` / `region-meet` / `region-widen` ops added in
   this PR.
 - `crates/scry-analyzer/wit/scry.wit` — the new
-  `region-pointer(region)` case on `AbstractValue` (declared
-  for v0.4+ use; v0.3 synthesises regions transiently at the
-  memory op rather than storing them on the operand stack,
-  which preserves fixture-01 / fixture-02 expectations).
+  `region-pointer(region-pointer-payload)` case on
+  `AbstractValue` (declared for v0.4+ use; v0.3 synthesises
+  regions transiently at the memory op rather than storing
+  them on the operand stack, which preserves fixture-01 /
+  fixture-02 expectations). The payload type is declared
+  locally inside the analyzer interface — structurally
+  identical to `pulseengine:wasm-lattice/domain.region` but
+  not re-exported through it, sidestepping a wac-compose
+  validation issue with cross-package type aliases in
+  exported interfaces.
 - `crates/scry-analyzer/src/lib.rs` — `handle_memory_load` /
   `handle_memory_store` / `region_in_bounds`.
 - `artifacts/requirements.yaml#FEAT-005` — acceptance criteria
