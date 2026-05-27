@@ -8,6 +8,12 @@
 # generated bindings hardcode (defaulting to @crates//:bitflags), so
 # we pull it into the workspace explicitly.
 #
+# scry-host-tests is the host-side wasmtime harness (FEAT-001 AC#3):
+# a native Rust crate built with cargo (not a Wasm component). It
+# loads the composed bazel-bin/scry.wasm in a wasmtime embedding,
+# invokes the analyzer over each test fixture, and asserts that the
+# returned abstract intervals over-approximate concrete execution.
+#
 # [workspace.package] is the single source of truth for version /
 # edition / license / repository across all member crates — per the
 # PulseEngine family convention (witness pattern).
@@ -17,6 +23,7 @@ resolver = "3"
 members = [
     "crates/wasm-lattice",
     "crates/scry-analyzer",
+    "crates/scry-host-tests",
 ]
 
 [workspace.package]
@@ -37,3 +44,20 @@ wasmparser = { version = "0.247", default-features = false }
 # (FEAT-001 AC#1). default-features = false drops the std default and
 # keeps the dep no_std-compatible.
 sha2 = { version = "0.10", default-features = false }
+
+# ── Host-side wasmtime harness deps (FEAT-001 AC#3) ──────────────────
+# These are only consumed by the native scry-host-tests crate; the
+# wasm32-wasip2 component crates (wasm-lattice, scry-analyzer) do not
+# touch them. wasmtime/wasmtime-wasi pull in std unconditionally —
+# that's fine because scry-host-tests is a native cargo crate.
+#
+# wat compiles the in-repo `.wat` fixtures to Wasm bytes at test time
+# so we don't need to check in binary blobs alongside the source.
+#
+# anyhow keeps the test-side error plumbing terse — every test path
+# bubbles errors up to the `#[test]` panic, so we don't need a
+# bespoke error enum.
+wasmtime = "45"
+wasmtime-wasi = "45"
+wat = "1"
+anyhow = "1"
