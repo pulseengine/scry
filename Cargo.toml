@@ -7,13 +7,24 @@
 # be listed here; bitflags is the one transitive dep the rule's
 # generated bindings hardcode (defaulting to @crates//:bitflags), so
 # we pull it into the workspace explicitly.
+#
+# [workspace.package] is the single source of truth for version /
+# edition / license / repository across all member crates — per the
+# PulseEngine family convention (witness pattern).
 
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/wasm-lattice",
     "crates/scry-analyzer",
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pulseengine/scry"
+authors = ["Ralf Anton Beier and scry contributors"]
 
 [workspace.dependencies]
 bitflags = "2"

@@ -1,0 +1,176 @@
+name: Release
+
+# scry release workflow — extracted from the sigil/witness hybrid
+# pattern. Triggers on a `v*` tag push (e.g. `v0.1.0`) and ships:
+#   * the composed Wasm component artifact (bazel-bin/scry.wasm)
+#   * a CycloneDX SBOM for the workspace
+#   * SHA256SUMS over all release assets
+#   * cosign keyless OIDC signatures
+#   * SLSA v1 provenance via actions/attest-build-provenance
+#   * a GitHub Release entry uploading all of the above
+#
+# Workflow-injection safety: every value sourced from outside the
+# workflow file (tag name, optional dispatch input) is routed
+# through `env:` first; no `${{ ... }}` interpolation appears inline
+# in any `run:` block. `env:`-set values are quoted on use.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0). Must already exist.'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+
+  release:
+    name: Build, sign, and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version from tag
+        env:
+          TAG_REF: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$TAG_REF"
+          fi
+          case "$TAG" in
+            v*) ;;
+            *)  echo "::error::tag '$TAG' must start with v"; exit 1 ;;
+          esac
+          BARE="${TAG#v}"
+          echo "VERSION=$TAG" >> "$GITHUB_ENV"
+          echo "BARE_VERSION=$BARE" >> "$GITHUB_ENV"
+
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Cache Bazel
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazelisk
+          key: bazel-release-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', 'Cargo.lock', 'crates/**/BUILD.bazel', 'BUILD.bazel') }}
+          restore-keys: |
+            bazel-release-${{ runner.os }}-
+            bazel-${{ runner.os }}-
+
+      - name: bazel build //:scry
+        run: bazel build //:scry
+
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          ASSET="scry-${BARE_VERSION}-wasm32-wasip2.wasm"
+          cp bazel-bin/scry.wasm "release-assets/${ASSET}"
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+          ls -la release-assets/
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-cyclonedx
+        run: cargo install --locked cargo-cyclonedx
+
+      - name: Generate workspace SBOM
+        run: |
+          set -euo pipefail
+          cargo cyclonedx --format json --spec-version 1.5
+          find crates -name '*.cdx.json' | while read -r f; do
+            base=$(basename "$f" .cdx.json)
+            cp "$f" "release-assets/${base}-${BARE_VERSION}.cdx.json"
+          done
+          ls -la release-assets/
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Sign release assets (per-asset)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          cd release-assets
+          for asset in *.wasm *.cdx.json; do
+            [ -f "$asset" ] || continue
+            cosign sign-blob --yes \
+              --output-signature "${asset}.sig" \
+              --output-certificate "${asset}.pem" \
+              "$asset"
+          done
+
+      - name: Sign SHA256SUMS.txt (cosign bundle)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          cd release-assets
+          cosign sign-blob --yes \
+            --bundle SHA256SUMS.txt.cosign.bundle \
+            --output-signature SHA256SUMS.txt.sig \
+            --output-certificate SHA256SUMS.txt.pem \
+            SHA256SUMS.txt
+
+      - name: Attest build provenance (SLSA v1)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-assets/${{ env.ASSET }}
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          if [ ! -f CHANGELOG.md ]; then
+            echo "(no CHANGELOG.md)" > release-notes.md
+            exit 0
+          fi
+          awk -v ver="$BARE_VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { capture = 1; next }
+            capture && /^## / { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "(no entry for ${BARE_VERSION} in CHANGELOG.md)" > release-notes.md
+          fi
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            release-assets/*

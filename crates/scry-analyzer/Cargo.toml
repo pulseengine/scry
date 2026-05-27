@@ -1,9 +1,11 @@
 [package]
 name = "scry-analyzer"
-version = "0.1.0"
-edition = "2021"
 description = "v0.1 scry interval-domain abstract interpreter as a Wasm component."
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
@@ -17,4 +19,3 @@ bitflags = { workspace = true }
 # The macro-generated bindings crate
 # (scry_analyzer_component_bindings) is injected by
 # rules_wasm_component.
-
