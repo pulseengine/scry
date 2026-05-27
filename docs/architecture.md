@@ -261,23 +261,19 @@ When a contributor types `bazel build //:scry`, this is the target
 graph Bazel resolves:
 
 ```mermaid
-graph BT
-    Scry[//:scry] -- wac_compose --> SCAComp
+graph TB
+    Scry["//:scry"] -- wac_compose --> SCAComp
     Scry --> WLComp
-    SCAComp[//crates/scry-analyzer:scry_analyzer_component] -- rust_wasm_component_bindgen --> SCABind
-    SCAComp --> SCASrc
-    WLComp[//crates/wasm-lattice:wasm_lattice_component] -- rust_wasm_component_bindgen --> WLBind
-    WLComp --> WLSrc
-    SCABind[scry_analyzer_component_bindings] --> SCAWit
-    WLBind[wasm_lattice_component_bindings] --> WLWit
-    SCAWit[//crates/scry-analyzer:scry_analyzer_wit] -- wit_library deps --> WLWit
-    WLWit[//crates/wasm-lattice:wasm_lattice_wit]
-    SCASrc[crates/scry-analyzer/src/lib.rs]
-    WLSrc[crates/wasm-lattice/src/lib.rs]
-    Comp[composition.wac]
-    Scry --> Comp
-
-    Cargo[Cargo.lock + Cargo.toml<br/>crate_universe → @crates] --> SCABind
+    Scry --> Comp["composition.wac"]
+    SCAComp["//crates/scry-analyzer:scry_analyzer_component"] -- rust_wasm_component_bindgen --> SCABind
+    SCAComp --> SCASrc["crates/scry-analyzer/src/lib.rs"]
+    WLComp["//crates/wasm-lattice:wasm_lattice_component"] -- rust_wasm_component_bindgen --> WLBind
+    WLComp --> WLSrc["crates/wasm-lattice/src/lib.rs"]
+    SCABind["scry_analyzer_component_bindings"] --> SCAWit
+    WLBind["wasm_lattice_component_bindings"] --> WLWit
+    SCAWit["//crates/scry-analyzer:scry_analyzer_wit"] -- wit_library deps --> WLWit
+    WLWit["//crates/wasm-lattice:wasm_lattice_wit"]
+    Cargo["Cargo.lock + Cargo.toml<br/>crate_universe → @crates"] --> SCABind
     Cargo --> WLBind
 ```
 

@@ -18,7 +18,7 @@
 | Version | Scope | Driving research / artifacts | Status |
 |---|---|---|---|
 | **v0.1** | scry CLI; wasm-parser; interval domain on i32/i64 locals; JSON invariant output; `scry-hello` runnable | DD-001, DD-004, DD-005 (interval); AC-001 (Cousot framework); AC-002 (operational semantics) | provisional: FEAT-001 |
-| **v0.2** | CRAB-style region-based linear-memory model; per-region offsets; property-based soundness on region × interval | DD-005; AC-006 (Brandl modular AI); J-003 (region-memory rationale); TE-005 (CRAB reference) | provisional: FEAT-005 |
+| **v0.2** | (a) CRAB-style region-based linear-memory model; per-region offsets; property-based soundness on region × interval. (b) Wire `rules_verus` + `rules_rocq_rust` into the Bazel build with one provable theorem per family (lattice algebra) — proof toolchain lights up end-to-end before heavier mechanization lands. | DD-005; AC-006 (Brandl modular AI); J-003 (region-memory rationale); TE-005 (CRAB reference); DD-003 (mechanization substrate) | provisional: FEAT-005, FEAT-012 |
 | **v0.3** | sound `call_indirect` resolution via value-domain AI on the operand stack; reachability domain; `scry-fused-bounds` runnable | DD-005; AC-008 (Paccamiccio sound call-graph); MF-003 (call-graph-soundness pain-point); REQ-008 | provisional: FEAT-006 |
 | **v0.4** | compositional summary-based interprocedural AI; scales to fused multi-component modules | DD-006; AC-010 (Stiévenart compositional summaries); REQ-007 | provisional: FEAT-007 |
 | **v0.5** | loom integration: invariant schema v1; loom consumes scry output for bounds-check elision + constant fold | REQ-004; DD-001 | provisional: FEAT-008 |

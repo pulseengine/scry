@@ -289,6 +289,44 @@ artifacts:
   # with mechanically validated rivet artifacts.
   # ──────────────────────────────────────────────────────────────────────
 
+  - id: FEAT-012
+    type: feature
+    title: "v0.2 — Wire rules_verus + rules_rocq_rust into the Bazel build"
+    status: proposed
+    description: >
+      Add the PulseEngine-canonical proof toolchains to scry's Bazel
+      workspace alongside `rules_wasm_component`. Mirrors the
+      synth/meld/loom integration pattern (per the rules-survey
+      2026-05-27): `git_override` pins for both rule families,
+      `verus.toolchain(...)` + `rocq.toolchain(version="9.0",
+      strategy="nix", with_rocq_of_rust_deps=true)` extensions,
+      and a `nix_repo` configuration for the hermetic Rocq build.
+      Adds `proofs/verus/` + `proofs/rocq/` with one provable
+      theorem per family (e.g. `join` commutativity in Verus,
+      interval-lattice `⊑` reflexivity in Rocq) so the toolchain
+      lights up end-to-end before any heavier mechanization lands.
+      CI grows a Rocq job (`continue-on-error: true` per the loom
+      pattern) that bootstraps Nix via `cachix/install-nix-action`.
+    tags: [proof-toolchain, v0.2, verus, rocq, bazel]
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - "Given a fresh checkout, When `bazel build //proofs/verus/...` runs, Then the Verus proof targets build green and the join-commutativity theorem on wasm-lattice's interval domain is proven."
+        - "Given a fresh checkout with Nix available, When `bazel build //proofs/rocq/...` runs, Then the Rocq proof targets build green and the interval-lattice ⊑-reflexivity theorem is closed (no admits)."
+        - "Given CI on a PR, When the workflow runs, Then a dedicated `rocq-proofs` job bootstraps Nix and runs the Rocq proof build (continue-on-error: true at v0.2; required-status-check at v1.0)."
+        - "Given the v0.9 mechanization milestone (FEAT-010), When the full interval-domain soundness proof against WasmCert-Coq lands, Then it extends the v0.2 scaffold without requiring further toolchain changes."
+    links:
+      - type: satisfies
+        target: REQ-002
+      - type: traces-to
+        target: DD-003
+      - type: traces-to
+        target: FEAT-010
+      - type: evaluates-tech
+        target: TE-006
+      - type: evaluates-tech
+        target: TE-007
+
   - id: FEAT-005
     type: feature
     title: "v0.2 — Region-based linear-memory model (CRAB-style)"

@@ -332,6 +332,12 @@ every cited paper is a `academic-reference` rivet artifact in
 
 ## further reading
 
+- **[`docs/intro-to-abstract-interpretation.md`](docs/intro-to-abstract-interpretation.md)**
+  — friendly explainer of abstract interpretation and "soundness"
+  for readers who've never met the term. Builds intuition with a
+  worked `safe_index` example, explains the lattice/widening trick,
+  and connects to what scry actually does on Wasm. ~10 minutes to
+  read, no math required.
 - **[`docs/architecture.md`](docs/architecture.md)** — how scry v0.1
   fits together end-to-end: the two-component WIT split, the 8-layer
   Bazel build pipeline, the WAC composition contract, the runtime
@@ -339,6 +345,7 @@ every cited paper is a `academic-reference` rivet artifact in
   verification loop sits today. With mermaid diagrams.
 - **[`docs/roadmap.md`](docs/roadmap.md)** — per-version plan with
   research links and the composition narrative (witness-style).
+  Verus + Rocq proof toolchain wires in at v0.2 (see `FEAT-012`).
 - **[`CHANGELOG.md`](CHANGELOG.md)** — Keep-a-Changelog format,
   read by `release.yml` to populate GitHub Release notes.
 
@@ -362,6 +369,10 @@ unknown-project/                           (will be renamed to `scry/`)
 │                                           4 solutions + 3 contexts +
 │                                           3 justifications)
 └── docs/
+    ├── intro-to-abstract-interpretation.md (friendly explainer —
+    │                                        what AI is, what "sound"
+    │                                        means, where scry fits;
+    │                                        ~10 min, no math)
     ├── architecture.md                    (how scry v0.1 works:
     │                                       components · pipeline ·
     │                                       composition · runtime probe
