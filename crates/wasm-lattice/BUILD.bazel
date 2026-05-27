@@ -1,0 +1,26 @@
+"""wasm-lattice — interval-domain abstract-domain library as a Wasm
+component. Exports the `pulseengine:wasm-lattice/domain` interface
+consumed by `scry-analyzer`.
+"""
+
+load("@rules_wasm_component//rust:defs.bzl", "rust_wasm_component_bindgen")
+load("@rules_wasm_component//wit:defs.bzl", "wit_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# WIT interface this component exports.
+wit_library(
+    name = "wasm_lattice_wit",
+    package_name = "pulseengine:wasm-lattice@0.1.0",
+    srcs = ["wit/wasm-lattice.wit"],
+    world = "wasm-lattice",
+)
+
+# The Wasm component. The `_bindings` crate produced by the macro is
+# `wasm_lattice_component_bindings` (snake_case of the target name).
+rust_wasm_component_bindgen(
+    name = "wasm_lattice_component",
+    srcs = ["src/lib.rs"],
+    profiles = ["release"],
+    wit = ":wasm_lattice_wit",
+)

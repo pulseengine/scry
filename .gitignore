@@ -3,3 +3,11 @@
 *.tmp
 .claude/
 .rivet/
+
+# Bazel
+bazel-*
+MODULE.bazel.lock
+
+# Cargo (host-side dev cache, when contributors run `cargo check`
+# outside Bazel)
+target/

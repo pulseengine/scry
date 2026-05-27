@@ -1,0 +1,30 @@
+"""Top-level Bazel package for scry.
+
+The two component crates live under //crates/. The composed
+distributable artifact is `//:scry` (produced by wac_compose).
+
+A meld_fuse-based dogfood variant lands at //:scry_fused in a
+later milestone — that target exercises meld on scry's own build
+artifacts, validating the meld fusion path on a real PulseEngine
+component graph. For v0.1, wac_compose is enough to produce a
+runnable component.
+"""
+
+load("@rules_wasm_component//wac:defs.bzl", "wac_compose")
+
+package(default_visibility = ["//visibility:public"])
+
+# Compose the two scry components into a single distributable Wasm
+# component. wac auto-wires the `pulseengine:wasm-lattice/domain`
+# interface from the lattice component into the analyzer's matching
+# import. The composed component exports the analyzer's `analyzer`
+# interface as its main export.
+wac_compose(
+    name = "scry",
+    components = {
+        "//crates/wasm-lattice:wasm_lattice_component": "lattice",
+        "//crates/scry-analyzer:scry_analyzer_component": "analyzer",
+    },
+    composition_file = "composition.wac",
+    profile = "release",
+)

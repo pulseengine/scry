@@ -1,0 +1,90 @@
+// wasm-lattice — reusable abstract-domain library as a Wasm Component.
+//
+// v0.1 exports the interval abstract domain over signed 64-bit
+// integers, sufficient to abstract i32 and i64 Wasm values. The
+// component is intentionally narrow: lattice operations (join, meet,
+// widen, ⊑) and the transfer functions scry-analyzer needs for v0.1
+// arithmetic (i32.add / sub / mul, constants). Region-memory (FEAT-005),
+// taint (FEAT-009), and octagon (FEAT-010) lattices land in later
+// versions as additional interfaces on this same component.
+//
+// Per DD-004, this is a separate component (not just a crate) so that
+// downstream tools (witness coverage-gap prediction, synth codegen
+// invariant generation) can depend on the lattice via WIT without
+// pulling the scry analyzer.
+
+package pulseengine:wasm-lattice@0.1.0;
+
+interface domain {
+    /// Closed interval over signed 64-bit integers. Lattice
+    /// extrema:
+    ///   bottom (empty interval)   — encoded as { lo: 1, hi: 0 }
+    ///   top    (full i64 range)   — encoded as { lo: i64::MIN, hi: i64::MAX }
+    /// The `is-bottom` query is the only safe way to test for the
+    /// empty interval; consumers should not rely on the specific
+    /// encoding above remaining stable.
+    record interval {
+        lo: s64,
+        hi: s64,
+    }
+
+    // ── Lattice extrema ────────────────────────────────────────────
+
+    /// The bottom element of the lattice (empty interval; ⊥).
+    bottom: func() -> interval;
+
+    /// The top element of the lattice (full i64 range; ⊤).
+    top: func() -> interval;
+
+    /// True iff the given interval is the bottom element.
+    is-bottom: func(x: interval) -> bool;
+
+    // ── Lattice operations ─────────────────────────────────────────
+
+    /// `a ⊑ b` — partial order on intervals (subset inclusion).
+    leq: func(a: interval, b: interval) -> bool;
+
+    /// `a ⊔ b` — least upper bound (smallest interval containing
+    /// both `a` and `b`).
+    join: func(a: interval, b: interval) -> interval;
+
+    /// `a ⊓ b` — greatest lower bound (intersection; may be ⊥).
+    meet: func(a: interval, b: interval) -> interval;
+
+    /// Standard interval widening (Cousot 1976): if `b`'s lower
+    /// bound is strictly below `a`'s, widen down to -∞ (i64::MIN);
+    /// if `b`'s upper bound is strictly above `a`'s, widen up to
+    /// +∞ (i64::MAX). Ensures termination on non-Noetherian
+    /// abstract domain.
+    widen: func(a: interval, b: interval) -> interval;
+
+    // ── Constructors ───────────────────────────────────────────────
+
+    /// Singleton interval {c} for a 32-bit constant.
+    constant-i32: func(c: s32) -> interval;
+
+    /// Singleton interval {c} for a 64-bit constant.
+    constant-i64: func(c: s64) -> interval;
+
+    // ── Transfer functions (v0.1: i32 arithmetic only) ─────────────
+    //
+    // i64 transfer functions land in v0.2 alongside region-memory.
+    // Each transfer function is required to over-approximate the
+    // concrete i32 operation on every pair of concrete values in
+    // its input intervals (sound under wrap-around on overflow).
+
+    /// Sound abstract `i32.add` (wraps on overflow per Wasm
+    /// semantics; widens to ⊤ when the result range straddles the
+    /// wrap boundary in v0.1).
+    i32-add: func(a: interval, b: interval) -> interval;
+
+    /// Sound abstract `i32.sub`.
+    i32-sub: func(a: interval, b: interval) -> interval;
+
+    /// Sound abstract `i32.mul`.
+    i32-mul: func(a: interval, b: interval) -> interval;
+}
+
+world wasm-lattice {
+    export domain;
+}

@@ -1,0 +1,16 @@
+[package]
+name = "wasm-lattice"
+version = "0.1.0"
+edition = "2021"
+description = "Interval-domain abstract-domain library as a Wasm component."
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bitflags = { workspace = true }
+
+# wit-bindgen is injected by rules_wasm_component's
+# rust_wasm_component_bindgen rule; not listed here.
+

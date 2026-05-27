@@ -1,0 +1,13 @@
+// WAC composition for scry v0.1.
+// Wires the lattice component's `domain` interface to the analyzer
+// component's `domain` import; exports the analyzer's `analyzer`
+// interface as the composed component's main export. Other imports
+// (WASI; auto-injected by wit-bindgen's runtime) flow through to
+// the outer composed component's import list.
+
+package pulseengine:scry-composed@0.1.0;
+
+let lattice = new pulseengine:wasm-lattice { ... };
+let analyzer = new pulseengine:scry { domain: lattice.domain, ... };
+
+export analyzer as main;

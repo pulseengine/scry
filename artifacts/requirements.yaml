@@ -176,30 +176,42 @@ artifacts:
 
   - id: FEAT-001
     type: feature
-    title: Sound abstract-interpretation pass for the Wasm Core Model
+    title: Sound abstract-interpretation pass for the Wasm Core Model (v0.1 — Wasm component dogfood)
     status: draft
     description: >
-      A new build-pipeline stage between meld (fusion) and loom
-      (optimization) that performs sound AI over the fused Wasm Core
-      Model module, emitting invariants as input to loom and as
-      verification evidence for rivet.
-    tags: [core, pipeline]
+      The v0.1 scry analyzer, shipping as a wasm32-wasip2 Component
+      Model component (per DD-008). Exports the `analyzer.analyze`
+      function defined in `wit/scry.wit` (derived from the AADL model
+      in `spar/scry.aadl`, per DD-010). v0.1 implements the interval
+      domain over i32/i64 locals only; region-memory (FEAT-005),
+      sound call-graph (FEAT-006), and loom integration (FEAT-008)
+      land in later versions. Built with Bazel + rules_wasm_component
+      (per DD-009).
+    tags: [core, pipeline, v0.1, component-model]
     fields:
       phase: phase-1
       acceptance-criteria:
-        - "Given a fused Wasm module, When the AI pass runs with the interval domain, Then it terminates and emits per-instruction interval invariants for all i32/i64 locals and operand-stack entries."
-        - "Given a fused Wasm module containing call_indirect, When the AI pass runs, Then the produced call graph contains every concretely reachable target and is annotated 'sound' (sound w.r.t. AC-008 technique)."
-        - "Given a Wasm module known to violate memory bounds on some input, When the AI pass runs with the region-memory + interval combination, Then the analyzer reports the unsafe load with a witnessing abstract counterexample."
-        - "Given the AI pass output, When fed into loom, Then loom triggers at least bounds-check elision and constant folding using AI invariants where applicable."
+        - "Given a small Wasm Core Model module (arithmetic only, no memory, no calls), When the scry Wasm component's `analyzer.analyze` function is invoked, Then it terminates and returns an `analysis-result` containing per-program-point interval invariants for all i32/i64 locals."
+        - "Given the scry workspace, When `bazel build //:scry` runs, Then a valid wasm32-wasip2 Component Model artifact is produced at `bazel-bin/scry.wasm` and `wasm-tools validate` accepts it."
+        - "Given the scry Wasm component, When invoked via a wasmtime host harness (crates/scry-host-tests) with a small concrete input module, Then the output `invariant-bundle.points` is non-empty and every interval in it over-approximates the concrete execution (verified by running the input concretely and confirming each visited value is contained in the matching abstract interval)."
+        - "Given the AADL model in `spar/scry.aadl`, When `spar parse spar/scry.aadl` runs, Then the model validates with no errors."
+        - "Given the per-component WIT files at `crates/wasm-lattice/wit/wasm-lattice.wit` and `crates/scry-analyzer/wit/scry.wit`, When the Bazel `wit_library` targets build, Then the cross-package import of `pulseengine:wasm-lattice/domain` from `pulseengine:scry` resolves successfully."
+        - "Given the composed scry component, When inspected with `wasm-tools print bazel-bin/scry.wasm`, Then it shows the expected wasi:io / wasi:cli imports plus a `main` export wrapping the analyzer interface."
     links:
       - type: satisfies
         target: REQ-001
-      - type: satisfies
-        target: REQ-004
-      - type: satisfies
-        target: REQ-007
-      - type: satisfies
-        target: REQ-008
+      - type: traces-to
+        target: DD-008
+      - type: traces-to
+        target: DD-009
+      - type: traces-to
+        target: DD-010
+      - type: traces-to
+        target: FEAT-005
+      - type: traces-to
+        target: FEAT-006
+      - type: traces-to
+        target: FEAT-008
 
   - id: FEAT-002
     type: feature

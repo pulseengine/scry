@@ -1,0 +1,19 @@
+# Root Cargo workspace. Exists primarily so crate_universe.from_cargo
+# in MODULE.bazel has a single workspace to resolve dependencies
+# against — see DD-009 for the Bazel-first build story.
+#
+# Members are the Wasm-component crates under crates/. wit-bindgen is
+# injected by rules_wasm_component via @crates so it doesn't need to
+# be listed here; bitflags is the one transitive dep the rule's
+# generated bindings hardcode (defaulting to @crates//:bitflags), so
+# we pull it into the workspace explicitly.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/wasm-lattice",
+    "crates/scry-analyzer",
+]
+
+[workspace.dependencies]
+bitflags = "2"
