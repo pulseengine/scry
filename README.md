@@ -60,15 +60,24 @@ deductive-proof and bounded-model-checking layers do not staff.
 
 ## status
 
-**pre-v0.1**, scoped, no code yet. this directory holds the
-research, requirements, design decisions, and safety case for scry as
-typed rivet artifacts; the implementation crate will live in its own
-repo. follow the [release plan](#release-plan) below — each numbered
-release ships a specific verified-evidence increment.
+**v0.1.0 shipped 2026-05-27** —
+[release page](https://github.com/pulseengine/scry/releases/tag/v0.1.0)
+with cosign-signed `scry-0.1.0-wasm32-wasip2.wasm` + per-crate
+CycloneDX SBOMs + SHA256SUMS + SLSA v1 provenance. The full
+PulseEngine Wasm-component toolchain runs end-to-end on scry's own
+build (the dogfood gate for [[DD-008]]). v0.1.0 ships the
+**structural scaffold**: no real abstract-interpretation logic yet.
 
-`rivet validate` here is PASS with 0 warnings; 56 artifacts span 11
+The implementation work — interval-domain fixpoint on a parsed Wasm
+module, host wasmtime test harness, Verus + Rocq proof targets,
+region-memory domain — lands progressively from v0.2. Follow the
+[release plan](#release-plan) below; each numbered version closes a
+specific verified-evidence increment.
+
+`rivet validate` here is PASS with 0 warnings; 64 artifacts span 11
 types across `common + dev + research + research-ext + safety-case`.
-this README is a *requirements artifact*, not a code artifact.
+Everything in this README that isn't tagged "v0.1.0" is still a
+*requirements artifact* awaiting the labelled version.
 
 ## is this for you?
 
