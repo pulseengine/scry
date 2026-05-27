@@ -7,6 +7,28 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`rivet-delta.yml` PR check** — sticky comment on every PR touching
+  `artifacts/`, `schemas/`, `spar/`, or `rivet.yaml`. Reports `rivet
+  validate` head-vs-base, stats delta, full `rivet diff`, and `spar
+  parse` result for the AADL model. Pattern adapted from rivet's
+  own `rivet-delta.yml`. Informational only — does not gate the PR.
+- **Rivet compliance evidence in releases** — `release.yml` now
+  invokes the canonical `pulseengine/rivet/.github/actions/compliance@v0.6.0`
+  composite action (same one sigil and spar use) and tarballs the
+  result as `scry-<version>-compliance-evidence.tar.gz`. The bundle
+  is signed by cosign alongside the other release assets.
+
+### Changed
+
+- **`actions/checkout` upgraded from `@v4` to `@v6`** across both
+  `ci.yml` and `release.yml`. Removes the Node.js 20 deprecation
+  warning. Other Node 20 actions (`actions/cache`, `Swatinem/rust-cache`,
+  `sigstore/cosign-installer`, `bazelbuild/setup-bazelisk`,
+  `actions/attest-build-provenance`) have no Node 24-compatible
+  release yet; warnings remain for those until upstream ships.
+
 ## [0.1.0] — 2026-05-27
 
 Headline: **scaffolding ships**. The full PulseEngine Wasm-component toolchain

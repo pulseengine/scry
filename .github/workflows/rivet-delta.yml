@@ -1,0 +1,185 @@
+name: rivet-delta
+
+# Surfaces changes to the rivet artifact graph on every PR that
+# touches artifacts/, schemas/, spar/, or rivet.yaml. Posts a sticky
+# comment so reviewers see what changed without diffing YAML by hand.
+#
+# Pattern adapted from /Users/r/git/pulseengine/rivet/.github/
+# workflows/rivet-delta.yml. scry installs the rivet CLI rather
+# than building it from source.
+#
+# Informational only: every rivet command runs with
+# `continue-on-error: true`; the job never fails the PR. The value
+# is the visible diff in the PR comment, not a blocking gate.
+#
+# Workflow-injection safety: PR_NUMBER (numeric) and BASE_SHA
+# (validated git SHA) are routed through env: before any `run:`
+# block. No untrusted strings interpolated inline.
+
+on:
+  pull_request:
+    paths:
+      - 'artifacts/**'
+      - 'schemas/**'
+      - 'spar/**'
+      - 'rivet.yaml'
+      - '.github/workflows/rivet-delta.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: rivet-delta-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  delta:
+    name: Rivet artifact delta
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+
+      - name: Checkout head
+        uses: actions/checkout@v6
+        with:
+          path: head
+          fetch-depth: 0
+
+      - name: Checkout base
+        uses: actions/checkout@v6
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install rivet-cli
+        run: cargo install --locked --git https://github.com/pulseengine/rivet rivet-cli
+
+      - name: Validate head
+        working-directory: head
+        continue-on-error: true
+        run: rivet validate --format text > ../validate-head.txt 2>&1 || true
+
+      - name: Validate base
+        working-directory: base
+        continue-on-error: true
+        run: rivet validate --format text > ../validate-base.txt 2>&1 || true
+
+      - name: Diff base vs head
+        continue-on-error: true
+        run: |
+          set +e
+          rivet diff --base base --head head --format text > diff.txt 2>&1
+          rivet diff --base base --head head --format json > diff.json 2>&1 || echo '{}' > diff.json
+
+      - name: Stats head
+        working-directory: head
+        continue-on-error: true
+        run: rivet stats --format text > ../stats-head.txt 2>&1 || true
+
+      - name: Stats base
+        working-directory: base
+        continue-on-error: true
+        run: rivet stats --format text > ../stats-base.txt 2>&1 || true
+
+      - name: AADL parse (head)
+        working-directory: head
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ -f spar/scry.aadl ]; then
+            cargo install --locked --git https://github.com/pulseengine/spar spar 2>/dev/null
+            spar parse spar/scry.aadl > ../aadl-head.txt 2>&1
+          else
+            echo "(no AADL model in head)" > ../aadl-head.txt
+          fi
+
+      - name: Compose PR comment body
+        id: compose
+        run: |
+          set -euo pipefail
+          {
+            echo "<!-- rivet-delta-bot -->"
+            echo "## :triangular_ruler: rivet artifact delta"
+            echo
+            echo "**PR:** #${PR_NUMBER}  **Base SHA:** \`${BASE_SHA:0:8}\`"
+            echo
+            echo "### Validation"
+            echo
+            echo "<details><summary><strong>head</strong> — \`rivet validate\` result</summary>"
+            echo
+            echo '```'
+            tail -20 validate-head.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "<details><summary><strong>base</strong> — \`rivet validate\` result (for comparison)</summary>"
+            echo
+            echo '```'
+            tail -20 validate-base.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "### Artifact stats"
+            echo
+            BTOT=$(grep -E "TOTAL" stats-base.txt 2>/dev/null | awk '{print $2}' || echo "n/a")
+            HTOT=$(grep -E "TOTAL" stats-head.txt 2>/dev/null | awk '{print $2}' || echo "n/a")
+            echo "| | base | head |"
+            echo "| --- | --- | --- |"
+            echo "| **Total artifacts** | $BTOT | $HTOT |"
+            echo
+            echo "<details><summary><strong>full stats — head</strong></summary>"
+            echo
+            echo '```'
+            cat stats-head.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "### Diff (base → head)"
+            echo
+            echo '```'
+            tail -50 diff.txt 2>/dev/null || echo "(no diff output)"
+            echo '```'
+            echo
+            echo "### AADL model — head"
+            echo
+            echo '```'
+            cat aadl-head.txt 2>/dev/null || echo "(not run)"
+            echo '```'
+            echo
+            echo "---"
+            echo "_Posted by the \`rivet-delta\` workflow. Informational only — does not gate the PR._"
+          } > comment.md
+          echo "comment_path=comment.md" >> "$GITHUB_OUTPUT"
+
+      - name: Find previous delta comment
+        id: find_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: github-actions[bot]
+          body-includes: '<!-- rivet-delta-bot -->'
+
+      - name: Post or update delta comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          edit-mode: replace
+          body-path: ${{ steps.compose.outputs.comment_path }}
+
+      - name: Append summary to job page
+        run: |
+          {
+            echo "## rivet artifact delta"
+            cat comment.md
+          } >> "$GITHUB_STEP_SUMMARY"
