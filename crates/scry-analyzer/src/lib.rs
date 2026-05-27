@@ -16,13 +16,13 @@
 extern crate alloc;
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use scry_analyzer_component_bindings::exports::pulseengine::scry::analyzer::{
-    AbstractValue, AnalysisConfig, AnalysisResult, AnalyzeError, Diagnostic,
-    DiagnosticSeverity, Guest, InvariantBundle, LocalInvariant, ProgramPoint,
+    AbstractValue, AnalysisConfig, AnalysisResult, AnalyzeError, Diagnostic, DiagnosticSeverity,
+    Guest, InvariantBundle, LocalInvariant, ProgramPoint,
 };
 use scry_analyzer_component_bindings::pulseengine::wasm_lattice::domain;
 

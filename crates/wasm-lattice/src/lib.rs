@@ -30,11 +30,7 @@ fn is_bot(x: Interval) -> bool {
 }
 
 fn canon(lo: i64, hi: i64) -> Interval {
-    if lo > hi {
-        BOTTOM
-    } else {
-        Interval { lo, hi }
-    }
+    if lo > hi { BOTTOM } else { Interval { lo, hi } }
 }
 
 impl Guest for Component {
