@@ -1,6 +1,6 @@
 [package]
 name = "scry-analyzer"
-description = "v0.1 scry interval-domain abstract interpreter as a Wasm component."
+description = "scry interval-domain abstract interpreter as a Wasm component."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,9 +13,14 @@ crate-type = ["cdylib"]
 [dependencies]
 bitflags = { workspace = true }
 
-# v0.1 scaffold has no other external deps; wasmparser + sha2 land
-# with the real analyzer implementation in a follow-on PR (FEAT-001
-# acceptance criterion 1 — over-approximation of concrete execution).
+# v0.2 (FEAT-001 AC#1): the real interval-domain fixpoint.
+# wasmparser parses the input Wasm Core Model module; sha2 digests
+# the module bytes for `invariant-bundle.module-sha256`. Both are
+# `default-features = false` so the crate stays `#![no_std]` and
+# compiles cleanly to wasm32-wasip2.
+#
 # The macro-generated bindings crate
 # (scry_analyzer_component_bindings) is injected by
 # rules_wasm_component.
+wasmparser = { workspace = true }
+sha2 = { workspace = true }
