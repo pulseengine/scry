@@ -2,11 +2,16 @@ name: Verus Formal Proofs
 
 # FEAT-012 — Verus proof job for scry's interval-lattice mechanization.
 #
-# Verus' toolchain ships as pre-built binaries (no Nix dependency, in
-# contrast to the Rocq job), so this job is lighter-weight and runs
-# on every PR. The single theorem at v0.2 is `join_commutative` on
-# the interval domain (proofs/verus/join_proofs.rs); FEAT-010 (v0.9)
-# extends to full ⊑-soundness against WasmCert-Coq.
+# Verus' own toolchain ships as pre-built binaries, but the scry
+# MODULE.bazel registers the Rocq toolchain unconditionally
+# (`register_toolchains("@rocq_toolchains//:all")`), which forces
+# Bazel to resolve the nix-backed rocq_toolchains repo even for
+# `bazel build //proofs/verus/...`. So this job has to install Nix
+# too. The Verus build itself is still hermetic and pre-built.
+#
+# The single theorem at v0.2 is `join_commutative` on the interval
+# domain (proofs/verus/join_proofs.rs); FEAT-010 (v0.9) extends to
+# full ⊑-soundness against WasmCert-Coq.
 #
 # Workflow-injection audit:
 #   - No `${{ }}` expression appears inside any `run:` block.
@@ -42,6 +47,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Install Nix
+        # Required because scry's MODULE.bazel registers the Rocq
+        # toolchain unconditionally — Bazel resolves it during
+        # analysis even when only //proofs/verus/... is requested.
+        uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
       - uses: bazelbuild/setup-bazelisk@v3
       - name: Cache Bazel
         uses: actions/cache@v4
