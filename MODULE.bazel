@@ -71,3 +71,56 @@ use_repo(
     "wasi_io",
     "wasi_random",
 )
+
+# ─────────────────────────────────────────────────────────────────────
+# Proof toolchains — FEAT-012 (v0.2)
+#
+# Mirrors the synth / meld / loom integration pattern (rules-survey
+# 2026-05-27). Two proof families:
+#
+#   * rules_verus       — SMT-based Rust verification (Verus + Z3).
+#                         Ships pre-built toolchain binaries; no Nix
+#                         dependency.
+#   * rules_rocq_rust   — Rocq 9.0 mechanized proofs, optionally
+#                         consuming rocq-of-rust output. Toolchain
+#                         is provisioned hermetically via Nix.
+#
+# Commit pins below are the synth-verified known-good revisions from
+# the 2026-05-27 rules survey; bump in lockstep with synth/loom when
+# they advance.
+# ─────────────────────────────────────────────────────────────────────
+
+bazel_dep(name = "rules_verus", version = "0.0.0")
+git_override(
+    module_name = "rules_verus",
+    remote = "https://github.com/pulseengine/rules_verus.git",
+    commit = "a49f72ef",
+)
+verus = use_extension("@rules_verus//verus:extensions.bzl", "verus")
+use_repo(verus, "verus_toolchains")
+register_toolchains("@verus_toolchains//:all")
+
+bazel_dep(name = "rules_rocq_rust", version = "0.1.0")
+git_override(
+    module_name = "rules_rocq_rust",
+    remote = "https://github.com/pulseengine/rules_rocq_rust.git",
+    commit = "090b875c6e83e32e25918f31b8c58919ff16467e",
+)
+rocq = use_extension("@rules_rocq_rust//rocq:extensions.bzl", "rocq")
+rocq.toolchain(version = "9.0", strategy = "nix", with_rocq_of_rust_deps = True)
+use_repo(rocq, "rocq_toolchains")
+register_toolchains("@rocq_toolchains//:all")
+
+bazel_dep(name = "rules_nixpkgs_core", version = "0.13.0")
+nix_repo = use_extension(
+    "@rules_nixpkgs_core//extensions:repository.bzl",
+    "nix_repo",
+)
+nix_repo.github(
+    name = "nixpkgs",
+    org = "NixOS",
+    repo = "nixpkgs",
+    commit = "6201e203d09599479a3b3450ed24fa81537ebc4e",
+    sha256 = "",
+)
+use_repo(nix_repo, "nixpkgs")

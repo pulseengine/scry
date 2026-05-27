@@ -1,0 +1,58 @@
+name: Verus Formal Proofs
+
+# FEAT-012 — Verus proof job for scry's interval-lattice mechanization.
+#
+# Verus' toolchain ships as pre-built binaries (no Nix dependency, in
+# contrast to the Rocq job), so this job is lighter-weight and runs
+# on every PR. The single theorem at v0.2 is `join_commutative` on
+# the interval domain (proofs/verus/join_proofs.rs); FEAT-010 (v0.9)
+# extends to full ⊑-soundness against WasmCert-Coq.
+#
+# Workflow-injection audit:
+#   - No `${{ }}` expression appears inside any `run:` block.
+#   - `github.workflow` / `github.head_ref` / `github.ref` are used
+#     only as cache keys and concurrency-group keys.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'proofs/**'
+      - 'MODULE.bazel'
+      - '.github/workflows/verus-proofs.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'proofs/**'
+      - 'MODULE.bazel'
+      - '.github/workflows/verus-proofs.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+
+  verus-proofs:
+    name: Verus Formal Proofs
+    runs-on: ubuntu-latest
+    # Informational at v0.2 (FEAT-012); flips to required at v1.0.
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazelbuild/setup-bazelisk@v3
+      - name: Cache Bazel
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazelisk
+          key: bazel-verus-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', 'proofs/verus/**') }}
+          restore-keys: |
+            bazel-verus-${{ runner.os }}-
+      - name: Build Verus proofs
+        run: bazel build //proofs/verus/...
+      - name: Test Verus proofs
+        run: bazel test //proofs/verus/... --test_output=errors
