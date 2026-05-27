@@ -18,9 +18,9 @@
 //!
 //! What this crate verifies — the v0.2.0 kill-criterion:
 //!
-//!     v0.2.0 is wrong if any program-point in the emitted
-//!     invariant bundle excludes a value the program actually
-//!     computes for any concrete reachable input.
+//! > v0.2.0 is wrong if any program-point in the emitted
+//! > invariant bundle excludes a value the program actually
+//! > computes for any concrete reachable input.
 //!
 //! `tests/soundness.rs` mechanizes that check on the in-repo
 //! fixtures from `crates/scry-analyzer/test-fixtures/`: each
