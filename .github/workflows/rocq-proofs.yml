@@ -1,0 +1,61 @@
+name: Rocq Formal Proofs
+
+# FEAT-012 — Rocq proof job for scry's interval-lattice mechanization.
+#
+# Mirrors the loom rocq-proofs job (rules-survey 2026-05-27). At v0.2
+# proofs are informational (`continue-on-error: true`); the gating
+# requirement flips on at v1.0 when the full mechanized soundness
+# theorem (FEAT-010 / FEAT-011) lands.
+#
+# Workflow-injection audit:
+#   - No `${{ }}` expression appears inside any `run:` block.
+#   - `github.workflow` (workflow name) and `github.head_ref`/`github.ref`
+#     are used only as cache keys and concurrency-group keys; they
+#     don't reach the shell.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'proofs/**'
+      - 'MODULE.bazel'
+      - '.github/workflows/rocq-proofs.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'proofs/**'
+      - 'MODULE.bazel'
+      - '.github/workflows/rocq-proofs.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+
+  rocq-proofs:
+    name: Rocq Formal Proofs
+    # Stays on ubuntu-latest: requires Nix + Bazel for the hermetic
+    # Rocq 9.0 toolchain. Matches loom's runner choice.
+    runs-on: ubuntu-latest
+    # Informational at v0.2 (FEAT-012). Flips to required at v1.0
+    # alongside FEAT-011's six-domain credit dossier.
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.14.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-rocq
+          repository-cache: true
+      - name: Build Rocq proofs
+        run: bazel build //proofs/rocq/...
+      - name: Test Rocq proofs
+        run: bazel test //proofs/rocq/... --test_output=errors

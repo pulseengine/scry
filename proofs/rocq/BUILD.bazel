@@ -1,0 +1,25 @@
+# FEAT-012 — Rocq proof targets for scry's wasm-lattice interval domain.
+#
+# Single-file proof at v0.2: `Lattice.v` mechanically proves that the
+# interval-lattice partial order `⊑` is reflexive. Full mechanized
+# soundness against WasmCert-Coq lands at v0.9 (FEAT-010).
+#
+# The Rocq toolchain is provided by rules_rocq_rust via Nix
+# (see `//:MODULE.bazel` — rules_rocq_rust @ 090b875c, nixpkgs
+# @ 6201e203 carrying Rocq 9.0.1, both synth-canonical).
+
+load("@rules_rocq_rust//rocq:defs.bzl", "rocq_library", "rocq_proof_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rocq_library(
+    name = "lattice",
+    srcs = ["Lattice.v"],
+    tags = ["rocq", "verification", "feat-012"],
+)
+
+rocq_proof_test(
+    name = "lattice_test",
+    deps = [":lattice"],
+    tags = ["rocq", "verification", "feat-012"],
+)

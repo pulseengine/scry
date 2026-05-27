@@ -1,0 +1,35 @@
+# FEAT-012 — Verus proof targets for scry's wasm-lattice interval domain.
+#
+# Single-file proof at v0.2: `join_proofs.rs` mechanically proves that the
+# interval-domain `join` operator is commutative. The full mechanized
+# soundness theorem against WasmCert-Coq lands at v0.9 (FEAT-010).
+#
+# This BUILD file uses the rules_verus public API
+# (`@rules_verus//verus:defs.bzl`). The pin lives in `//:MODULE.bazel`
+# (rules_verus @ a49f72ef, synth-canonical).
+
+load("@rules_verus//verus:defs.bzl", "verus_library", "verus_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# `verus_library` runs `rust_verify` over the crate root and stamps a
+# `.verus_verified` file on success. The crate root is `join_proofs.rs`
+# (no module hierarchy at v0.2 — `mod.rs` is reserved for when a
+# second proof file lands and we restructure).
+verus_library(
+    name = "join_proofs",
+    srcs = ["join_proofs.rs"],
+    crate_name = "scry_proofs_join",
+    crate_root = "join_proofs.rs",
+    tags = ["verus", "verification", "feat-012"],
+)
+
+# Test target — same SMT run, but exposed as `bazel test`-able so CI
+# can surface a clear pass/fail line.
+verus_test(
+    name = "join_proofs_test",
+    srcs = ["join_proofs.rs"],
+    crate_name = "scry_proofs_join",
+    crate_root = "join_proofs.rs",
+    tags = ["verus", "verification", "feat-012"],
+)
