@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 40
     steps:
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -105,6 +105,42 @@ jobs:
           done
           ls -la release-assets/
 
+      # ── Rivet compliance evidence bundle ─────────────────────────
+      #
+      # Generated via the canonical PulseEngine composite action
+      # (pulseengine/rivet/.github/actions/compliance) — same one
+      # sigil and spar use. Produces an HTML compliance report plus
+      # ReqIF / generic-yaml data formats and tarballs them as
+      # compliance-evidence-<version>.tar.gz. The tarball is added
+      # to release-assets/ so cosign signs it alongside the other
+      # release artifacts in the next step.
+
+      - name: Generate rivet compliance evidence
+        id: compliance
+        continue-on-error: true
+        uses: pulseengine/rivet/.github/actions/compliance@v0.6.0
+        with:
+          theme: dark
+          rivet-version: v0.3.0
+          single-page: false
+          include-data-formats: true
+          archive: 'true'
+          archive-name: scry-${{ env.BARE_VERSION }}-compliance-evidence
+          report-label: ${{ env.VERSION }}
+
+      - name: Stage compliance bundle
+        env:
+          ARCHIVE_PATH: ${{ steps.compliance.outputs.archive-path }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ARCHIVE_PATH:-}" ] && [ -f "$ARCHIVE_PATH" ]; then
+            cp "$ARCHIVE_PATH" "release-assets/$(basename "$ARCHIVE_PATH")"
+            echo "::notice title=Compliance evidence::staged $(basename "$ARCHIVE_PATH")"
+          else
+            echo "::warning title=Compliance evidence::action emitted no archive-path; skipping"
+          fi
+          ls -la release-assets/
+
       - name: Generate SHA256SUMS.txt
         run: |
           set -euo pipefail
@@ -122,7 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           cd release-assets
-          for asset in *.wasm *.cdx.json; do
+          for asset in *.wasm *.cdx.json *.tar.gz; do
             [ -f "$asset" ] || continue
             cosign sign-blob --yes \
               --output-signature "${asset}.sig" \
