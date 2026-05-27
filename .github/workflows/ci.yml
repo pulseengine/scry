@@ -163,7 +163,6 @@ jobs:
   deny:
     name: cargo-deny (licenses, advisories, bans)
     runs-on: ubuntu-latest
-    continue-on-error: true   # informational at v0.1 until deny.toml lands
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -171,8 +170,4 @@ jobs:
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny
       - name: cargo deny check
-        run: |
-          if [ ! -f deny.toml ]; then
-            echo "::warning title=cargo-deny::No deny.toml in repo; running with built-in defaults."
-          fi
-          cargo deny check --hide-inclusion-graph
+        run: cargo deny check --hide-inclusion-graph
