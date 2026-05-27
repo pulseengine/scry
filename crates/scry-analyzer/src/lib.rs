@@ -322,8 +322,7 @@ impl Guest for Component {
                             AnalyzeError::InvalidModule(format!("memory section: {e}"))
                         })?;
                         if first {
-                            memory_min_bytes =
-                                mem.initial.saturating_mul(WASM_PAGE_SIZE);
+                            memory_min_bytes = mem.initial.saturating_mul(WASM_PAGE_SIZE);
                             first = false;
                         }
                     }
@@ -812,12 +811,7 @@ fn handle_memory_load(
     let region = domain::region_offset(region, effective);
     let _ = region; // synthesised for soundness story; not currently consumed past this point.
 
-    let in_bounds = region_in_bounds(
-        effective.lo,
-        effective.hi,
-        width,
-        default_region.size_bytes,
-    );
+    let in_bounds = region_in_bounds(effective.lo, effective.hi, width, default_region.size_bytes);
 
     if in_bounds {
         if emit_diagnostics {
@@ -913,12 +907,7 @@ fn handle_memory_store(
     let region = domain::region_create(region_id_for(effective.lo));
     let _ = domain::region_offset(region, effective);
 
-    let in_bounds = region_in_bounds(
-        effective.lo,
-        effective.hi,
-        width,
-        default_region.size_bytes,
-    );
+    let in_bounds = region_in_bounds(effective.lo, effective.hi, width, default_region.size_bytes);
 
     if in_bounds {
         if emit_diagnostics {

@@ -248,10 +248,7 @@ impl Guest for Component {
         let off = if is_bot(a.offset) || is_bot(b.offset) {
             BOTTOM
         } else {
-            canon(
-                a.offset.lo.max(b.offset.lo),
-                a.offset.hi.min(b.offset.hi),
-            )
+            canon(a.offset.lo.max(b.offset.lo), a.offset.hi.min(b.offset.hi))
         };
         Region {
             region_id: a.region_id,
