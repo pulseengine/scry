@@ -255,8 +255,7 @@ impl Guest for Component {
                 AnalyzeError::InvalidModule(format!("wasm parse failed (code pass): {e}"))
             })?;
             if let Payload::CodeSectionEntry(body) = payload {
-                let absolute_func_idx =
-                    import_func_count.saturating_add(defined_func_idx);
+                let absolute_func_idx = import_func_count.saturating_add(defined_func_idx);
 
                 // Resolve this function's signature so we know how
                 // many params to mark as top.
@@ -280,9 +279,7 @@ impl Guest for Component {
                 }
 
                 let locals_reader = body.get_locals_reader().map_err(|e| {
-                    AnalyzeError::InvalidModule(format!(
-                        "function {absolute_func_idx} locals: {e}"
-                    ))
+                    AnalyzeError::InvalidModule(format!("function {absolute_func_idx} locals: {e}"))
                 })?;
                 for entry in locals_reader {
                     let (count, ty) = entry.map_err(|e| {
@@ -298,9 +295,7 @@ impl Guest for Component {
                 let mut ctx = FuncCtx::new(locals);
 
                 let ops_reader = body.get_operators_reader().map_err(|e| {
-                    AnalyzeError::InvalidModule(format!(
-                        "function {absolute_func_idx} ops: {e}"
-                    ))
+                    AnalyzeError::InvalidModule(format!("function {absolute_func_idx} ops: {e}"))
                 })?;
 
                 let mut pc: u32 = 0;
@@ -437,15 +432,11 @@ fn interpret_op(
             *slot = v;
         }
         Operator::LocalTee { local_index } => {
-            let v = ctx
-                .operand_stack
-                .last()
-                .map(clone_value)
-                .ok_or_else(|| {
-                    AnalyzeError::Internal(format!(
-                        "func {func_index} pc {pc}: local.tee on empty stack"
-                    ))
-                })?;
+            let v = ctx.operand_stack.last().map(clone_value).ok_or_else(|| {
+                AnalyzeError::Internal(format!(
+                    "func {func_index} pc {pc}: local.tee on empty stack"
+                ))
+            })?;
             let local_count = ctx.locals.len();
             let slot = ctx.locals.get_mut(*local_index as usize).ok_or_else(|| {
                 AnalyzeError::Internal(format!(
@@ -456,13 +447,34 @@ fn interpret_op(
             *slot = v;
         }
         Operator::I32Add => {
-            i32_binop(ctx, func_index, pc, emit_diagnostics, diagnostics, domain::i32_add)?;
+            i32_binop(
+                ctx,
+                func_index,
+                pc,
+                emit_diagnostics,
+                diagnostics,
+                domain::i32_add,
+            )?;
         }
         Operator::I32Sub => {
-            i32_binop(ctx, func_index, pc, emit_diagnostics, diagnostics, domain::i32_sub)?;
+            i32_binop(
+                ctx,
+                func_index,
+                pc,
+                emit_diagnostics,
+                diagnostics,
+                domain::i32_sub,
+            )?;
         }
         Operator::I32Mul => {
-            i32_binop(ctx, func_index, pc, emit_diagnostics, diagnostics, domain::i32_mul)?;
+            i32_binop(
+                ctx,
+                func_index,
+                pc,
+                emit_diagnostics,
+                diagnostics,
+                domain::i32_mul,
+            )?;
         }
         Operator::End => {
             // End of block / function — no state change at v0.2 AC#1.
@@ -519,8 +531,7 @@ fn i32_binop(
     match (as_i32_interval(&a), as_i32_interval(&b)) {
         (Some(ai), Some(bi)) => {
             let result = f(ai, bi);
-            ctx.operand_stack
-                .push(AbstractValue::I32Interval(result));
+            ctx.operand_stack.push(AbstractValue::I32Interval(result));
         }
         _ => {
             // One of the operands isn't an i32 interval — we lost
@@ -530,8 +541,7 @@ fn i32_binop(
                     severity: DiagnosticSeverity::UnsoundnessFallback,
                     func_index,
                     pc,
-                    message:
-                        "i32 binop on non-i32-interval operand — pushing top".to_string(),
+                    message: "i32 binop on non-i32-interval operand — pushing top".to_string(),
                 });
             }
             ctx.operand_stack
