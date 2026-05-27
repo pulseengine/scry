@@ -179,15 +179,28 @@ artifacts:
     title: Sound abstract-interpretation pass for the Wasm Core Model (v0.1 — Wasm component dogfood)
     status: draft
     description: >
-      The v0.1 scry analyzer, shipping as a wasm32-wasip2 Component
-      Model component (per DD-008). Exports the `analyzer.analyze`
-      function defined in `wit/scry.wit` (derived from the AADL model
-      in `spar/scry.aadl`, per DD-010). v0.1 implements the interval
-      domain over i32/i64 locals only; region-memory (FEAT-005),
-      sound call-graph (FEAT-006), and loom integration (FEAT-008)
-      land in later versions. Built with Bazel + rules_wasm_component
-      (per DD-009).
-    tags: [core, pipeline, v0.1, component-model]
+      The scry analyzer, shipping as a wasm32-wasip2 Component Model
+      component (per DD-008). Exports the `analyzer.analyze` function
+      defined in `wit/scry.wit` (derived from the AADL model in
+      `spar/scry.aadl`, per DD-010). v0.1 shipped the Bazel + WIT +
+      cross-component dogfood scaffold; v0.2 (AC#1) lands the real
+      interval-domain abstract-interpretation fixpoint: the analyzer
+      parses the input module with `wasmparser`, walks straight-line
+      arithmetic in each function body (`i32.const`, `i64.const`,
+      `local.get`, `local.set`, `local.tee`, `i32.add`, `i32.sub`,
+      `i32.mul`, `end`, `return`), maintains an abstract operand
+      stack, calls every interval transfer function through the
+      imported `pulseengine:wasm-lattice/domain` interface, and emits
+      a per-program-point invariant snapshot of locals along with a
+      SHA-256 of the module bytes. Anything outside that supported
+      set (control flow, memory ops, calls) emits an
+      `UnsoundnessFallback` diagnostic and widens locals to top to
+      preserve soundness — region-memory (FEAT-005), sound call-graph
+      (FEAT-006), and summary-based interprocedural AI (FEAT-007)
+      land in later versions; loom integration (FEAT-008) consumes
+      the resulting invariant bundle. Built with Bazel +
+      rules_wasm_component (per DD-009).
+    tags: [core, pipeline, v0.1, v0.2, component-model]
     fields:
       phase: phase-1
       acceptance-criteria:
@@ -210,6 +223,8 @@ artifacts:
         target: FEAT-005
       - type: traces-to
         target: FEAT-006
+      - type: traces-to
+        target: FEAT-007
       - type: traces-to
         target: FEAT-008
 
