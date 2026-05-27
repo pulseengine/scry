@@ -7,6 +7,20 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`release.yml` compliance step**: bumped the
+  `pulseengine/rivet/.github/actions/compliance@v0.6.0` invocation's
+  `rivet-version` input from `v0.3.0` to `v0.13.1`. v0.3.0 was too
+  old to parse scry's `schemas/research-ext.yaml` local schema
+  extension, so the action's internal `rivet validate` failed and
+  no compliance bundle shipped with v0.2.0 (issue #10). v0.2.1 will
+  be the first release to actually carry the
+  `scry-<version>-compliance-evidence.tar.gz` asset. Also dropped
+  the unrecognised `single-page` and `include-data-formats` inputs
+  that produced warnings on the same call (they don't exist in the
+  action's v0.6.0 schema).
+
 ## [0.2.0] — 2026-05-27
 
 Headline: **real analysis ships**. The v0.1.0 scaffold's hardcoded
