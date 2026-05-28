@@ -38,6 +38,12 @@ public
   data InvariantBundle
     -- JSON-encoded per-instruction and per-function abstract
     -- invariants.
+    --
+    -- FEAT-008: the published v1 JSON schema
+    -- (contracts/scry-invariants-v1.schema.json) is purely the
+    -- serialized form of this InvariantBundle together with CallGraph
+    -- and FunctionSummaries below. It introduces no new architecture
+    -- types; see docs/invariant-schema-v1.md (DOC-INVARIANT-SCHEMA-V1).
     properties
       Data_Size => 16 MByte;
   end InvariantBundle;
