@@ -114,10 +114,62 @@ interface analyzer {
         emit-diagnostics: bool,
     }
 
-    /// Full analyzer output for one analyze call.
+    /// Soundness classification of a single call-graph edge.
+    /// `sound` means the resolved target set is a sound (possibly
+    /// over-approximating) cover of every concretely reachable
+    /// target at this call site — it may be precise (a singleton
+    /// for a constant `call_indirect` index or a direct `call`)
+    /// or an over-approximation (the whole table when the index
+    /// interval is unconstrained), but it never under-approximates.
+    /// `unsound-fallback` is retained for call sites the analyzer
+    /// genuinely could not resolve and had to degrade (it should
+    /// not occur for `call` / `call_indirect` as of FEAT-006, but
+    /// the variant stays in the WIT so a future construct that
+    /// cannot be resolved soundly has a place to land).
+    enum soundness-tag {
+        sound,
+        unsound-fallback,
+    }
+
+    /// One resolved edge in the module's call graph (FEAT-006).
+    /// Produced by the value-domain abstract interpretation of the
+    /// operand stack at each call site (the Paccamiccio et al. 2024
+    /// technique, AC-008): for `call_indirect` the top-of-stack
+    /// abstract value is an interval over the table index, and the
+    /// resolved target set is every table entry whose index lies in
+    /// that interval ∩ `[0, table-len)`. For a direct `call` the
+    /// target set is the single named function index.
+    record call-edge {
+        /// Index (in the whole function-index space, imports +
+        /// defined) of the function containing this call site.
+        caller-func: u32,
+        /// Program-counter offset of the call operator within the
+        /// caller's body.
+        pc: u32,
+        /// `true` for `call_indirect`, `false` for a direct `call`.
+        indirect: bool,
+        /// The resolved set of callee function indices. For a
+        /// direct call this is a single entry; for `call_indirect`
+        /// it is every table entry in the resolved index range.
+        /// An empty set means the call is provably unreachable
+        /// (the index interval did not intersect the table) — a
+        /// sound, precise result.
+        resolved-targets: list<u32>,
+        /// Soundness classification (see `soundness-tag`).
+        soundness: soundness-tag,
+    }
+
+    /// Full analyzer output for one analyze call. v0.4 (FEAT-006)
+    /// adds the `call-graph` field: the list of resolved call-site
+    /// edges discovered during the abstract interpretation. The
+    /// field is additive over the v0.3 shape — consumers that only
+    /// read `invariants` / `diagnostics` keep working.
     record analysis-result {
         invariants: invariant-bundle,
         diagnostics: list<diagnostic>,
+        /// Resolved call graph: one `call-edge` per `call` /
+        /// `call_indirect` site visited during analysis.
+        call-graph: list<call-edge>,
     }
 
     /// Reasons an analyze call can fail without producing a partial

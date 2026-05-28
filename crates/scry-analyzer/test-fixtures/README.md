@@ -70,6 +70,8 @@ than working around it here.
 | `fixture-02-with-param.md`        | expected per-instruction operand-stack state             |
 | `fixture-03-region-bounds.wat`    | v0.3 region-aware `i32.load` on a constant base+offset   |
 | `fixture-03-region-bounds.md`     | expected operand-stack + diagnostic surface              |
+| `fixture-04-call-indirect.wat`    | v0.4 sound `call_indirect`: constant + unconstrained idx |
+| `fixture-04-call-indirect.md`     | expected call-graph edges + diagnostic surface           |
 
 ## Adding fixtures
 
@@ -94,6 +96,14 @@ Keep fixtures inside the v0.3 supported instruction set:
   prove in-region) diagnostic. Non-singleton addresses still
   hit the v0.2 fallback (`UnsoundnessFallback` + locals scrubbed
   to top), which is also a valid thing to demonstrate.
+* **Call-graph** (v0.4 FEAT-006): `call` (direct, single-target
+  edge) and `call_indirect` (resolved via the parsed table + the
+  top-of-stack index interval). The fixture's `.md` should record
+  the expected `call-graph` edges (caller / pc / resolved-targets /
+  soundness) and whether each `call_indirect` emits an `Info`
+  (constrained index, precise) or `Warning` (unconstrained index,
+  whole-table over-approximation). Neither emits
+  `UnsoundnessFallback`; neither scrubs locals.
 
 Anything else hits the fallback path which should be called out
 explicitly in the `.md`.

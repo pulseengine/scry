@@ -407,20 +407,48 @@ artifacts:
 
   - id: FEAT-006
     type: feature
-    title: "v0.3 — Sound call_indirect resolution + reachability domain"
-    status: proposed
+    title: "v0.4 — Sound call_indirect resolution (value-domain call graph)"
+    status: draft
     description: >
-      Implement the Paccamiccio et al. 2024 technique: track the
-      operand stack with the interval domain (and constant lattice
-      where intervals collapse to singletons) so that call_indirect
-      target sets are resolved soundly. Add a reachability domain
-      (powerset of program points) for dead-code detection.
-    tags: [call-graph, reachability, v0.3]
+      Implement the Paccamiccio et al. 2024 technique (AC-008): track
+      the operand stack with the interval domain (collapsing to a
+      singleton constant where the index is known) so that
+      call_indirect target sets are resolved soundly. The analyzer
+      parses the table + active element segments in its pre-pass to
+      build the function table (index → function reference); on a
+      `call_indirect` it pops the top-of-stack index interval,
+      intersects it with the table bounds `[0, table-len)`, and
+      resolves the target set to every table entry in range — a
+      constant index resolves PRECISELY to a single target, an
+      unconstrained index over-approximates soundly to the whole
+      table (a `Warning`, never the unsound under-approximation that
+      plagues other Wasm analyzers per MF-003). A new `call-graph`
+      field on `analysis-result` carries the resolved
+      `(caller, pc, resolved-targets, soundness-tag)` edges; direct
+      `call`s are recorded as trivially-sound single-target edges.
+
+      v0.4 narrow scope (this draft): resolve the call *graph*, not
+      call *effects* — the analyzer does NOT descend into callees
+      (no interprocedural fixpoint; that is FEAT-007). After a call
+      the operand-stack effect is modelled pessimistically (pop the
+      callee's params, push `top` per result, per the callee's type
+      signature), which is sound. Element-segment parsing handles
+      the common case (a single funcref table populated by active
+      segments with constant i32 offsets); passive/declared segments,
+      non-constant offsets, expression-valued items, and growable
+      tables fall back to a whole-table over-approximation (sound,
+      imprecise). The reachability / dead-code powerset domain
+      originally bundled here is deferred to a later draft — FEAT-006
+      ships the sound call graph that is the substrate for the
+      summary-based interprocedural analysis in FEAT-007.
+    tags: [call-graph, soundness, v0.4]
     fields:
       phase: phase-1
       acceptance-criteria:
-        - "Given a Wasm module using call_indirect, When scry runs, Then the produced call graph contains every concretely reachable target and is annotated 'sound'."
-        - "Given a differential corpus of Wasm modules, When scry's call graph is compared to Wassail's, Then scry never under-approximates and reports the precision delta."
+        - "Given `crates/scry-analyzer/test-fixtures/fixture-04-call-indirect.wat` (a `(table 3 3 funcref)` module with an active element segment `[0,1,2]` and a `call_indirect` on the constant index 1), When scry analyzes it, Then the `analysis-result.call-graph` contains an edge `(caller=3, pc=1, indirect=true, resolved-targets=[1], soundness=sound)` and the `call_indirect` at pc=1 emits a single `Info` diagnostic naming 1 resolved target and no `UnsoundnessFallback`."
+        - "Given the same fixture's `dispatch_unknown` entry (a `call_indirect` whose index is the function's i32 parameter, abstract value top), When scry analyzes it, Then the call-graph edge resolves to the whole table `resolved-targets=[0,1,2]` tagged `sound`, a `Warning` diagnostic of the form `call_indirect index unconstrained — 3 targets` is emitted, and locals are NOT scrubbed to top."
+        - "Given any Wasm module reaching a `call_indirect` with a concrete index k, When scry runs, Then the resolved target set contains `table[k]` for every concrete k (soundness by reduction to the interval domain's soundness, FEAT-001 AC#1) — scry never under-approximates."
+        - "Given a differential corpus of Wasm modules, When scry's call graph is compared to Wassail's (deferred to the v0.5+ corpus milestone), Then scry never under-approximates and reports the precision delta."
     links:
       - type: satisfies
         target: REQ-008
@@ -428,6 +456,10 @@ artifacts:
         target: AC-008
       - type: addresses-finding
         target: MF-003
+      - type: depends-on
+        target: FEAT-001
+      - type: traces-to
+        target: FEAT-007
 
   - id: FEAT-007
     type: feature

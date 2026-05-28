@@ -68,6 +68,34 @@ public
       Data_Size => 20 Bytes;  -- u32 region-id + 16-byte Interval
   end MemoryRegion;
 
+  data CallEdge
+    -- v0.4 (FEAT-006): one resolved edge in the module's call
+    -- graph. Produced by the AnalyzerProcess from the value-domain
+    -- abstract interpretation of the operand stack (the Paccamiccio
+    -- et al. 2024 technique): for a `call_indirect` the top-of-
+    -- stack abstract index interval is intersected with the parsed
+    -- function table's bounds and the resolved target set is every
+    -- table entry in range; for a direct `call` the target is the
+    -- single named function. Each edge carries the caller function
+    -- index, the call-site program-counter offset, the resolved
+    -- target-function-index set, and a soundness tag. The edge is
+    -- part of the InvariantBundle the AnalyzerProcess emits.
+    properties
+      Data_Size => 1 KByte;  -- caller u32 + pc u32 + flags + target list
+  end CallEdge;
+
+  data CallGraph
+    -- v0.4 (FEAT-006): the module's resolved call graph — the set
+    -- of CallEdge records, one per visited `call` / `call_indirect`
+    -- site. Emitted by the AnalyzerProcess as part of its analysis
+    -- result and consumed by downstream interprocedural analyses
+    -- (the substrate FEAT-007's summary-based AI builds on). Sized
+    -- generously to hold the edge set of a fused multi-component
+    -- module.
+    properties
+      Data_Size => 4 MByte;  -- list of CallEdge records
+  end CallGraph;
+
   -- ══════════════════════════════════════════════════════════════════
   -- Threads — one per component's primary worker
   -- ══════════════════════════════════════════════════════════════════
@@ -102,6 +130,9 @@ public
       config_in:       in event data port AnalysisConfig;
       invariants_out:  out event data port InvariantBundle;
       diagnostics_out: out event data port AnalysisDiagnostic;
+      -- v0.4 (FEAT-006): the resolved call graph emitted alongside
+      -- the invariant bundle.
+      callgraph_out:   out event data port CallGraph;
       -- Connection to LatticeOps. Modelled as a port pair; in the
       -- Component Model this is a WIT cross-component import.
       lattice_call_out: out event data port;
@@ -143,6 +174,7 @@ public
       config_in:       in event data port AnalysisConfig;
       invariants_out:  out event data port InvariantBundle;
       diagnostics_out: out event data port AnalysisDiagnostic;
+      callgraph_out:   out event data port CallGraph;
       lattice_call_out: out event data port;
       lattice_result_in: in event data port Interval;
   end AnalyzerProcess;
@@ -155,6 +187,7 @@ public
       c_config:        port config_in -> analyzer_thread.config_in;
       c_invariants:    port analyzer_thread.invariants_out -> invariants_out;
       c_diagnostics:   port analyzer_thread.diagnostics_out -> diagnostics_out;
+      c_callgraph:     port analyzer_thread.callgraph_out -> callgraph_out;
       c_lattice_call:  port analyzer_thread.lattice_call_out -> lattice_call_out;
       c_lattice_result: port lattice_result_in -> analyzer_thread.lattice_result_in;
   end AnalyzerProcess.IntervalV01;
@@ -169,6 +202,7 @@ public
       config_in:       in event data port AnalysisConfig;
       invariants_out:  out event data port InvariantBundle;
       diagnostics_out: out event data port AnalysisDiagnostic;
+      callgraph_out:   out event data port CallGraph;
   end Scry;
 
   system implementation Scry.V01
@@ -185,6 +219,7 @@ public
       s_config:        port config_in -> analyzer.config_in;
       s_invariants:    port analyzer.invariants_out -> invariants_out;
       s_diagnostics:   port analyzer.diagnostics_out -> diagnostics_out;
+      s_callgraph:     port analyzer.callgraph_out -> callgraph_out;
       -- Internal cross-component wiring (analyzer → lattice)
       s_lattice_call:  port analyzer.lattice_call_out -> lattice.op_in;
       s_lattice_result: port lattice.op_out -> analyzer.lattice_result_in;
