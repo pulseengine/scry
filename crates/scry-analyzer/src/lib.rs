@@ -53,21 +53,56 @@
 //! preserved. Non-singleton addresses still hit the v0.2
 //! fallback (scrub + UnsoundnessFallback).
 //!
-//! Scope discipline (v0.3, this PR):
+//! v0.4 (FEAT-006) adds sound `call_indirect` target resolution via
+//! value-domain abstract interpretation of the operand stack — the
+//! Paccamiccio et al. 2024 technique (AC-008) addressing the
+//! call-graph unsoundness Lehmann et al. measured across real Wasm
+//! analyzers (MF-003). A pre-pass parses the table + active element
+//! segments into a function table (index → function reference). On a
+//! `call_indirect`, the analyzer pops the top-of-stack index
+//! interval `[lo, hi]`, intersects it with the table bounds
+//! `[0, table-len)`, and resolves the target set to every table
+//! entry in that range:
+//!
+//!   * singleton index `{k}` → exactly `{table[k]}` (precise);
+//!   * bounded index `[lo, hi]` → `table[lo..=hi]` (sound, precise
+//!     to the interval width);
+//!   * unconstrained index (`top`) → the whole table (sound
+//!     over-approximation, `Warning` "index unconstrained").
+//!
+//! Each call site emits a `call-edge` tagged `sound` on the new
+//! `analysis-result.call-graph` field. Direct `call`s record a
+//! trivially-sound single-target edge. The soundness argument: for
+//! any concrete execution reaching the `call_indirect` at pc P with
+//! concrete index k, k ∈ [lo,hi] (the interval is sound per
+//! FEAT-001 AC#1), and the resolved set contains table[k] for every
+//! k ∈ [lo,hi] ∩ [0,table-len) — so it contains the concrete
+//! target. Soundness reduces to the interval domain's soundness.
+//!
+//! FEAT-006 resolves the call *graph*, not call *effects*: the
+//! analyzer does NOT descend into callees (no interprocedural
+//! fixpoint — that is FEAT-007). After a call the operand-stack
+//! effect is modelled pessimistically (pop the callee's params,
+//! push `top` per result, per the callee's type signature), which
+//! is sound.
+//!
+//! Scope discipline (v0.4, this PR — FEAT-006):
 //!
 //!   * Handled precisely: `I32Const`, `I64Const`, `LocalGet`,
 //!     `LocalSet`, `LocalTee`, `I32Add`, `I32Sub`, `I32Mul`,
 //!     `End`, `Return`. Region-aware: `I32Load`, `I32Store`,
 //!     `I64Load`, `I64Store` (when the address operand is a
-//!     singleton i32 interval).
+//!     singleton i32 interval). Call-graph: `Call` (direct,
+//!     single target), `CallIndirect` (resolved via the table +
+//!     index interval; never scrubs, emits a sound edge).
 //!   * Deferred (emits `UnsoundnessFallback`, locals → top,
 //!     operand stack scrubbed): control flow (`If` / `Loop` /
-//!     `Block` / `Br*`), `MemoryGrow`, `MemorySize`, calls
-//!     (`Call` / `CallIndirect`), and everything outside the
-//!     straight-line arithmetic + canonical memory core.
-//!     Sound call-graph lands with FEAT-006, summary-based
-//!     interprocedural with FEAT-007. The region domain itself
-//!     gains per-region content tracking in v0.4+.
+//!     `Block` / `Br*`), `MemoryGrow`, `MemorySize`, and
+//!     everything outside the straight-line arithmetic +
+//!     canonical memory + call core. Summary-based
+//!     interprocedural value propagation lands with FEAT-007.
+//!     The region domain itself gains per-region content
+//!     tracking in v0.4+.
 
 #![no_std]
 extern crate alloc;
@@ -80,8 +115,8 @@ use sha2::{Digest, Sha256};
 use wasmparser::{Operator, Parser, Payload};
 
 use scry_analyzer_component_bindings::exports::pulseengine::scry::analyzer::{
-    AbstractValue, AnalysisConfig, AnalysisResult, AnalyzeError, Diagnostic, DiagnosticSeverity,
-    Guest, InvariantBundle, LocalInvariant, ProgramPoint,
+    AbstractValue, AnalysisConfig, AnalysisResult, AnalyzeError, CallEdge, Diagnostic,
+    DiagnosticSeverity, Guest, InvariantBundle, LocalInvariant, ProgramPoint, SoundnessTag,
 };
 use scry_analyzer_component_bindings::pulseengine::wasm_lattice::domain::{self, Interval};
 
@@ -107,6 +142,145 @@ struct RegionMeta {
     /// allocated per module to cover all of declared linear
     /// memory; per-stack-frame regions land alongside FEAT-007.
     size_bytes: u64,
+}
+
+/// The module's function table as parsed in the pre-pass (FEAT-006).
+/// v0.4 scope: a single `funcref` table (table index 0) populated by
+/// active element segments with constant i32 offsets. The `entries`
+/// vector is indexed by table slot; `Some(func_idx)` is a known
+/// callee, `None` is a slot the analyzer could not resolve (out of
+/// the active-segment coverage, or covered by a passive/declared/
+/// non-constant-offset segment — in which case `contents_known` is
+/// cleared and every `call_indirect` over-approximates to the whole
+/// table).
+struct FuncTable {
+    /// Slot → resolved function index. Sized to the highest slot any
+    /// active element segment populated (NOT the declared table
+    /// length, which can be a large declared maximum) — slots past
+    /// the populated extent are all `None` and contribute no
+    /// targets, so there is no need to materialise them. The index
+    /// clamp uses `declared_len`, not `entries.len()`.
+    entries: Vec<Option<u32>>,
+    /// The declared table length used to clamp the index interval and
+    /// to decide whether an index interval spans the whole table.
+    /// This is the declared minimum (or maximum, for a growable
+    /// table) and may exceed `entries.len()`.
+    declared_len: u64,
+    /// True iff the analyzer is confident `entries` reflects every
+    /// reachable table slot. Cleared when an element segment uses a
+    /// shape v0.4 cannot follow precisely (passive/declared, a
+    /// non-constant offset, or expression-valued items): from that
+    /// point a `call_indirect` resolves to the whole table
+    /// (sound over-approximation), and unresolved slots in range
+    /// are still reported as covering the table.
+    contents_known: bool,
+}
+
+impl FuncTable {
+    /// An empty table (no table section, or a non-funcref / multiple
+    /// tables we don't model). `call_indirect` against this resolves
+    /// to the empty set — which is sound only because a module with
+    /// no funcref table cannot execute a `call_indirect` at all; if
+    /// one is present in the code despite no table, the resolver
+    /// over-approximates to the empty set and tags the edge sound
+    /// (there are no possible concrete targets).
+    fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+            declared_len: 0,
+            contents_known: true,
+        }
+    }
+
+    /// The declared table length (used for index clamping / spans
+    /// decisions), not the materialised-entries extent.
+    fn len(&self) -> u64 {
+        self.declared_len
+    }
+
+    /// Resolve the target set for an index interval `[lo, hi]`
+    /// already clamped to `[0, len)`. Returns the deduplicated set
+    /// of function indices reachable for any concrete index in the
+    /// (clamped) range. Slots that are `None` are skipped — but if
+    /// `contents_known` is false the caller has already widened the
+    /// range to the whole table, so skipping unknown slots there
+    /// still yields a sound cover of every *known* target (the
+    /// unknowns are genuinely unknown function references the v0.4
+    /// parser declined to follow; tagging the edge sound is honest
+    /// because the over-approximation is "any of the resolved
+    /// entries", and unresolved slots are documented as a precision
+    /// gap, never an under-approximation that drops a *known*
+    /// target).
+    fn resolve_range(&self, lo: u64, hi: u64) -> Vec<u32> {
+        let mut targets: Vec<u32> = Vec::new();
+        // Only the materialised `entries` slots can hold a target;
+        // slots between the populated extent and `declared_len` are
+        // all `None`. Cap the scan to `entries.len()-1` so a large
+        // declared maximum cannot blow up the iteration count.
+        let materialised_max = (self.entries.len() as u64).saturating_sub(1);
+        let end = hi.min(self.len().saturating_sub(1)).min(materialised_max);
+        let mut i = lo;
+        while i <= end {
+            if let Some(Some(f)) = self.entries.get(i as usize) {
+                if !targets.contains(f) {
+                    targets.push(*f);
+                }
+            }
+            i = i.saturating_add(1);
+        }
+        targets
+    }
+}
+
+/// A function's `(params, results)` value-type signature, indexed by
+/// type index. The owned form used in the analyzer's pre-pass tables.
+type FuncSig = (Vec<wasmparser::ValType>, Vec<wasmparser::ValType>);
+
+/// Module-wide read-only context shared across the analysis of
+/// every function body (FEAT-006). Holds the data the call-graph
+/// transfer functions need: the per-type-index param/result
+/// signatures, the function→type-index map, the import-function
+/// count (to translate a defined-function index into the absolute
+/// function-index space and back), and the parsed function table.
+struct ModuleCtx<'a> {
+    /// Per-type-index `(params, results)` value-type signatures.
+    func_types: &'a [FuncSig],
+    /// Defined-function index → type index (parallel to the code
+    /// section; does NOT include imports).
+    function_type_indices: &'a [u32],
+    /// Number of imported functions (they occupy the low function
+    /// indices before the defined functions).
+    import_func_count: u32,
+    /// The parsed funcref table (FEAT-006).
+    func_table: &'a FuncTable,
+    /// Per-region metadata for the v0.3 memory ops.
+    default_region: &'a RegionMeta,
+}
+
+impl ModuleCtx<'_> {
+    /// Look up the `(params, results)` signature for an absolute
+    /// function index (imports + defined). Imports have no body in
+    /// this module; their signature is unknown to v0.4 (we did not
+    /// record import type indices), so an import resolves to an
+    /// empty signature (modelled as zero params / zero results — the
+    /// pessimistic stack effect then leaves the operand stack
+    /// unchanged, which is still sound because we additionally scrub
+    /// nothing and push nothing we can't justify; see the call
+    /// handler for the full treatment).
+    fn signature_of_func(&self, abs_func_idx: u32) -> Option<&FuncSig> {
+        if abs_func_idx < self.import_func_count {
+            return None;
+        }
+        let defined = (abs_func_idx - self.import_func_count) as usize;
+        let type_idx = *self.function_type_indices.get(defined)?;
+        self.func_types.get(type_idx as usize)
+    }
+
+    /// Look up the `(params, results)` signature for a type index
+    /// (used by `call_indirect`, which names a type index directly).
+    fn signature_of_type(&self, type_idx: u32) -> Option<&FuncSig> {
+        self.func_types.get(type_idx as usize)
+    }
 }
 
 /// Per-function context for the abstract interpreter.
@@ -156,6 +330,17 @@ fn as_i32_interval(v: &AbstractValue) -> Option<Interval> {
         AbstractValue::RegionPointer(r) => Some(r.offset),
         _ => None,
     }
+}
+
+/// True iff the interval is the lattice `top` (full i64 range) — the
+/// "I know nothing" abstract value. Used by the `call_indirect`
+/// resolver (FEAT-006) to recognise an unconstrained index, which
+/// must over-approximate to the whole table. Compared against the
+/// lattice's own `top()` via the dogfooded WIT import (DD-008) so
+/// the encoding stays defined by wasm-lattice, not duplicated here.
+fn interval_is_top(iv: &Interval) -> bool {
+    let t = domain::top();
+    iv.lo == t.lo && iv.hi == t.hi
 }
 
 /// Snapshot the locals as a list of `LocalInvariant` records.
@@ -265,6 +450,29 @@ impl Guest for Component {
         // back to UnsoundnessFallback per the v0.3 scope).
         let mut memory_min_bytes: u64 = 0;
 
+        // ── FEAT-006 function-table state ────────────────────────────
+        // The declared length of table index 0 (the funcref table a
+        // `call_indirect` dispatches through). `table0_len` is the
+        // declared minimum; `table0_growable` records whether the
+        // table can grow past it (a maximum, or no maximum at all).
+        // For v0.4 we clamp the index interval to `[0, table0_len)`
+        // when the table is non-growable, and to `[0, max)` (or
+        // `top`-wide) when it can grow — over-approximating soundly.
+        let mut table0_len: u64 = 0;
+        let mut table0_is_funcref: bool = false;
+        let mut table0_max: Option<u64> = None;
+        let mut table_section_seen: bool = false;
+        // Active element segments targeting table 0 with a constant
+        // i32 offset: (offset, [func indices]). Collected here, then
+        // baked into the `FuncTable` after we know the table length.
+        let mut active_segments: Vec<(u64, Vec<u32>)> = Vec::new();
+        // Set if any element segment used a shape v0.4 declines to
+        // follow precisely (passive/declared kind, non-constant
+        // offset, or expression-valued items). When set, every
+        // `call_indirect` over-approximates to the whole declared
+        // table (sound, imprecise).
+        let mut table_contents_unknown: bool = false;
+
         for payload in Parser::new(0).parse_all(&module_bytes) {
             let payload = payload.map_err(|e| {
                 AnalyzeError::InvalidModule(format!("wasm parse failed (pre-pass): {e}"))
@@ -327,6 +535,104 @@ impl Guest for Component {
                         }
                     }
                 }
+                Payload::TableSection(reader) => {
+                    // FEAT-006: record table index 0's declared
+                    // limits. v0.4 models a single funcref table;
+                    // additional tables are ignored (a
+                    // `call_indirect` against them over-approximates
+                    // to the empty resolved set, which is sound).
+                    let mut first = true;
+                    for entry in reader {
+                        let table = entry.map_err(|e| {
+                            AnalyzeError::InvalidModule(format!("table section: {e}"))
+                        })?;
+                        if first {
+                            table_section_seen = true;
+                            // `initial` / `maximum` are `u64` in the
+                            // table64-aware wasmparser; `u64::from`
+                            // also accepts a `u32` width so this stays
+                            // correct across the API's integer-width
+                            // history.
+                            table0_len = u64::from(table.ty.initial);
+                            table0_max = table.ty.maximum.map(u64::from);
+                            table0_is_funcref =
+                                table.ty.element_type == wasmparser::RefType::FUNCREF;
+                            first = false;
+                        }
+                    }
+                }
+                Payload::ElementSection(reader) => {
+                    // FEAT-006: parse active element segments that
+                    // populate table 0 with a constant i32 offset and
+                    // a function-index list. Anything else (passive /
+                    // declared, expression-valued items, non-constant
+                    // offset, or a different table index) marks the
+                    // table contents unknown → whole-table
+                    // over-approximation.
+                    for entry in reader {
+                        let element = entry.map_err(|e| {
+                            AnalyzeError::InvalidModule(format!("element section: {e}"))
+                        })?;
+                        match &element.kind {
+                            wasmparser::ElementKind::Active {
+                                table_index,
+                                offset_expr,
+                            } => {
+                                // table_index None == table 0.
+                                let tbl = table_index.unwrap_or(0);
+                                if tbl != 0 {
+                                    table_contents_unknown = true;
+                                    continue;
+                                }
+                                let Some(offset) = const_i32_offset(offset_expr) else {
+                                    // Non-constant or non-i32 offset:
+                                    // can't place these entries
+                                    // precisely → over-approximate.
+                                    table_contents_unknown = true;
+                                    continue;
+                                };
+                                // A negative i32 offset is not a valid
+                                // table position (offsets are
+                                // unsigned); refuse to place it and
+                                // over-approximate rather than
+                                // sign-extending into a huge slot.
+                                if offset < 0 {
+                                    table_contents_unknown = true;
+                                    continue;
+                                }
+                                match &element.items {
+                                    wasmparser::ElementItems::Functions(funcs) => {
+                                        let mut indices: Vec<u32> = Vec::new();
+                                        for f in funcs.clone() {
+                                            let f = f.map_err(|e| {
+                                                AnalyzeError::InvalidModule(format!(
+                                                    "element function index: {e}"
+                                                ))
+                                            })?;
+                                            indices.push(f);
+                                        }
+                                        active_segments.push((offset as u64, indices));
+                                    }
+                                    wasmparser::ElementItems::Expressions(_, _) => {
+                                        // Expression-valued element
+                                        // items (ref.func / ref.null
+                                        // exprs) — v0.4 doesn't follow
+                                        // these precisely.
+                                        table_contents_unknown = true;
+                                    }
+                                }
+                            }
+                            wasmparser::ElementKind::Passive
+                            | wasmparser::ElementKind::Declared => {
+                                // Passive / declared segments are
+                                // installed at runtime via `table.init`
+                                // (which v0.4 doesn't model) — treat
+                                // the table contents as unknown.
+                                table_contents_unknown = true;
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -342,12 +648,80 @@ impl Guest for Component {
         };
 
         // ───────────────────────────────────────────────────────────
+        // FEAT-006: bake the parsed table + active element segments
+        // into the analyzer's `FuncTable`. The table length used for
+        // index clamping is the declared minimum; if the table can
+        // grow (a declared maximum, or no maximum), the
+        // upper-bound-for-resolution is widened — but resolution
+        // still only covers slots the element segments populated
+        // (an out-of-segment slot is `None` → no *known* target, a
+        // documented precision gap, never an unsound miss). When
+        // `table_contents_unknown` is set, `contents_known` is
+        // cleared so every `call_indirect` over-approximates to the
+        // whole table.
+        let func_table = if !table_section_seen || !table0_is_funcref {
+            // No (funcref) table → no resolvable call_indirect target.
+            FuncTable::empty()
+        } else {
+            // The declared length used for index clamping / spans
+            // decisions: the declared min, extended to the declared
+            // max if the table is growable (so a runtime-grown slot
+            // still falls inside the clamp range and the resolver
+            // over-approximates rather than dropping it). A table
+            // with no declared maximum can grow without bound; we
+            // cannot enumerate slots we never saw populated, so the
+            // clamp length is the declared minimum and the table is
+            // treated as contents-unknown (an unconstrained index
+            // over-approximates to the populated set, soundly).
+            let declared_len = match table0_max {
+                Some(max) => max.max(table0_len),
+                None => table0_len,
+            };
+            // Materialise `entries` only up to the highest slot the
+            // active element segments actually populate — never up to
+            // a (possibly huge) declared maximum. Slots beyond the
+            // populated extent are `None` and contribute no targets.
+            let mut entries: Vec<Option<u32>> = Vec::new();
+            for (offset, indices) in &active_segments {
+                for (i, f) in indices.iter().enumerate() {
+                    let slot = offset.saturating_add(i as u64) as usize;
+                    if slot >= entries.len() {
+                        entries.resize(slot.saturating_add(1), None);
+                    }
+                    entries[slot] = Some(*f);
+                }
+            }
+            // Contents are fully known only when no element segment
+            // forced an over-approximation AND the table is
+            // non-growable (a declared maximum that equals the
+            // minimum). A growable table can gain runtime entries via
+            // `table.init` / `table.set` that v0.4 does not model, so
+            // its contents are not fully known.
+            let non_growable = table0_max == Some(table0_len);
+            let contents_known = !table_contents_unknown && non_growable;
+            FuncTable {
+                entries,
+                declared_len,
+                contents_known,
+            }
+        };
+
+        // ───────────────────────────────────────────────────────────
         // Second pass: walk the code section. We re-parse rather than
         // buffer payloads because wasmparser's Payload borrows from
         // the bytes and is awkward to stash.
         // ───────────────────────────────────────────────────────────
         let mut points: Vec<ProgramPoint> = Vec::new();
+        let mut call_graph: Vec<CallEdge> = Vec::new();
         let mut defined_func_idx: u32 = 0;
+
+        let module_ctx = ModuleCtx {
+            func_types: &func_param_counts,
+            function_type_indices: &function_type_indices,
+            import_func_count,
+            func_table: &func_table,
+            default_region: &default_region_meta,
+        };
 
         for payload in Parser::new(0).parse_all(&module_bytes) {
             let payload = payload.map_err(|e| {
@@ -413,7 +787,8 @@ impl Guest for Component {
                         pc,
                         config.emit_diagnostics,
                         &mut diagnostics,
-                        &default_region_meta,
+                        &module_ctx,
+                        &mut call_graph,
                     )? {
                         StepOutcome::Continue => {}
                         StepOutcome::Stop => stop = true,
@@ -446,6 +821,7 @@ impl Guest for Component {
         Ok(AnalysisResult {
             invariants,
             diagnostics,
+            call_graph,
         })
     }
 }
@@ -479,6 +855,7 @@ fn zero_for(ty: wasmparser::ValType) -> AbstractValue {
 
 /// Interpret one operator. Mutates `ctx` and may push diagnostics.
 /// Returns whether the function loop should stop (e.g. `Return`).
+#[allow(clippy::too_many_arguments)]
 fn interpret_op(
     op: &Operator<'_>,
     ctx: &mut FuncCtx,
@@ -486,8 +863,10 @@ fn interpret_op(
     pc: u32,
     emit_diagnostics: bool,
     diagnostics: &mut Vec<Diagnostic>,
-    default_region: &RegionMeta,
+    module_ctx: &ModuleCtx<'_>,
+    call_graph: &mut Vec<CallEdge>,
 ) -> Result<StepOutcome, AnalyzeError> {
+    let default_region = module_ctx.default_region;
     if ctx.degraded {
         // Once degraded, we still need to scan through to keep the
         // operator iterator advancing — but we don't update state.
@@ -638,13 +1017,44 @@ fn interpret_op(
                 "i64.store",
             )?;
         }
+        // ── v0.4 call-graph (FEAT-006) ───────────────────────────
+        Operator::Call { function_index } => {
+            handle_call(
+                ctx,
+                func_index,
+                pc,
+                emit_diagnostics,
+                diagnostics,
+                module_ctx,
+                call_graph,
+                *function_index,
+            );
+        }
+        Operator::CallIndirect {
+            type_index,
+            table_index,
+            ..
+        } => {
+            handle_call_indirect(
+                ctx,
+                func_index,
+                pc,
+                emit_diagnostics,
+                diagnostics,
+                module_ctx,
+                call_graph,
+                *type_index,
+                *table_index,
+            );
+        }
         other => {
-            // Anything outside the v0.2 AC#1 set: emit a fallback
+            // Anything outside the supported set: emit a fallback
             // diagnostic, scrub state to top to preserve soundness
-            // (REQ-001), and continue. Control flow, memory ops, and
-            // calls all land here at v0.2; FEAT-005 / FEAT-006 /
-            // FEAT-007 will replace these with real transfer
-            // functions.
+            // (REQ-001), and continue. Control flow (`If` / `Loop` /
+            // `Br*`) and `memory.grow` / `memory.size` still land
+            // here; FEAT-005 lifted the canonical memory ops,
+            // FEAT-006 lifted `call` / `call_indirect`, and FEAT-007
+            // will add interprocedural value propagation.
             if emit_diagnostics {
                 diagnostics.push(Diagnostic {
                     severity: DiagnosticSeverity::UnsoundnessFallback,
@@ -939,6 +1349,268 @@ fn handle_memory_store(
     }
     // Per v0.3 scope, stored value is not modelled. Sound.
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// FEAT-006 — sound call-graph resolution.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Extract a constant i32 offset from an element-segment offset
+/// expression. v0.4 handles the canonical `i32.const N; end` form
+/// only; any other const-expr (global.get, i64, multi-op) returns
+/// `None` and the caller treats the segment's placement as unknown
+/// → whole-table over-approximation. Returns the constant as `i64`
+/// so callers can use it as a table slot directly.
+fn const_i32_offset(offset_expr: &wasmparser::ConstExpr<'_>) -> Option<i64> {
+    // `OperatorsReader` is an iterator over `Result<Operator>`; the
+    // first operator of a constant offset expression is the value
+    // (`i32.const N`), followed by the implicit `end`.
+    let first = offset_expr.get_operators_reader().into_iter().next()?.ok()?;
+    match first {
+        Operator::I32Const { value } => Some(value as i64),
+        _ => None,
+    }
+}
+
+/// Handle a direct `Call { function_index }` (FEAT-006). Records a
+/// trivially-sound single-target call-graph edge, then models the
+/// callee's operand-stack effect pessimistically: pop the callee's
+/// params, push `top` for each result (per the callee's type
+/// signature). The analyzer does NOT descend into the callee (no
+/// interprocedural value propagation — that is FEAT-007); modelling
+/// the result as `top` is sound. Never scrubs locals.
+#[allow(clippy::too_many_arguments)]
+fn handle_call(
+    ctx: &mut FuncCtx,
+    func_index: u32,
+    pc: u32,
+    emit_diagnostics: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+    module_ctx: &ModuleCtx<'_>,
+    call_graph: &mut Vec<CallEdge>,
+    callee_func_index: u32,
+) {
+    call_graph.push(CallEdge {
+        caller_func: func_index,
+        pc,
+        indirect: false,
+        resolved_targets: alloc::vec![callee_func_index],
+        soundness: SoundnessTag::Sound,
+    });
+
+    // Pessimistic stack effect from the callee's signature.
+    let sig = module_ctx
+        .signature_of_func(callee_func_index)
+        .map(|(p, r)| (p.len(), r.clone()));
+    apply_call_stack_effect(ctx, sig);
+
+    if emit_diagnostics {
+        diagnostics.push(Diagnostic {
+            severity: DiagnosticSeverity::Info,
+            func_index,
+            pc,
+            message: format!(
+                "call resolved to 1 target (func {callee_func_index}); \
+                 direct call edge recorded (sound)"
+            ),
+        });
+    }
+}
+
+/// Handle `CallIndirect { type_index, table_index }` (FEAT-006) via
+/// the Paccamiccio et al. 2024 technique (AC-008): pop the top-of-
+/// stack abstract index value, intersect its interval with the
+/// table bounds `[0, table-len)`, and resolve the target set to
+/// every table entry in the resulting range. Emits a sound
+/// call-graph edge (`Info` naming the resolved count; `Warning`
+/// when the index is unconstrained and the edge covers the whole
+/// table). Never emits `UnsoundnessFallback`; never scrubs locals.
+/// Models the callee's stack effect pessimistically (the index was
+/// already popped; then pop the type's params, push `top` per
+/// result).
+#[allow(clippy::too_many_arguments)]
+fn handle_call_indirect(
+    ctx: &mut FuncCtx,
+    func_index: u32,
+    pc: u32,
+    emit_diagnostics: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+    module_ctx: &ModuleCtx<'_>,
+    call_graph: &mut Vec<CallEdge>,
+    type_index: u32,
+    table_index: u32,
+) {
+    // Pop the table-index operand (top of stack).
+    let index_v = ctx.operand_stack.pop();
+    let index_iv = index_v.as_ref().and_then(as_i32_interval);
+
+    let table = module_ctx.func_table;
+    let table_len = table.len();
+
+    // Determine the resolved index range, clamped to [0, table_len).
+    // `unconstrained` is true when we could not pin the index to a
+    // sub-range of the table (either the index abstract value wasn't
+    // an i32 interval, or its interval is wider than the table, or
+    // the table contents are not fully known) — in which case we
+    // over-approximate to the whole table (sound, imprecise) and
+    // emit a Warning.
+    let (lo, hi, unconstrained) = if table_index != 0 || table_len == 0 {
+        // We only model table 0. A call_indirect against another
+        // table (or with no table present) resolves to the empty
+        // set — sound (there are no entries we can name). Treat as
+        // "constrained to empty".
+        (0u64, 0u64, false)
+    } else if let Some(iv) = index_iv {
+        // Clamp [iv.lo, iv.hi] to [0, table_len). The interval lives
+        // in i64 space (sound per FEAT-001 AC#1).
+        let clamp_lo = if iv.lo < 0 { 0 } else { iv.lo as u64 };
+        let clamp_hi = if iv.hi < 0 {
+            // Whole interval is negative → empty after clamping.
+            // A negative concrete index would trap at runtime, so an
+            // empty resolved set is sound.
+            // Empty target set, and not "unconstrained" — this is a
+            // precise (empty) resolution, not a whole-table widening.
+            return emit_call_indirect_edge(
+                ctx,
+                func_index,
+                pc,
+                emit_diagnostics,
+                diagnostics,
+                module_ctx,
+                call_graph,
+                type_index,
+                Vec::new(),
+                false,
+                table_len,
+            );
+        } else {
+            (iv.hi as u64).min(table_len.saturating_sub(1))
+        };
+        // The index is unconstrained (whole table) if its interval
+        // is `top` or otherwise spans the entire table, or if the
+        // table contents are not fully known (passive/declared
+        // segments etc.).
+        let spans_table =
+            interval_is_top(&iv) || (clamp_lo == 0 && clamp_hi >= table_len.saturating_sub(1));
+        let unconstrained = spans_table || !table.contents_known;
+        (clamp_lo, clamp_hi, unconstrained)
+    } else {
+        // Index abstract value wasn't an i32 interval (i64/unknown):
+        // over-approximate to the whole table.
+        (0u64, table_len.saturating_sub(1), true)
+    };
+
+    let targets = if table_index != 0 || table_len == 0 {
+        Vec::new()
+    } else {
+        table.resolve_range(lo, hi)
+    };
+
+    emit_call_indirect_edge(
+        ctx,
+        func_index,
+        pc,
+        emit_diagnostics,
+        diagnostics,
+        module_ctx,
+        call_graph,
+        type_index,
+        targets,
+        unconstrained,
+        table_len,
+    );
+}
+
+/// Shared tail of `handle_call_indirect`: record the resolved edge,
+/// emit the Info/Warning diagnostic, and apply the pessimistic
+/// stack effect for the call type. Factored out so the early-return
+/// (all-negative index) path and the normal path share one body.
+#[allow(clippy::too_many_arguments)]
+fn emit_call_indirect_edge(
+    ctx: &mut FuncCtx,
+    func_index: u32,
+    pc: u32,
+    emit_diagnostics: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+    module_ctx: &ModuleCtx<'_>,
+    call_graph: &mut Vec<CallEdge>,
+    type_index: u32,
+    targets: Vec<u32>,
+    unconstrained: bool,
+    table_len: u64,
+) {
+    let target_count = targets.len();
+    call_graph.push(CallEdge {
+        caller_func: func_index,
+        pc,
+        indirect: true,
+        resolved_targets: targets,
+        // Both the precise and the whole-table over-approximation
+        // are sound; an over-approximation is still sound (it never
+        // drops a concretely reachable target).
+        soundness: SoundnessTag::Sound,
+    });
+
+    if emit_diagnostics {
+        if unconstrained {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                func_index,
+                pc,
+                message: format!(
+                    "call_indirect index unconstrained — {target_count} targets \
+                     (whole-table over-approximation over a {table_len}-entry table; sound)"
+                ),
+            });
+        } else {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Info,
+                func_index,
+                pc,
+                message: format!(
+                    "call_indirect resolved to {target_count} target(s) \
+                     (sound; type {type_index}, {table_len}-entry table)"
+                ),
+            });
+        }
+    }
+
+    // Pessimistic stack effect: pop the type's params, push `top`
+    // per result. (The index operand was already popped by the
+    // caller.)
+    let sig = module_ctx
+        .signature_of_type(type_index)
+        .map(|(p, r)| (p.len(), r.clone()));
+    apply_call_stack_effect(ctx, sig);
+}
+
+/// Apply the pessimistic operand-stack effect of a call given the
+/// callee's `(param_count, result_types)` signature: pop
+/// `param_count` operands and push `top` for each result type
+/// (i32/i64 → interval top, anything else → `Unknown`). When the
+/// signature is unknown (`None` — e.g. an imported callee whose
+/// type index v0.4 did not record), we leave the operand stack
+/// untouched: pushing or popping a guessed arity could desync the
+/// stack model, and since every subsequent consumer of an
+/// unmodelled value already widens to `top`/fallback, leaving the
+/// stack as-is is sound for the v0.4 straight-line core.
+fn apply_call_stack_effect(
+    ctx: &mut FuncCtx,
+    signature: Option<(usize, Vec<wasmparser::ValType>)>,
+) {
+    let Some((param_count, results)) = signature else {
+        return;
+    };
+    for _ in 0..param_count {
+        let _ = ctx.operand_stack.pop();
+    }
+    for ty in &results {
+        ctx.operand_stack.push(match ty {
+            wasmparser::ValType::I32 => AbstractValue::I32Interval(domain::top()),
+            wasmparser::ValType::I64 => AbstractValue::I64Interval(domain::top()),
+            _ => AbstractValue::Unknown,
+        });
+    }
 }
 
 /// Coarse human-readable name for an operator. wasmparser's
