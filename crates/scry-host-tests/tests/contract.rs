@@ -255,9 +255,18 @@ fn representative_result() -> AnalysisResult {
     }
 }
 
-fn compile() -> jsonschema::Validator {
+/// Compile the published contract into a validator.
+///
+/// Uses `jsonschema::JSONSchema::compile`, the default-feature
+/// constructor that is stable across the pinned 0.18.x line (the
+/// crate-root `validator_for` / `Validator` re-exports are gated behind
+/// the optional `resolve-*` features, so we avoid them). Validity is
+/// then driven through `JSONSchema::is_valid` (`&Value -> bool`), which
+/// needs no extra features and no version-specific error types.
+#[allow(deprecated)]
+fn compile() -> jsonschema::JSONSchema {
     let schema = load_schema();
-    jsonschema::validator_for(&schema)
+    jsonschema::JSONSchema::compile(&schema)
         .unwrap_or_else(|e| panic!("compile scry-invariants v1 schema: {e}"))
 }
 
@@ -294,20 +303,11 @@ fn representative_result_validates_against_schema() {
     let instance =
         serde_json::to_value(representative_result()).expect("serialize representative result");
 
-    if let Err(error) = validator.validate(&instance) {
-        // `validate` returns at most one error in 0.18; iter_errors gives all.
-        let all: Vec<String> = validator
-            .iter_errors(&instance)
-            .map(|e| format!("  at {}: {}", e.instance_path, e))
-            .collect();
-        panic!(
-            "representative analysis-result failed schema validation:\n{}\nfirst error: {error}",
-            all.join("\n")
-        );
-    }
     assert!(
         validator.is_valid(&instance),
-        "representative analysis-result must be valid against the v1 contract"
+        "representative analysis-result must be valid against the v1 contract; \
+         serialized value:\n{}",
+        serde_json::to_string_pretty(&instance).unwrap_or_default()
     );
 }
 
@@ -355,7 +355,13 @@ fn loom_transform_shapes_present_and_valid() {
 /// The contract is tight: structurally-broken instances are rejected.
 /// This guards against an accidentally-permissive schema (e.g. dropping
 /// `additionalProperties: false` or the `oneOf` discriminator).
+///
+/// `clippy::no_effect` is allowed: clippy (Rust 1.96+) false-positives on
+/// the `bad[index] = serde_json::json!(..)` assignment statements — the
+/// `IndexMut` assignment mutates `bad`, but the lint flags the `json!`
+/// macro expansion as effect-free.
 #[test]
+#[allow(clippy::no_effect)]
 fn schema_rejects_malformed_instances() {
     let validator = compile();
 
