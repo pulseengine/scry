@@ -1365,7 +1365,11 @@ fn const_i32_offset(offset_expr: &wasmparser::ConstExpr<'_>) -> Option<i64> {
     // `OperatorsReader` is an iterator over `Result<Operator>`; the
     // first operator of a constant offset expression is the value
     // (`i32.const N`), followed by the implicit `end`.
-    let first = offset_expr.get_operators_reader().into_iter().next()?.ok()?;
+    let first = offset_expr
+        .get_operators_reader()
+        .into_iter()
+        .next()?
+        .ok()?;
     match first {
         Operator::I32Const { value } => Some(value as i64),
         _ => None,
