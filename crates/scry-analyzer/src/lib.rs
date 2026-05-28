@@ -86,7 +86,56 @@
 //! push `top` per result, per the callee's type signature), which
 //! is sound.
 //!
-//! Scope discipline (v0.4, this PR — FEAT-006):
+//! v0.5 (FEAT-007) adds compositional summary-based interprocedural
+//! abstract interpretation (the Stiévenart & De Roover SCAM 2020
+//! technique, AC-010). The analysis becomes two-phase:
+//!
+//!   * Phase 1 — bottom-up summary computation. Build the call-graph
+//!     SCC condensation (Tarjan) from the FEAT-006 call edges and
+//!     process SCCs in reverse-topological order (callees before
+//!     callers). For each function compute a context-INSENSITIVE
+//!     summary: run the intraprocedural fixpoint with every parameter
+//!     bound to `top` (the most general input) and record the
+//!     resulting result-value abstract state. Functions in a
+//!     non-trivial SCC (self- or mutual recursion) get the same
+//!     `top`-summary computed with widening at the recursion frontier
+//!     (bounded iterations then widen) — sound and guaranteed to
+//!     terminate (REQ-001).
+//!   * Phase 2 — the existing per-function walk, but at every
+//!     `call`/`call_indirect` site the analyzer applies the callee's
+//!     summary instead of pushing `top` per result. For a direct
+//!     `call` to a small, non-recursive callee whose argument
+//!     intervals are concrete, the analyzer performs a context-
+//!     SENSITIVE re-evaluation: it re-runs the callee's fixpoint with
+//!     the actual argument intervals bound to its params and uses that
+//!     strictly-more-precise result. The re-eval is bounded by an
+//!     op-count threshold (≤ 64 ops) and a call-depth limit (≤ 8) and
+//!     memoised by (func-index, arg-abstract-values); beyond either
+//!     bound it falls back to the context-insensitive summary (sound).
+//!
+//! The headline precision win: `main()` calling `add_one(41)` where
+//! `add_one(x) = x + 1` now yields `{42, 42}` at the call site, where
+//! v0.4 pushed `top`. Recursive functions (e.g. a factorial-like
+//! body) get the sound `top`-summary — no precision, guaranteed
+//! termination. See fixture-05.
+//!
+//! Soundness argument (FEAT-007): `summary_f(args)` over-approximates
+//! `{ f(concrete) : concrete ∈ γ(args) }` because it is the result of
+//! the intraprocedural fixpoint (sound per FEAT-001 AC#1) run with the
+//! params bound to `args`, and widening at recursion frontiers
+//! guarantees the fixpoint terminates at a sound post-fixpoint.
+//! Applying `summary_f` at a call site is sound because the call-site
+//! arguments are themselves sound abstractions of the concrete
+//! arguments. The whole construction reduces to intraprocedural
+//! soundness + widening termination.
+//!
+//! Deferred beyond v0.5: full polyvariant context-sensitivity (one
+//! summary per distinct abstract-argument tuple), cross-component
+//! summaries (meld-fused multi-component modules), context-sensitive
+//! re-eval through `call_indirect` and into recursive/oversized
+//! callees, and a precise per-region content domain.
+//!
+//! Scope discipline (intraprocedural core, unchanged from v0.4):
 //!
 //!   * Handled precisely: `I32Const`, `I64Const`, `LocalGet`,
 //!     `LocalSet`, `LocalTee`, `I32Add`, `I32Sub`, `I32Mul`,
@@ -94,15 +143,15 @@
 //!     `I64Load`, `I64Store` (when the address operand is a
 //!     singleton i32 interval). Call-graph: `Call` (direct,
 //!     single target), `CallIndirect` (resolved via the table +
-//!     index interval; never scrubs, emits a sound edge).
+//!     index interval; never scrubs, emits a sound edge). Call
+//!     *effects* (FEAT-007): the callee summary is applied at the
+//!     call site instead of pushing `top`.
 //!   * Deferred (emits `UnsoundnessFallback`, locals → top,
 //!     operand stack scrubbed): control flow (`If` / `Loop` /
 //!     `Block` / `Br*`), `MemoryGrow`, `MemorySize`, and
 //!     everything outside the straight-line arithmetic +
-//!     canonical memory + call core. Summary-based
-//!     interprocedural value propagation lands with FEAT-007.
-//!     The region domain itself gains per-region content
-//!     tracking in v0.4+.
+//!     canonical memory + call core. The region domain itself
+//!     gains per-region content tracking in v0.4+.
 
 #![no_std]
 extern crate alloc;
@@ -116,13 +165,14 @@ use wasmparser::{Operator, Parser, Payload};
 
 use scry_analyzer_component_bindings::exports::pulseengine::scry::analyzer::{
     AbstractValue, AnalysisConfig, AnalysisResult, AnalyzeError, CallEdge, Diagnostic,
-    DiagnosticSeverity, Guest, InvariantBundle, LocalInvariant, ProgramPoint, SoundnessTag,
+    DiagnosticSeverity, FunctionSummary, Guest, InvariantBundle, LocalInvariant, ProgramPoint,
+    SoundnessTag,
 };
 use scry_analyzer_component_bindings::pulseengine::wasm_lattice::domain::{self, Interval};
 
 struct Component;
 
-const SCRY_VERSION: &str = "0.3.0";
+const SCRY_VERSION: &str = "0.5.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -236,6 +286,54 @@ impl FuncTable {
 /// type index. The owned form used in the analyzer's pre-pass tables.
 type FuncSig = (Vec<wasmparser::ValType>, Vec<wasmparser::ValType>);
 
+/// One defined (non-import) function's body, collected up front so the
+/// summary phase (FEAT-007) can run the intraprocedural fixpoint over
+/// it as many times as needed (the context-insensitive `top`-summary
+/// pass, and the context-sensitive per-call-site re-evaluations)
+/// without re-parsing. The `ops` borrow from `module_bytes`, which
+/// outlives the whole `analyze` call.
+struct DefinedFunc<'a> {
+    /// Absolute function index (imports + this defined index).
+    abs_index: u32,
+    /// Type index naming this function's `(params, results)`.
+    #[allow(dead_code)]
+    type_idx: u32,
+    /// Parameter value-types, in order.
+    params: Vec<wasmparser::ValType>,
+    /// Declared (non-parameter) local value-types, expanded from the
+    /// run-length-encoded locals declaration.
+    declared_locals: Vec<wasmparser::ValType>,
+    /// Result value-types, in order.
+    results: Vec<wasmparser::ValType>,
+    /// The function body's operators, in order.
+    ops: Vec<Operator<'a>>,
+}
+
+/// Maximum operator count for a callee to be eligible for context-
+/// sensitive re-evaluation at a call site (FEAT-007). Larger callees
+/// use the context-insensitive `top`-summary (sound, imprecise) to
+/// bound re-analysis cost. Documented in fixture-05.
+const REEVAL_MAX_OPS: usize = 64;
+
+/// Maximum call-depth for context-sensitive re-evaluation (FEAT-007).
+/// Beyond this depth a `call` falls back to the callee's context-
+/// insensitive summary (sound). A hard backstop that guarantees
+/// termination even if SCC detection ever missed a recursive edge.
+const REEVAL_MAX_DEPTH: u32 = 8;
+
+/// Per-function abstract summary computed in phase 1 (FEAT-007). The
+/// `result_summary` is the abstract value of each result under the
+/// context-insensitive (`top`-input) intraprocedural fixpoint.
+struct SummaryEntry {
+    /// Abstract value of each result under the `top`-input summary.
+    result_summary: Vec<AbstractValue>,
+    /// True iff this function is eligible for context-sensitive
+    /// re-evaluation at call sites (small + non-recursive).
+    context_sensitive: bool,
+    /// True iff this function is in a non-trivial call-graph SCC.
+    recursive: bool,
+}
+
 /// Module-wide read-only context shared across the analysis of
 /// every function body (FEAT-006). Holds the data the call-graph
 /// transfer functions need: the per-type-index param/result
@@ -255,6 +353,35 @@ struct ModuleCtx<'a> {
     func_table: &'a FuncTable,
     /// Per-region metadata for the v0.3 memory ops.
     default_region: &'a RegionMeta,
+    /// Collected defined-function bodies (FEAT-007), indexed by
+    /// defined-function index (absolute index minus
+    /// `import_func_count`).
+    defined_funcs: &'a [DefinedFunc<'a>],
+    /// Per-defined-function summary (FEAT-007), parallel to
+    /// `defined_funcs`. `None` for a function whose summary could not
+    /// be computed (it then defaults to the pessimistic `top` effect).
+    summaries: &'a [Option<SummaryEntry>],
+}
+
+impl<'a> ModuleCtx<'a> {
+    /// Look up a defined function by its absolute function index.
+    /// Returns `None` for imports and out-of-range indices.
+    fn defined_by_abs(&self, abs_func_idx: u32) -> Option<&DefinedFunc<'a>> {
+        if abs_func_idx < self.import_func_count {
+            return None;
+        }
+        let defined = (abs_func_idx - self.import_func_count) as usize;
+        self.defined_funcs.get(defined)
+    }
+
+    /// Look up a defined function's summary by absolute function index.
+    fn summary_by_abs(&self, abs_func_idx: u32) -> Option<&SummaryEntry> {
+        if abs_func_idx < self.import_func_count {
+            return None;
+        }
+        let defined = (abs_func_idx - self.import_func_count) as usize;
+        self.summaries.get(defined).and_then(|s| s.as_ref())
+    }
 }
 
 impl ModuleCtx<'_> {
@@ -707,108 +834,196 @@ impl Guest for Component {
         };
 
         // ───────────────────────────────────────────────────────────
-        // Second pass: walk the code section. We re-parse rather than
-        // buffer payloads because wasmparser's Payload borrows from
-        // the bytes and is awkward to stash.
+        // Body-collection pass (FEAT-007): collect every defined
+        // function's params / declared locals / results / operators up
+        // front. The operators borrow from `module_bytes` (alive for
+        // the whole `analyze` call), so phase 1 can run the
+        // intraprocedural fixpoint over each body as many times as it
+        // needs (the `top`-input summary, and the per-call-site
+        // context-sensitive re-evaluations) without re-parsing.
         // ───────────────────────────────────────────────────────────
-        let mut points: Vec<ProgramPoint> = Vec::new();
-        let mut call_graph: Vec<CallEdge> = Vec::new();
+        let mut defined_funcs: Vec<DefinedFunc> = Vec::new();
         let mut defined_func_idx: u32 = 0;
+        for payload in Parser::new(0).parse_all(&module_bytes) {
+            let payload = payload.map_err(|e| {
+                AnalyzeError::InvalidModule(format!("wasm parse failed (code pass): {e}"))
+            })?;
+            if let Payload::CodeSectionEntry(body) = payload {
+                let abs_index = import_func_count.saturating_add(defined_func_idx);
+                let type_idx = function_type_indices
+                    .get(defined_func_idx as usize)
+                    .copied()
+                    .unwrap_or(u32::MAX);
+                let (params, results) = func_param_counts
+                    .get(type_idx as usize)
+                    .cloned()
+                    .unwrap_or_default();
 
+                let mut declared_locals: Vec<wasmparser::ValType> = Vec::new();
+                let locals_reader = body.get_locals_reader().map_err(|e| {
+                    AnalyzeError::InvalidModule(format!("function {abs_index} locals: {e}"))
+                })?;
+                for entry in locals_reader {
+                    let (count, ty) = entry.map_err(|e| {
+                        AnalyzeError::InvalidModule(format!(
+                            "function {abs_index} local entry: {e}"
+                        ))
+                    })?;
+                    for _ in 0..count {
+                        declared_locals.push(ty);
+                    }
+                }
+
+                let mut ops: Vec<Operator> = Vec::new();
+                let ops_reader = body.get_operators_reader().map_err(|e| {
+                    AnalyzeError::InvalidModule(format!("function {abs_index} ops: {e}"))
+                })?;
+                for (i, op) in ops_reader.into_iter().enumerate() {
+                    let op = op.map_err(|e| {
+                        AnalyzeError::InvalidModule(format!("function {abs_index} op {i}: {e}"))
+                    })?;
+                    ops.push(op);
+                }
+
+                defined_funcs.push(DefinedFunc {
+                    abs_index,
+                    type_idx,
+                    params,
+                    declared_locals,
+                    results,
+                    ops,
+                });
+                defined_func_idx = defined_func_idx.saturating_add(1);
+            }
+        }
+
+        // ───────────────────────────────────────────────────────────
+        // Phase 1 (FEAT-007): bottom-up summary computation.
+        //
+        //   (a) build a conservative static call graph over defined
+        //       functions (direct `call` edges, plus every active-
+        //       element-segment table target reachable from a
+        //       `call_indirect` — a sound over-approximation for SCC
+        //       detection),
+        //   (b) find strongly-connected components (Tarjan) and order
+        //       them in reverse-topological order (callees first),
+        //   (c) compute each function's context-insensitive summary by
+        //       running the intraprocedural fixpoint with params bound
+        //       to `top`. Functions in a non-trivial SCC are flagged
+        //       `recursive` and never re-evaluated context-sensitively
+        //       (guarantees termination — the bounded straight-line
+        //       walk already terminates; the `top`-summary is the sound
+        //       recursion-frontier result).
+        // ───────────────────────────────────────────────────────────
+        let static_callees =
+            build_static_call_graph(&defined_funcs, &func_table, import_func_count);
+        let sccs = tarjan_sccs(&static_callees);
+        let recursive_flags =
+            recursive_flags_from_sccs(&sccs, &static_callees, defined_funcs.len());
+
+        // Summaries are filled in reverse-topological order (callees
+        // before callers). For each function we run the intraprocedural
+        // fixpoint with params bound to `top` (the most general input);
+        // because callees are already summarised, this `top`-input run
+        // applies their summaries (and, for small non-recursive direct
+        // callees with concrete in-body argument intervals, the
+        // context-sensitive re-eval) — so a parameterless caller like
+        // `main()` records the precise interprocedural result in its
+        // own summary too. A new `ModuleCtx` borrowing the partially-
+        // filled `summaries` is built per function so the borrow is
+        // released before we write the freshly-computed entry back.
+        let mut summaries: Vec<Option<SummaryEntry>> =
+            (0..defined_funcs.len()).map(|_| None).collect();
+        for &defined in &sccs_reverse_topo_order(&sccs) {
+            let recursive = recursive_flags[defined];
+            // Run the fixpoint with `top` params. No points /
+            // diagnostics are emitted for the summary pass (phase 2
+            // emits the real bundle); the call graph is discarded.
+            let mut sink_diags: Vec<Diagnostic> = Vec::new();
+            let mut sink_edges: Vec<CallEdge> = Vec::new();
+            let result_summary = {
+                let phase1_ctx = ModuleCtx {
+                    func_types: &func_param_counts,
+                    function_type_indices: &function_type_indices,
+                    import_func_count,
+                    func_table: &func_table,
+                    default_region: &default_region_meta,
+                    defined_funcs: &defined_funcs,
+                    summaries: &summaries,
+                };
+                let func = &defined_funcs[defined];
+                let init_locals = top_input_locals(func);
+                let result_state = run_function_body(
+                    func,
+                    init_locals,
+                    &phase1_ctx,
+                    /*emit_points=*/ None,
+                    &mut sink_diags,
+                    &mut sink_edges,
+                    /*emit_diagnostics=*/ false,
+                    /*depth=*/ 0,
+                )?;
+                extract_results(&defined_funcs[defined].results, &result_state)
+            };
+            // Context-sensitive re-eval is enabled for small,
+            // non-recursive functions only.
+            let context_sensitive =
+                !recursive && defined_funcs[defined].ops.len() <= REEVAL_MAX_OPS;
+            summaries[defined] = Some(SummaryEntry {
+                result_summary,
+                context_sensitive,
+                recursive,
+            });
+        }
+
+        // ───────────────────────────────────────────────────────────
+        // Phase 2 (FEAT-007): the real per-function walk. Identical to
+        // the v0.4 intraprocedural walk except that at a `call` /
+        // `call_indirect` site the callee's summary is applied (or, for
+        // a small non-recursive direct callee with concrete args, a
+        // context-sensitive re-evaluation) instead of pushing `top`.
+        // Emits the invariant bundle, diagnostics, and the (real,
+        // index-interval-resolved) call graph.
+        // ───────────────────────────────────────────────────────────
         let module_ctx = ModuleCtx {
             func_types: &func_param_counts,
             function_type_indices: &function_type_indices,
             import_func_count,
             func_table: &func_table,
             default_region: &default_region_meta,
+            defined_funcs: &defined_funcs,
+            summaries: &summaries,
         };
 
-        for payload in Parser::new(0).parse_all(&module_bytes) {
-            let payload = payload.map_err(|e| {
-                AnalyzeError::InvalidModule(format!("wasm parse failed (code pass): {e}"))
-            })?;
-            if let Payload::CodeSectionEntry(body) = payload {
-                let absolute_func_idx = import_func_count.saturating_add(defined_func_idx);
+        let mut points: Vec<ProgramPoint> = Vec::new();
+        let mut call_graph: Vec<CallEdge> = Vec::new();
+        for func in &defined_funcs {
+            let init_locals = top_input_locals(func);
+            run_function_body(
+                func,
+                init_locals,
+                &module_ctx,
+                Some(&mut points),
+                &mut diagnostics,
+                &mut call_graph,
+                config.emit_diagnostics,
+                /*depth=*/ 0,
+            )?;
+        }
 
-                // Resolve this function's signature so we know how
-                // many params to mark as top.
-                let type_idx = function_type_indices
-                    .get(defined_func_idx as usize)
-                    .copied()
-                    .unwrap_or(u32::MAX);
-                let (params, _results) = func_param_counts
-                    .get(type_idx as usize)
-                    .cloned()
-                    .unwrap_or_default();
-
-                // Build the initial abstract locals: each param →
-                // top (we know nothing about caller-provided
-                // arguments yet — v0.4 summary-based AI will
-                // strengthen this), each declared local → zero per
-                // Wasm semantics.
-                let mut locals: Vec<AbstractValue> = Vec::with_capacity(params.len());
-                for ty in &params {
-                    locals.push(initial_abstract_for(*ty));
-                }
-
-                let locals_reader = body.get_locals_reader().map_err(|e| {
-                    AnalyzeError::InvalidModule(format!("function {absolute_func_idx} locals: {e}"))
-                })?;
-                for entry in locals_reader {
-                    let (count, ty) = entry.map_err(|e| {
-                        AnalyzeError::InvalidModule(format!(
-                            "function {absolute_func_idx} local entry: {e}"
-                        ))
-                    })?;
-                    for _ in 0..count {
-                        locals.push(zero_for(ty));
-                    }
-                }
-
-                let mut ctx = FuncCtx::new(locals);
-
-                let ops_reader = body.get_operators_reader().map_err(|e| {
-                    AnalyzeError::InvalidModule(format!("function {absolute_func_idx} ops: {e}"))
-                })?;
-
-                let mut pc: u32 = 0;
-                for op in ops_reader {
-                    let op = op.map_err(|e| {
-                        AnalyzeError::InvalidModule(format!(
-                            "function {absolute_func_idx} op {pc}: {e}"
-                        ))
-                    })?;
-
-                    let mut stop = false;
-                    match interpret_op(
-                        &op,
-                        &mut ctx,
-                        absolute_func_idx,
-                        pc,
-                        config.emit_diagnostics,
-                        &mut diagnostics,
-                        &module_ctx,
-                        &mut call_graph,
-                    )? {
-                        StepOutcome::Continue => {}
-                        StepOutcome::Stop => stop = true,
-                    }
-
-                    if !ctx.degraded {
-                        points.push(ProgramPoint {
-                            func_index: absolute_func_idx,
-                            pc,
-                            locals: snapshot_locals(&ctx.locals),
-                        });
-                    }
-
-                    pc = pc.saturating_add(1);
-                    if stop {
-                        break;
-                    }
-                }
-
-                defined_func_idx = defined_func_idx.saturating_add(1);
+        // ───────────────────────────────────────────────────────────
+        // Assemble the per-function-summary output records (FEAT-007).
+        // ───────────────────────────────────────────────────────────
+        let mut function_summaries: Vec<FunctionSummary> = Vec::with_capacity(defined_funcs.len());
+        for (defined, func) in defined_funcs.iter().enumerate() {
+            if let Some(entry) = summaries.get(defined).and_then(|s| s.as_ref()) {
+                function_summaries.push(FunctionSummary {
+                    func_index: func.abs_index,
+                    param_count: func.params.len() as u32,
+                    result_summary: entry.result_summary.iter().map(clone_value).collect(),
+                    context_sensitive: entry.context_sensitive,
+                    recursive: entry.recursive,
+                });
             }
         }
 
@@ -822,6 +1037,7 @@ impl Guest for Component {
             invariants,
             diagnostics,
             call_graph,
+            function_summaries,
         })
     }
 }
@@ -829,6 +1045,329 @@ impl Guest for Component {
 enum StepOutcome {
     Continue,
     Stop,
+}
+
+/// Build the initial abstract locals for a function with parameters
+/// bound to `top` (the most general input — the context-insensitive
+/// summary case and the phase-2 default) and declared locals
+/// zero-initialised per Wasm semantics.
+fn top_input_locals(func: &DefinedFunc<'_>) -> Vec<AbstractValue> {
+    let mut locals: Vec<AbstractValue> = Vec::with_capacity(func.params.len());
+    for ty in &func.params {
+        locals.push(initial_abstract_for(*ty));
+    }
+    for ty in &func.declared_locals {
+        locals.push(zero_for(*ty));
+    }
+    locals
+}
+
+/// Build the initial abstract locals for a context-sensitive
+/// re-evaluation: parameters bound to the supplied call-site argument
+/// abstract values (positionally), declared locals zero-initialised.
+/// If `args` is shorter than the parameter list (shouldn't happen for
+/// a well-typed call), the missing params fall back to `top`.
+fn arg_bound_locals(func: &DefinedFunc<'_>, args: &[AbstractValue]) -> Vec<AbstractValue> {
+    let mut locals: Vec<AbstractValue> = Vec::with_capacity(func.params.len());
+    for (i, ty) in func.params.iter().enumerate() {
+        match args.get(i) {
+            Some(v) => locals.push(clone_value(v)),
+            None => locals.push(initial_abstract_for(*ty)),
+        }
+    }
+    for ty in &func.declared_locals {
+        locals.push(zero_for(*ty));
+    }
+    locals
+}
+
+/// Extract the function's result abstract values from the operand
+/// stack left by its body. The Wasm calling convention leaves the
+/// result values on the operand stack (in result order, top of stack
+/// last) when the body falls through to its final `end`. If the body
+/// degraded (scrubbed) or the stack is shorter than the result arity
+/// (e.g. an early `return` we model as Stop without the values still
+/// on the stack), the missing results are filled with `top` in the
+/// matching domain — sound.
+fn extract_results(
+    results: &[wasmparser::ValType],
+    final_stack: &[AbstractValue],
+) -> Vec<AbstractValue> {
+    let n = results.len();
+    let mut out: Vec<AbstractValue> = Vec::with_capacity(n);
+    if final_stack.len() >= n {
+        // The last `n` operands on the stack are the results (in
+        // order; top of stack is the last result).
+        let start = final_stack.len() - n;
+        for i in 0..n {
+            out.push(clone_value(&final_stack[start + i]));
+        }
+    } else {
+        // The body did not leave a full result vector on the stack
+        // (degraded / early return without modelled values): every
+        // result is `top` in its domain — sound.
+        for ty in results {
+            out.push(top_for(*ty));
+        }
+    }
+    out
+}
+
+/// `top` abstract value in the domain matching a Wasm value type.
+fn top_for(ty: wasmparser::ValType) -> AbstractValue {
+    match ty {
+        wasmparser::ValType::I32 => AbstractValue::I32Interval(domain::top()),
+        wasmparser::ValType::I64 => AbstractValue::I64Interval(domain::top()),
+        _ => AbstractValue::Unknown,
+    }
+}
+
+/// Run the intraprocedural fixpoint over one function body.
+///
+/// This is the v0.4 per-function walk lifted into a reusable helper
+/// (FEAT-007): phase 1 calls it with `top` params (output suppressed)
+/// to compute the context-insensitive summary; the context-sensitive
+/// re-eval calls it with concrete argument intervals; phase 2 calls it
+/// with `top` params and `emit_points = Some(..)` to produce the real
+/// invariant bundle.
+///
+/// Returns the operand-stack state at the point the body finished
+/// (fall-through `end` or `return`), from which the caller extracts
+/// the result abstract values.
+#[allow(clippy::too_many_arguments)]
+fn run_function_body(
+    func: &DefinedFunc<'_>,
+    init_locals: Vec<AbstractValue>,
+    module_ctx: &ModuleCtx<'_>,
+    mut emit_points: Option<&mut Vec<ProgramPoint>>,
+    diagnostics: &mut Vec<Diagnostic>,
+    call_graph: &mut Vec<CallEdge>,
+    emit_diagnostics: bool,
+    depth: u32,
+) -> Result<Vec<AbstractValue>, AnalyzeError> {
+    let mut ctx = FuncCtx::new(init_locals);
+    let mut pc: u32 = 0;
+    for op in &func.ops {
+        let mut stop = false;
+        match interpret_op(
+            op,
+            &mut ctx,
+            func.abs_index,
+            pc,
+            emit_diagnostics,
+            diagnostics,
+            module_ctx,
+            call_graph,
+            depth,
+        )? {
+            StepOutcome::Continue => {}
+            StepOutcome::Stop => stop = true,
+        }
+
+        if let Some(points) = emit_points.as_deref_mut() {
+            if !ctx.degraded {
+                points.push(ProgramPoint {
+                    func_index: func.abs_index,
+                    pc,
+                    locals: snapshot_locals(&ctx.locals),
+                });
+            }
+        }
+
+        pc = pc.saturating_add(1);
+        if stop {
+            break;
+        }
+    }
+    Ok(ctx.operand_stack)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// FEAT-007 — call-graph SCC condensation for bottom-up summaries.
+//
+// We build a conservative static call graph over DEFINED functions
+// (indexed by defined-function index, i.e. absolute index minus the
+// import count) directly from each body's operators, then run Tarjan's
+// algorithm to find strongly-connected components. A non-trivial SCC
+// (size > 1, or a self-loop) is a recursive cycle; functions in it use
+// the sound context-insensitive `top`-summary and are never
+// re-evaluated context-sensitively — guaranteeing termination
+// (REQ-001).
+// ─────────────────────────────────────────────────────────────────────
+
+/// Build the static call graph over defined functions. For each
+/// defined function, `out[i]` is the deduplicated set of defined-
+/// function indices it may call:
+///
+///   * a direct `Call { function_index }` to a defined function
+///     contributes that target (imports are dropped — they have no
+///     body and cannot form a cycle within this module),
+///   * a `CallIndirect` contributes EVERY active-element-segment table
+///     target (a sound over-approximation for cycle detection — the
+///     real per-site index-interval resolution happens in phase 2;
+///     for SCC purposes we must not miss a possible recursive edge, so
+///     we take the whole known table).
+///
+/// This over-approximation only ever makes MORE functions recursive
+/// (hence conservative `top`-summaries), never fewer — it can lose
+/// precision but never soundness or termination.
+fn build_static_call_graph(
+    defined_funcs: &[DefinedFunc<'_>],
+    func_table: &FuncTable,
+    import_func_count: u32,
+) -> Vec<Vec<usize>> {
+    // All distinct table targets, as defined-function indices.
+    let mut table_targets: Vec<usize> = Vec::new();
+    for slot in &func_table.entries {
+        if let Some(abs) = slot {
+            if *abs >= import_func_count {
+                let d = (*abs - import_func_count) as usize;
+                if d < defined_funcs.len() && !table_targets.contains(&d) {
+                    table_targets.push(d);
+                }
+            }
+        }
+    }
+
+    let mut graph: Vec<Vec<usize>> = Vec::with_capacity(defined_funcs.len());
+    for func in defined_funcs {
+        let mut callees: Vec<usize> = Vec::new();
+        for op in &func.ops {
+            match op {
+                Operator::Call { function_index } => {
+                    if *function_index >= import_func_count {
+                        let d = (*function_index - import_func_count) as usize;
+                        if d < defined_funcs.len() && !callees.contains(&d) {
+                            callees.push(d);
+                        }
+                    }
+                }
+                Operator::CallIndirect { .. } => {
+                    for &t in &table_targets {
+                        if !callees.contains(&t) {
+                            callees.push(t);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        graph.push(callees);
+    }
+    graph
+}
+
+/// Tarjan's strongly-connected-components algorithm (iterative, to
+/// avoid recursion / stack growth in `#![no_std]`). Returns the list of
+/// SCCs; each SCC is a list of defined-function indices. The SCCs are
+/// produced in REVERSE-topological order (a property of Tarjan): an SCC
+/// is emitted only after all SCCs it depends on (its callees) have
+/// been emitted — exactly the callees-before-callers order phase 1
+/// wants.
+fn tarjan_sccs(graph: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let n = graph.len();
+    let mut index_of: Vec<Option<u32>> = (0..n).map(|_| None).collect();
+    let mut lowlink: Vec<u32> = alloc::vec![0; n];
+    let mut on_stack: Vec<bool> = alloc::vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut sccs: Vec<Vec<usize>> = Vec::new();
+    let mut next_index: u32 = 0;
+
+    // Explicit work stack: each frame is (node, next-child-cursor).
+    for start in 0..n {
+        if index_of[start].is_some() {
+            continue;
+        }
+        let mut work: Vec<(usize, usize)> = alloc::vec![(start, 0)];
+        while let Some(&(v, ci)) = work.last() {
+            if ci == 0 {
+                // First visit of v.
+                index_of[v] = Some(next_index);
+                lowlink[v] = next_index;
+                next_index = next_index.saturating_add(1);
+                stack.push(v);
+                on_stack[v] = true;
+            }
+
+            // Find the next unprocessed child.
+            if ci < graph[v].len() {
+                let w = graph[v][ci];
+                // Advance v's cursor before descending.
+                work.last_mut().unwrap().1 = ci + 1;
+                match index_of[w] {
+                    None => {
+                        // Descend into w.
+                        work.push((w, 0));
+                    }
+                    Some(w_idx) => {
+                        if on_stack[w] {
+                            // Back-edge into the current SCC stack.
+                            if w_idx < lowlink[v] {
+                                lowlink[v] = w_idx;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // All children processed; v is done. If v is an SCC
+                // root, pop the component.
+                if lowlink[v] == index_of[v].unwrap() {
+                    let mut component: Vec<usize> = Vec::new();
+                    loop {
+                        let w = stack.pop().expect("tarjan stack underflow");
+                        on_stack[w] = false;
+                        component.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+                    sccs.push(component);
+                }
+                work.pop();
+                // Propagate lowlink up to the parent.
+                if let Some(&(parent, _)) = work.last() {
+                    if lowlink[v] < lowlink[parent] {
+                        lowlink[parent] = lowlink[v];
+                    }
+                }
+            }
+        }
+    }
+    sccs
+}
+
+/// Order in which phase 1 should compute summaries: defined-function
+/// indices flattened from the SCCs in the order Tarjan produced them
+/// (reverse-topological — callees before callers).
+fn sccs_reverse_topo_order(sccs: &[Vec<usize>]) -> Vec<usize> {
+    let mut order: Vec<usize> = Vec::new();
+    for scc in sccs {
+        for &d in scc {
+            order.push(d);
+        }
+    }
+    order
+}
+
+/// Mark every function in a non-trivial SCC (size > 1, or a single
+/// node with a self-edge) as recursive. Recursive functions use the
+/// context-insensitive `top`-summary and are never re-evaluated
+/// context-sensitively, guaranteeing termination.
+fn recursive_flags_from_sccs(sccs: &[Vec<usize>], graph: &[Vec<usize>], n: usize) -> Vec<bool> {
+    let mut recursive: Vec<bool> = alloc::vec![false; n];
+    for scc in sccs {
+        if scc.len() > 1 {
+            for &d in scc {
+                recursive[d] = true;
+            }
+        } else if let Some(&d) = scc.first() {
+            // Singleton SCC: recursive only if it has a self-edge.
+            if graph.get(d).map(|cs| cs.contains(&d)).unwrap_or(false) {
+                recursive[d] = true;
+            }
+        }
+    }
+    recursive
 }
 
 /// Initial abstract value for a Wasm parameter of the given value
@@ -855,6 +1394,11 @@ fn zero_for(ty: wasmparser::ValType) -> AbstractValue {
 
 /// Interpret one operator. Mutates `ctx` and may push diagnostics.
 /// Returns whether the function loop should stop (e.g. `Return`).
+///
+/// `depth` is the current call-depth for FEAT-007 context-sensitive
+/// re-evaluation: a `call` to a small non-recursive callee re-runs the
+/// callee at `depth + 1`; beyond `REEVAL_MAX_DEPTH` re-eval is
+/// disabled and the callee's context-insensitive summary is used.
 #[allow(clippy::too_many_arguments)]
 fn interpret_op(
     op: &Operator<'_>,
@@ -865,6 +1409,7 @@ fn interpret_op(
     diagnostics: &mut Vec<Diagnostic>,
     module_ctx: &ModuleCtx<'_>,
     call_graph: &mut Vec<CallEdge>,
+    depth: u32,
 ) -> Result<StepOutcome, AnalyzeError> {
     let default_region = module_ctx.default_region;
     if ctx.degraded {
@@ -1017,7 +1562,7 @@ fn interpret_op(
                 "i64.store",
             )?;
         }
-        // ── v0.4 call-graph (FEAT-006) ───────────────────────────
+        // ── v0.4 call-graph (FEAT-006) + v0.5 summaries (FEAT-007) ──
         Operator::Call { function_index } => {
             handle_call(
                 ctx,
@@ -1028,7 +1573,8 @@ fn interpret_op(
                 module_ctx,
                 call_graph,
                 *function_index,
-            );
+                depth,
+            )?;
         }
         Operator::CallIndirect {
             type_index,
@@ -1376,13 +1922,29 @@ fn const_i32_offset(offset_expr: &wasmparser::ConstExpr<'_>) -> Option<i64> {
     }
 }
 
-/// Handle a direct `Call { function_index }` (FEAT-006). Records a
-/// trivially-sound single-target call-graph edge, then models the
-/// callee's operand-stack effect pessimistically: pop the callee's
-/// params, push `top` for each result (per the callee's type
-/// signature). The analyzer does NOT descend into the callee (no
-/// interprocedural value propagation — that is FEAT-007); modelling
-/// the result as `top` is sound. Never scrubs locals.
+/// Handle a direct `Call { function_index }` (FEAT-006 graph +
+/// FEAT-007 effect). Records a trivially-sound single-target
+/// call-graph edge, then applies the callee's abstract summary to the
+/// operand stack instead of v0.4's pessimistic `top` per result:
+///
+///   * pop the callee's params off the stack (capturing them as the
+///     call-site argument abstract values),
+///   * if the callee is small, non-recursive, the call-depth is below
+///     `REEVAL_MAX_DEPTH`, and at least one argument is more precise
+///     than `top`, perform a context-SENSITIVE re-evaluation — re-run
+///     the callee's intraprocedural fixpoint with the actual argument
+///     intervals bound to its params — and push the re-eval's result
+///     values (the precision win: `add_one({41,41})` pushes `{42,42}`),
+///   * otherwise push the callee's context-INSENSITIVE summary
+///     (`top`-input result values),
+///   * if no summary exists (an import, or a callee whose body we
+///     could not analyse), fall back to the v0.4 pessimistic `top`
+///     effect (sound).
+///
+/// Never scrubs locals. Soundness: the pushed result over-approximates
+/// `{ f(concrete) : concrete ∈ γ(args) }` because it is the result of
+/// the (sound) intraprocedural fixpoint run with params ⊒ the concrete
+/// arguments — see the module-level soundness argument.
 #[allow(clippy::too_many_arguments)]
 fn handle_call(
     ctx: &mut FuncCtx,
@@ -1393,7 +1955,8 @@ fn handle_call(
     module_ctx: &ModuleCtx<'_>,
     call_graph: &mut Vec<CallEdge>,
     callee_func_index: u32,
-) {
+    depth: u32,
+) -> Result<(), AnalyzeError> {
     call_graph.push(CallEdge {
         caller_func: func_index,
         pc,
@@ -1402,11 +1965,86 @@ fn handle_call(
         soundness: SoundnessTag::Sound,
     });
 
-    // Pessimistic stack effect from the callee's signature.
-    let sig = module_ctx
-        .signature_of_func(callee_func_index)
-        .map(|(p, r)| (p.len(), r.clone()));
-    apply_call_stack_effect(ctx, sig);
+    // Resolve the callee's signature. If unknown (import / unrecorded
+    // type), keep v0.4's behaviour: leave the operand stack untouched
+    // (sound for the straight-line core — see `apply_call_stack_effect`
+    // doc), record the edge, emit the diagnostic, done.
+    let Some((param_tys, _result_tys)) = module_ctx.signature_of_func(callee_func_index) else {
+        if emit_diagnostics {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Info,
+                func_index,
+                pc,
+                message: format!(
+                    "call resolved to 1 target (func {callee_func_index}, signature unknown — \
+                     import?); direct call edge recorded (sound)"
+                ),
+            });
+        }
+        return Ok(());
+    };
+    let param_count = param_tys.len();
+
+    // Pop the callee's params, top-of-stack last == last param.
+    let mut args: Vec<AbstractValue> = Vec::with_capacity(param_count);
+    for _ in 0..param_count {
+        args.push(ctx.operand_stack.pop().unwrap_or(AbstractValue::Unknown));
+    }
+    args.reverse(); // now in declaration order (param 0 first)
+
+    let summary = module_ctx.summary_by_abs(callee_func_index);
+    let callee = module_ctx.defined_by_abs(callee_func_index);
+
+    // Decide whether to re-evaluate context-sensitively.
+    let reeval_eligible = matches!(summary, Some(s) if s.context_sensitive)
+        && depth < REEVAL_MAX_DEPTH
+        && args.iter().any(is_more_precise_than_top);
+
+    let (results, how): (Vec<AbstractValue>, &str) = if reeval_eligible {
+        // Re-run the callee's fixpoint with the concrete arg intervals.
+        // `callee` is Some because a context-sensitive summary is only
+        // assigned to a defined function.
+        let callee = callee.expect("context-sensitive summary implies a defined callee");
+        let init_locals = arg_bound_locals(callee, &args);
+        let mut sink_diags: Vec<Diagnostic> = Vec::new();
+        let mut sink_edges: Vec<CallEdge> = Vec::new();
+        let final_stack = run_function_body(
+            callee,
+            init_locals,
+            module_ctx,
+            None,
+            &mut sink_diags,
+            &mut sink_edges,
+            /*emit_diagnostics=*/ false,
+            depth.saturating_add(1),
+        )?;
+        (
+            extract_results(&callee.results, &final_stack),
+            "context-sensitive re-eval",
+        )
+    } else if let Some(s) = summary {
+        // Context-insensitive `top`-input summary.
+        (
+            s.result_summary.iter().map(clone_value).collect(),
+            if s.recursive {
+                "context-insensitive summary (recursive callee)"
+            } else {
+                "context-insensitive summary"
+            },
+        )
+    } else {
+        // No summary at all (shouldn't happen for a defined function,
+        // but be defensive): pessimistic `top` per result.
+        let callee_results = callee.map(|c| c.results.clone()).unwrap_or_default();
+        (
+            callee_results.iter().map(|ty| top_for(*ty)).collect(),
+            "pessimistic top (no summary)",
+        )
+    };
+
+    for v in &results {
+        ctx.operand_stack.push(clone_value(v));
+    }
 
     if emit_diagnostics {
         diagnostics.push(Diagnostic {
@@ -1414,10 +2052,24 @@ fn handle_call(
             func_index,
             pc,
             message: format!(
-                "call resolved to 1 target (func {callee_func_index}); \
-                 direct call edge recorded (sound)"
+                "call resolved to 1 target (func {callee_func_index}); direct call edge \
+                 recorded (sound); result via {how}"
             ),
         });
+    }
+    Ok(())
+}
+
+/// True iff the abstract value carries information strictly stronger
+/// than `top` — i.e. a context-sensitive re-eval could improve over
+/// the context-insensitive summary. An i32/i64 interval that is not
+/// the full lattice top qualifies; `Unknown` and a top interval do
+/// not.
+fn is_more_precise_than_top(v: &AbstractValue) -> bool {
+    match v {
+        AbstractValue::I32Interval(iv) | AbstractValue::I64Interval(iv) => !interval_is_top(iv),
+        AbstractValue::RegionPointer(_) => true,
+        AbstractValue::Unknown => false,
     }
 }
 
@@ -1544,6 +2196,9 @@ fn emit_call_indirect_edge(
     table_len: u64,
 ) {
     let target_count = targets.len();
+    // Keep a copy of the resolved targets for the FEAT-007 summary
+    // join below; the `CallEdge` takes ownership of `targets`.
+    let resolved_targets = targets.clone();
     call_graph.push(CallEdge {
         caller_func: func_index,
         pc,
@@ -1579,43 +2234,100 @@ fn emit_call_indirect_edge(
         }
     }
 
-    // Pessimistic stack effect: pop the type's params, push `top`
-    // per result. (The index operand was already popped by the
-    // caller.)
+    // Stack effect (the index operand was already popped by the
+    // caller). FEAT-007: if the index is constrained to a known target
+    // set, push the JOIN of the resolved targets' context-insensitive
+    // summaries (sound — the runtime dispatches exactly one of them,
+    // and the join over-approximates every candidate). Scope
+    // discipline: indirect calls never trigger the context-sensitive
+    // re-eval path (that is direct, non-recursive, small callees only),
+    // so the join of `top`-input summaries is the precision available
+    // here. Fall back to pessimistic `top` when the index is
+    // unconstrained, the target set is empty, or any target lacks a
+    // summary (an import target, say).
     let sig = module_ctx
         .signature_of_type(type_index)
         .map(|(p, r)| (p.len(), r.clone()));
-    apply_call_stack_effect(ctx, sig);
-}
-
-/// Apply the pessimistic operand-stack effect of a call given the
-/// callee's `(param_count, result_types)` signature: pop
-/// `param_count` operands and push `top` for each result type
-/// (i32/i64 → interval top, anything else → `Unknown`). When the
-/// signature is unknown (`None` — e.g. an imported callee whose
-/// type index v0.4 did not record), we leave the operand stack
-/// untouched: pushing or popping a guessed arity could desync the
-/// stack model, and since every subsequent consumer of an
-/// unmodelled value already widens to `top`/fallback, leaving the
-/// stack as-is is sound for the v0.4 straight-line core.
-fn apply_call_stack_effect(
-    ctx: &mut FuncCtx,
-    signature: Option<(usize, Vec<wasmparser::ValType>)>,
-) {
-    let Some((param_count, results)) = signature else {
+    let Some((param_count, results)) = sig else {
         return;
     };
     for _ in 0..param_count {
         let _ = ctx.operand_stack.pop();
     }
-    for ty in &results {
-        ctx.operand_stack.push(match ty {
-            wasmparser::ValType::I32 => AbstractValue::I32Interval(domain::top()),
-            wasmparser::ValType::I64 => AbstractValue::I64Interval(domain::top()),
-            _ => AbstractValue::Unknown,
-        });
+
+    // Try to build a precise joined result from the resolved targets.
+    let joined = if !unconstrained && !resolved_targets.is_empty() {
+        join_target_summaries(module_ctx, &resolved_targets, &results)
+    } else {
+        None
+    };
+    match joined {
+        Some(values) => {
+            for v in &values {
+                ctx.operand_stack.push(clone_value(v));
+            }
+        }
+        None => {
+            for ty in &results {
+                ctx.operand_stack.push(top_for(*ty));
+            }
+        }
     }
 }
+
+/// Join (least-upper-bound) the context-insensitive summaries of a set
+/// of resolved `call_indirect` targets into one result vector
+/// (FEAT-007). Returns `None` if any target has no summary (e.g. an
+/// import) or its summary's result arity doesn't match `results` — the
+/// caller then falls back to pessimistic `top`. Sound because the
+/// concrete call dispatches exactly one target and the join
+/// over-approximates all candidates.
+fn join_target_summaries(
+    module_ctx: &ModuleCtx<'_>,
+    targets: &[u32],
+    results: &[wasmparser::ValType],
+) -> Option<Vec<AbstractValue>> {
+    let n = results.len();
+    // Seed with the first target's summary, then join the rest.
+    let first = module_ctx.summary_by_abs(*targets.first()?)?;
+    if first.result_summary.len() != n {
+        return None;
+    }
+    let mut acc: Vec<AbstractValue> = first.result_summary.iter().map(clone_value).collect();
+    for &t in &targets[1..] {
+        let s = module_ctx.summary_by_abs(t)?;
+        if s.result_summary.len() != n {
+            return None;
+        }
+        for (slot, v) in acc.iter_mut().zip(s.result_summary.iter()) {
+            *slot = join_abstract(slot, v);
+        }
+    }
+    Some(acc)
+}
+
+/// Least-upper-bound of two abstract values in matching domains. Used
+/// to merge `call_indirect` target summaries. When the two values are
+/// in different domains (shouldn't happen for a well-typed call), the
+/// result is `Unknown` (the conservative top of the variant lattice).
+fn join_abstract(a: &AbstractValue, b: &AbstractValue) -> AbstractValue {
+    match (a, b) {
+        (AbstractValue::I32Interval(x), AbstractValue::I32Interval(y)) => {
+            AbstractValue::I32Interval(domain::join(*x, *y))
+        }
+        (AbstractValue::I64Interval(x), AbstractValue::I64Interval(y)) => {
+            AbstractValue::I64Interval(domain::join(*x, *y))
+        }
+        _ => AbstractValue::Unknown,
+    }
+}
+
+// NOTE: v0.4's `apply_call_stack_effect` (pop params, push `top` per
+// result) is superseded by FEAT-007: `handle_call` applies the callee
+// summary / re-eval result, and `emit_call_indirect_edge` applies the
+// joined target summaries (falling back to `top_for` per result when
+// the index is unconstrained or a target lacks a summary). The
+// pessimistic `top` effect now lives inline in those two sites.
 
 /// Coarse human-readable name for an operator. wasmparser's
 /// `Operator` doesn't derive `Display`; the `Debug` impl is verbose

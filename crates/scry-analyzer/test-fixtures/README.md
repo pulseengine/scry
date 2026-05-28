@@ -72,6 +72,8 @@ than working around it here.
 | `fixture-03-region-bounds.md`     | expected operand-stack + diagnostic surface              |
 | `fixture-04-call-indirect.wat`    | v0.4 sound `call_indirect`: constant + unconstrained idx |
 | `fixture-04-call-indirect.md`     | expected call-graph edges + diagnostic surface           |
+| `fixture-05-interproc.wat`        | v0.5 summary-based interproc: `add_one(41)` → `{42,42}`  |
+| `fixture-05-interproc.md`         | expected summaries + context-sensitive re-eval + recursion |
 
 ## Adding fixtures
 
@@ -104,6 +106,16 @@ Keep fixtures inside the v0.3 supported instruction set:
   (constrained index, precise) or `Warning` (unconstrained index,
   whole-table over-approximation). Neither emits
   `UnsoundnessFallback`; neither scrubs locals.
+* **Interprocedural summaries** (v0.5 FEAT-007): a `call` to a small
+  non-recursive callee with concrete argument intervals now applies a
+  context-sensitive re-evaluation of the callee and pushes the precise
+  result interval (instead of v0.4's `top`); other callees use the
+  sound context-insensitive `top`-summary. Recursive callees (in a
+  non-trivial call-graph SCC) always use the `top`-summary,
+  guaranteeing termination. The fixture's `.md` should record the
+  expected `function-summaries` records (func-index / param-count /
+  result-summary / context-sensitive / recursive) and the call-site
+  result interval.
 
 Anything else hits the fallback path which should be called out
 explicitly in the `.md`.
