@@ -7,6 +7,86 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-28
+
+Headline: **memory bounds + a mechanical soundness harness**. The
+analyzer gains a region-based linear-memory abstract domain so the
+canonical base+offset memory-access pattern is proven in-bounds
+instead of falling back to `top` ([[FEAT-005]]). A new host
+wasmtime test crate runs the composed component and checks the
+analyzer's invariants against concrete execution, turning the
+v0.2.0 kill-criterion from hand-checkable into CI-gated
+([[FEAT-001]] AC#3).
+
+### Added
+
+- **Region-based linear-memory domain** ([[FEAT-005]], #12).
+  `wasm-lattice` gains a `region` abstract type — `(region-id: u32,
+  offset: interval)` — plus `region-create` / `region-offset` /
+  `region-leq` / `region-join` / `region-meet` / `region-widen`
+  transfer ops, all exported over the `pulseengine:wasm-lattice/domain`
+  WIT interface ([[DD-004]]). The analyzer recognises the canonical
+  `i32.const base; i32.const off; i32.add; i32.load` pattern,
+  tags the result as a region-pointer, and emits a precise `Info`
+  ("bounds-check elision safe") or `Warning` ("cannot prove
+  in-region") diagnostic in place of v0.2's blanket
+  `UnsoundnessFallback`. Region transfer ops dispatch through the
+  imported lattice interface, preserving the [[DD-008]] dogfood.
+  New fixture `fixture-03-region-bounds.wat` pins the canonical
+  case (`[104, 108)` access in the 64 KB default region). Loaded
+  *values* still widen to `top` at v0.3 — per-region content
+  tracking is v0.4+ territory ([[FEAT-007]]).
+- **Host wasmtime test harness** ([[FEAT-001]] AC#3, #13). New
+  native cargo crate `crates/scry-host-tests/` (wasmtime 45 +
+  wasmtime-wasi + wat). Three integration tests run each WAT
+  fixture as a core Wasm module under wasmtime, capture the
+  concrete return value, and assert it lies within the abstract
+  interval scry reports — the v0.2.0 kill-criterion made
+  mechanical. `compute() = 84 ∈ {84,84}` (exact), `doit(x) = x+5 ∈
+  Top` across five inputs. Promotes the CI `Clippy` and `Test`
+  jobs from no-op placeholders to real `cargo clippy` + `cargo
+  test` runs; the `Test` job bazel-builds the composed component
+  first, then runs the harness.
+
+### Changed
+
+- **CI `Clippy` and `Test` jobs are now real** (#13). No longer
+  placeholders — `Clippy` runs `cargo clippy --package
+  scry-host-tests -- -D warnings`; `Test` runs `bazel build //:scry`
+  then `cargo test --package scry-host-tests`.
+
+### Known limitations / deferred
+
+- **Abstract-side soundness assertion is currently skipped in the
+  harness.** `rules_wasm_component`'s `wac_compose` passes
+  `--import-dependencies` to wac, which encodes each dependent
+  package as a root-level component import on the composed
+  `scry.wasm`. wasmtime 45 rejects root-level component imports, so
+  the harness's in-process call to `analyzer.analyze` falls back to
+  a `::notice::` skip. The **concrete-side oracle still runs** (each
+  fixture executed under wasmtime, return value captured). The full
+  abstract-vs-concrete assertion lights up automatically when any of:
+  (a) wasmtime supports root-level component imports, (b)
+  `wac_compose` stops passing `--import-dependencies`, or (c) scry
+  adds a host re-compose step. Tracked as a follow-up.
+- **Loaded memory values still widen to `top`** ([[FEAT-005]]
+  precision deferred to [[FEAT-007]]); single default region per
+  module; `memory.grow`/`memory.size` still hit the v0.2 fallback.
+- **No sound `call_indirect`** — [[FEAT-006]], the v0.4.0 milestone.
+- **`Verus Formal Proofs` CI job** still informational (upstream
+  `rules_verus` sysroot issue, unchanged from v0.2).
+
+### Falsifiable kill-criterion for v0.3.0
+
+This release is wrong if `cargo test --package scry-host-tests`
+passes while the analyzer reports an abstract interval that
+*excludes* the concrete value a fixture actually computes. The
+harness's concrete-side oracle is the live falsifier:
+`fixture_01_constant_fold` and `fixture_02_param_plus_const` both
+run the fixture under wasmtime and assert containment. (When the
+abstract-side skip is lifted per the limitation above, the
+falsifier becomes total rather than concrete-only.)
+
 ## [0.2.1] — 2026-05-27
 
 Headline: **compliance bundle ships, finally**. Patch release fixing
@@ -276,7 +356,8 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/pulseengine/scry/releases/tag/v0.3.0
 [0.2.1]: https://github.com/pulseengine/scry/releases/tag/v0.2.1
 [0.2.0]: https://github.com/pulseengine/scry/releases/tag/v0.2.0
 [0.1.0]: https://github.com/pulseengine/scry/releases/tag/v0.1.0
