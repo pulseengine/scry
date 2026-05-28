@@ -31,3 +31,10 @@ anyhow = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wat = { workspace = true }
+
+# FEAT-008: contract test (tests/contract.rs) — native serde + jsonschema
+# validation of a representative analysis-result against the published
+# scry-invariants v1 JSON schema. Pure native, no wasmtime/component.
+serde = { workspace = true }
+serde_json = { workspace = true }
+jsonschema = { workspace = true }
