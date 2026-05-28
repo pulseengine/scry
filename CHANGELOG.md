@@ -7,6 +7,67 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-28
+
+Headline: **sound call graphs**. `call_indirect` — the dominant
+source of unsoundness across Wasm static analyzers ([[MF-003]], 83%
+of real Wasm uses it) — is now resolved soundly. scry intersects
+the operand-stack index interval with the function-table bounds and
+resolves the exact target set, dispatching through the same interval
+domain whose soundness FEAT-001 AC#1 established ([[FEAT-006]],
+[[AC-008]] Paccamiccio et al. 2024).
+
+### Added
+
+- **Sound `call_indirect` resolution** ([[FEAT-006]], #15). The
+  analyzer parses the table + active element segments in a pre-pass,
+  then on `call_indirect` clamps the top-of-stack index interval to
+  `[0, table_len)` and resolves the target set from the element
+  segments. A **constant index resolves to exactly one target**
+  (precise); an unconstrained index resolves to the whole table
+  (sound over-approximation, `Warning`-tagged). Both are tagged
+  `sound` — scry never produces the unsound *under*-approximation
+  that plagues other Wasm analyzers per [[MF-003]]. Direct `call`
+  also records a (trivially sound) single-target edge. `analysis-result`
+  gains a `call-graph: list<call-edge>` field; new `soundness-tag`
+  enum and `call-edge` record in the WIT. `CallIndirect` no longer
+  emits `UnsoundnessFallback`.
+  - Soundness argument: for any concrete execution reaching a
+    `call_indirect` with concrete index `k`, `k ∈ [lo,hi]` (the
+    interval is sound per [[FEAT-001]] AC#1), so the resolved target
+    set `{ table[j] : j ∈ [lo,hi] ∩ [0,table_len) }` includes
+    `table[k]`. Soundness reduces to interval-domain soundness.
+  - New fixture `fixture-04-call-indirect.wat`: a 3-entry funcref
+    table with a constant-index call (precise `{1}`) and an
+    unconstrained-param call (whole-table `{0,1,2}`).
+- **`CallEdge` / `CallGraph` in the AADL model** (`spar/scry.aadl`)
+  + a `callgraph_out` port wired through the analyzer process.
+
+### Known limitations / deferred
+
+- **No interprocedural value propagation.** FEAT-006 resolves the
+  call *graph*, not call *effects*: after a call, params are popped
+  and `top` is pushed per result (sound, pessimistic). Interprocedural
+  fixpoint via compositional summaries is [[FEAT-007]] (v0.5).
+- **Passive/declared element segments and non-constant active
+  offsets** resolve to whole-table over-approximation (sound,
+  imprecise). Constant active-offset segments are precise.
+- Abstract-side host-harness assertion still skipped (the v0.3
+  wac-compose/wasmtime-45 limitation, unchanged); the concrete-side
+  oracle continues to run.
+- `Verus Formal Proofs` CI job still informational (upstream
+  `rules_verus` sysroot issue).
+
+### Falsifiable kill-criterion for v0.4.0
+
+This release is wrong if there exists a concrete execution that
+reaches a `call_indirect` and dispatches to a function NOT in the
+target set scry resolved for that call site — i.e. if scry ever
+*under*-approximates a call graph. The soundness reduction above
+makes this checkable: any counterexample would also be a
+counterexample to the interval domain's soundness on the index
+operand, which `scry-host-tests` exercises.
+
 ## [0.3.0] — 2026-05-28
 
 Headline: **memory bounds + a mechanical soundness harness**. The
@@ -356,7 +417,8 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/pulseengine/scry/releases/tag/v0.4.0
 [0.3.0]: https://github.com/pulseengine/scry/releases/tag/v0.3.0
 [0.2.1]: https://github.com/pulseengine/scry/releases/tag/v0.2.1
 [0.2.0]: https://github.com/pulseengine/scry/releases/tag/v0.2.0
