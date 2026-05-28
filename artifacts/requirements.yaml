@@ -463,29 +463,65 @@ artifacts:
 
   - id: FEAT-007
     type: feature
-    title: "v0.4 — Compositional summary-based interprocedural AI"
-    status: proposed
+    title: "v0.5 — Compositional summary-based interprocedural AI"
+    status: draft
     description: >
       Implement per-function abstract summaries in the Stiévenart-De
-      Roover 2020 style: each function gets a summary describing the
-      abstract effect of its parameters and globals on its outputs and
-      side effects. Summaries are computed bottom-up over the (sound)
-      call graph from FEAT-006 and reused at every call site.
-      Recursive components are handled by widening at the recursion
-      frontier.
-    tags: [interprocedural, scalability, v0.4]
+      Roover 2020 style (AC-010): each function gets a summary
+      describing the abstract effect of its parameters on its outputs.
+      Summaries are computed bottom-up over the (sound) call graph from
+      FEAT-006, in reverse-topological order of the call-graph SCC
+      condensation (callees before callers, Tarjan), and reused at
+      every call site so a `call` / `call_indirect` no longer pushes
+      `top` per result. Recursive components (functions in a
+      non-trivial SCC, self- or mutually-recursive) are handled with
+      widening at the recursion frontier: they get the sound
+      context-insensitive `top`-summary and are never re-evaluated
+      context-sensitively — guaranteeing termination (REQ-001).
+
+      v0.5 narrow scope (this draft): the analysis becomes two-phase.
+      Phase 1 computes each function's context-INSENSITIVE summary by
+      running the intraprocedural fixpoint (FEAT-001 AC#1) with
+      parameters bound to `top`. Phase 2 is the existing per-function
+      walk, but at each call site it applies the callee's summary
+      instead of pushing `top`; for a small (≤ 64 ops), non-recursive
+      direct callee whose argument intervals are concrete it
+      additionally performs a context-SENSITIVE re-evaluation — re-run
+      the callee's fixpoint with the actual argument intervals bound to
+      its params, bounded by a call-depth backstop (≤ 8) — and uses
+      that strictly-more-precise result. The headline win:
+      `main() = add_one(41)` where `add_one(x) = x + 1` now infers
+      `{42, 42}` where v0.4 yielded `top`. A `call_indirect` to a
+      precisely-resolved target set applies the JOIN of the targets'
+      context-insensitive summaries (sound). A new `function-summaries`
+      field on `analysis-result` carries the per-function
+      `(func-index, param-count, result-summary, context-sensitive,
+      recursive)` records. Deferred to a later draft: full polyvariant
+      context-sensitivity, cross-component summaries, context-sensitive
+      re-eval through `call_indirect` / into recursive or oversized
+      callees, and the >=50k-instruction sub-linear-scaling and
+      >=60%-precise-summary benchmark targets (which need the corpus
+      milestone).
+    tags: [interprocedural, scalability, v0.5]
     fields:
       phase: phase-1
       acceptance-criteria:
-        - "Given a fused module of size >= 50k instructions, When scry runs with summary-based interprocedural analysis, Then analysis completes in time sub-linear in fused module size."
-        - "Given a benchmark suite of real PulseEngine fused modules, When summary precision is measured, Then >= 60% of summaries are computed precisely (Stiévenart 2020 reference number)."
+        - "Given `crates/scry-analyzer/test-fixtures/fixture-05-interproc.wat` (a module with `add_one(x) = x + 1` and `main() = add_one(41)`), When scry analyzes it, Then at the `call $add_one` site in `main` the operand-stack result is the precise interval `{42, 42}` (context-sensitive re-evaluation of the small non-recursive callee), where v0.4 pushed `top` — the interprocedural precision win."
+        - "Given the same fixture's self-recursive `factorial`, When scry analyzes it, Then `factorial` is flagged `recursive` in `analysis-result.function-summaries`, uses the sound context-insensitive `top`-summary (result-summary = `top`), is NEVER re-evaluated context-sensitively, and the analysis terminates (bounded by the SCC `recursive` flag plus the ≤ 8 call-depth and ≤ 64 op-count backstops)."
+        - "Given any Wasm module and any function `f`, When scry computes `summary_f`, Then `summary_f(args)` over-approximates `{ f(concrete) : concrete ∈ γ(args) }` — it is the result of the (sound, FEAT-001 AC#1) intraprocedural fixpoint run with params bound to `args`, with widening at recursion frontiers guaranteeing a sound post-fixpoint; applying `summary_f` at a call site is sound because the call-site arguments soundly abstract the concrete arguments."
+        - "Given a fused module of size >= 50k instructions, When scry runs with summary-based interprocedural analysis, Then analysis completes in time sub-linear in fused module size. (Deferred to the v0.5+ corpus milestone.)"
+        - "Given a benchmark suite of real PulseEngine fused modules, When summary precision is measured, Then >= 60% of summaries are computed precisely (Stiévenart 2020 reference number). (Deferred to the v0.5+ corpus milestone.)"
     links:
       - type: satisfies
         target: REQ-007
+      - type: satisfies
+        target: REQ-001
       - type: references-paper
         target: AC-010
       - type: depends-on
         target: FEAT-006
+      - type: depends-on
+        target: FEAT-001
 
   - id: FEAT-008
     type: feature

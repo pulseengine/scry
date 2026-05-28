@@ -159,17 +159,69 @@ interface analyzer {
         soundness: soundness-tag,
     }
 
+    /// Per-function abstract summary (FEAT-007). A summary is a sound
+    /// transfer function `summary_f : AbstractArgs -> AbstractResults`
+    /// that over-approximates every concrete input→output behaviour of
+    /// the function `f`. v0.5 computes summaries bottom-up over the
+    /// call-graph SCC condensation (callees before callers, FEAT-006
+    /// makes the graph sound) and reuses them at every call site so a
+    /// `call`/`call_indirect` no longer pushes `top` per result.
+    ///
+    /// The `result-summary` is the abstract value of each of the
+    /// function's results when the body's intraprocedural fixpoint is
+    /// run with the parameters bound to the most general input
+    /// (`top`). It is therefore the context-INSENSITIVE summary. When
+    /// a particular call site supplies concrete argument intervals and
+    /// the callee is non-recursive and small (≤ the op-count
+    /// threshold), the analyzer additionally re-runs the callee's
+    /// fixpoint with the actual argument intervals bound to its params
+    /// and uses that strictly-more-precise result at the call site —
+    /// but the summary recorded here is always the context-insensitive
+    /// `top`-input one, so the field has one well-defined value per
+    /// function regardless of how many sites call it.
+    record function-summary {
+        /// Absolute function index (imports + defined) the summary
+        /// describes. Imports have no body and get no summary.
+        func-index: u32,
+        /// Number of declared parameters of the function. Lets a
+        /// consumer line `result-summary` up against a call site's
+        /// argument vector.
+        param-count: u32,
+        /// Abstract value of each function result under the
+        /// context-insensitive (`top`-input) summary, in result
+        /// order. Empty for a function returning nothing.
+        result-summary: list<abstract-value>,
+        /// True iff the analyzer also applies a context-SENSITIVE
+        /// re-evaluation of this function at call sites with concrete
+        /// argument intervals (set for small non-recursive callees).
+        /// False means every call site uses the context-insensitive
+        /// summary above (recursive, oversized, or import callees).
+        context-sensitive: bool,
+        /// True iff the function is in a non-trivial call-graph SCC
+        /// (self- or mutually-recursive). Recursive functions always
+        /// use the context-insensitive `top`-summary computed with
+        /// widening at the recursion frontier — sound and terminating,
+        /// never the context-sensitive re-eval path.
+        recursive: bool,
+    }
+
     /// Full analyzer output for one analyze call. v0.4 (FEAT-006)
     /// adds the `call-graph` field: the list of resolved call-site
-    /// edges discovered during the abstract interpretation. The
-    /// field is additive over the v0.3 shape — consumers that only
-    /// read `invariants` / `diagnostics` keep working.
+    /// edges discovered during the abstract interpretation. v0.5
+    /// (FEAT-007) adds `function-summaries`: the per-function abstract
+    /// summary computed bottom-up over the call graph. Both fields are
+    /// additive over the earlier shape — consumers that only read
+    /// `invariants` / `diagnostics` keep working.
     record analysis-result {
         invariants: invariant-bundle,
         diagnostics: list<diagnostic>,
         /// Resolved call graph: one `call-edge` per `call` /
         /// `call_indirect` site visited during analysis.
         call-graph: list<call-edge>,
+        /// Per-function abstract summaries (FEAT-007): one entry per
+        /// defined (non-import) function, computed bottom-up over the
+        /// call-graph SCC condensation and applied at call sites.
+        function-summaries: list<function-summary>,
     }
 
     /// Reasons an analyze call can fail without producing a partial

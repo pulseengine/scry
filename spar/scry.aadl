@@ -96,6 +96,37 @@ public
       Data_Size => 4 MByte;  -- list of CallEdge records
   end CallGraph;
 
+  data FunctionSummary
+    -- v0.5 (FEAT-007): a per-function abstract summary — a sound
+    -- transfer function over-approximating every concrete
+    -- input→output behaviour of one function. Computed bottom-up
+    -- over the (sound) call graph from FEAT-006 in reverse-
+    -- topological order of the SCC condensation (callees before
+    -- callers) and reused at every call site so a `call` /
+    -- `call_indirect` no longer pushes `top` per result. Carries the
+    -- function index, parameter count, the per-result abstract value
+    -- under the context-insensitive (`top`-input) summary, and two
+    -- flags: `context-sensitive` (the analyzer additionally
+    -- re-evaluates this function at call sites with concrete argument
+    -- intervals — set for small non-recursive callees) and
+    -- `recursive` (the function is in a non-trivial call-graph SCC
+    -- and uses the sound context-insensitive summary computed with
+    -- widening at the recursion frontier, guaranteeing termination).
+    -- Emitted by the AnalyzerProcess as part of its analysis result.
+    properties
+      Data_Size => 4 KByte;  -- func idx + param count + result list + flags
+  end FunctionSummary;
+
+  data FunctionSummaries
+    -- v0.5 (FEAT-007): the module's set of per-function abstract
+    -- summaries — one FunctionSummary per defined (non-import)
+    -- function. Emitted alongside the InvariantBundle and CallGraph;
+    -- the substrate for cross-component interprocedural precision on
+    -- the fused multi-component modules meld produces.
+    properties
+      Data_Size => 16 MByte;  -- list of FunctionSummary records
+  end FunctionSummaries;
+
   -- ══════════════════════════════════════════════════════════════════
   -- Threads — one per component's primary worker
   -- ══════════════════════════════════════════════════════════════════
@@ -133,6 +164,9 @@ public
       -- v0.4 (FEAT-006): the resolved call graph emitted alongside
       -- the invariant bundle.
       callgraph_out:   out event data port CallGraph;
+      -- v0.5 (FEAT-007): the per-function abstract summaries emitted
+      -- alongside the invariant bundle and call graph.
+      summaries_out:   out event data port FunctionSummaries;
       -- Connection to LatticeOps. Modelled as a port pair; in the
       -- Component Model this is a WIT cross-component import.
       lattice_call_out: out event data port;
@@ -175,6 +209,7 @@ public
       invariants_out:  out event data port InvariantBundle;
       diagnostics_out: out event data port AnalysisDiagnostic;
       callgraph_out:   out event data port CallGraph;
+      summaries_out:   out event data port FunctionSummaries;
       lattice_call_out: out event data port;
       lattice_result_in: in event data port Interval;
   end AnalyzerProcess;
@@ -188,6 +223,7 @@ public
       c_invariants:    port analyzer_thread.invariants_out -> invariants_out;
       c_diagnostics:   port analyzer_thread.diagnostics_out -> diagnostics_out;
       c_callgraph:     port analyzer_thread.callgraph_out -> callgraph_out;
+      c_summaries:     port analyzer_thread.summaries_out -> summaries_out;
       c_lattice_call:  port analyzer_thread.lattice_call_out -> lattice_call_out;
       c_lattice_result: port lattice_result_in -> analyzer_thread.lattice_result_in;
   end AnalyzerProcess.IntervalV01;
@@ -203,6 +239,7 @@ public
       invariants_out:  out event data port InvariantBundle;
       diagnostics_out: out event data port AnalysisDiagnostic;
       callgraph_out:   out event data port CallGraph;
+      summaries_out:   out event data port FunctionSummaries;
   end Scry;
 
   system implementation Scry.V01
@@ -220,6 +257,7 @@ public
       s_invariants:    port analyzer.invariants_out -> invariants_out;
       s_diagnostics:   port analyzer.diagnostics_out -> diagnostics_out;
       s_callgraph:     port analyzer.callgraph_out -> callgraph_out;
+      s_summaries:     port analyzer.summaries_out -> summaries_out;
       -- Internal cross-component wiring (analyzer → lattice)
       s_lattice_call:  port analyzer.lattice_call_out -> lattice.op_in;
       s_lattice_result: port lattice.op_out -> analyzer.lattice_result_in;
