@@ -7,6 +7,73 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-28
+
+Headline: **interprocedural precision**. scry no longer throws away
+information at function-call boundaries. Per-function abstract
+summaries, computed bottom-up over the sound call graph from
+FEAT-006, let a call return a precise interval instead of `top`
+([[FEAT-007]], [[AC-010]] Stiévenart & De Roover SCAM 2020). The
+demonstrable win: `main()` calling `add_one(41)` now infers
+`{42, 42}` where v0.4.0 yielded `top`.
+
+### Added
+
+- **Compositional summary-based interprocedural analysis**
+  ([[FEAT-007]], #17). Two-phase: phase 1 computes a per-function
+  summary in reverse-topological order over the call-graph SCC
+  condensation (an iterative `#![no_std]`-safe Tarjan — callees
+  before callers); phase 2 is the existing per-function fixpoint,
+  but each call site applies the callee's summary instead of
+  pushing `top`. For small (≤64 op) non-recursive direct callees
+  with concrete arguments, scry re-evaluates the callee with the
+  actual argument intervals (context-sensitive precision). New
+  `function-summary` record + `function-summaries` field on
+  `analysis-result` in the WIT; `FunctionSummary` data type +
+  `summaries_out` port in the AADL model. New fixture
+  `fixture-05-interproc.wat` (precise `add_one(41) = {42,42}` plus
+  a recursive function whose summary is soundly `top`).
+  - Soundness: `summary_f(args)` over-approximates
+    `{ f(c) : c ∈ γ(args) }` because it is the intraprocedural
+    fixpoint (sound per [[FEAT-001]] AC#1) run with params bound to
+    `args`, with widening at recursion frontiers guaranteeing a
+    sound post-fixpoint. Applying it at a call site is sound because
+    the call-site arguments are themselves sound abstractions.
+    Reduces to interval-domain soundness + the sound call graph.
+  - Termination: functions in a non-trivial call-graph SCC use the
+    context-insensitive `top`-summary and are never re-evaluated;
+    re-eval is bounded by `REEVAL_MAX_DEPTH=8` and
+    `REEVAL_MAX_OPS=64` backstops. Provably terminating regardless
+    of SCC-detection correctness — worst case falls back to `top`.
+
+### Known limitations / deferred
+
+- **Context-insensitive for recursive / large / indirect callees.**
+  Functions in an SCC, beyond the 64-op threshold, or reached only
+  through `call_indirect` use the sound `top`-summary. Full
+  polyvariant context-sensitivity and re-eval through
+  `call_indirect` are future work.
+- **No cross-component summaries.** Summaries are computed within a
+  single fused module; cross-component summary reuse pairs with the
+  meld `component-provenance` story ([[DD-002]], meld#192) and is
+  deferred.
+- **The ≥50k-instruction / ≥60%-precise benchmark milestone** (the
+  [[AC-010]] corpus target) is not yet measured — needs a benchmark
+  harness over real fused PulseEngine modules.
+- Abstract-side host-harness assertion still skipped (wac-compose /
+  wasmtime-45 limitation, unchanged); concrete oracle runs.
+- `Verus Formal Proofs` CI job still informational.
+
+### Falsifiable kill-criterion for v0.5.0
+
+This release is wrong if, for any function `f` and concrete inputs
+`c`, scry's computed summary excludes the value `f(c)` actually
+produces — i.e. if an interprocedural result *under*-approximates.
+The `scry-host-tests` concrete oracle on `fixture-05` runs
+`main()` under wasmtime, observes `42`, and asserts `42` is within
+scry's interprocedurally-inferred `{42,42}` — exact match, so both
+soundness and the precision claim are checked in one shot.
+
 ## [0.4.0] — 2026-05-28
 
 Headline: **sound call graphs**. `call_indirect` — the dominant
@@ -417,7 +484,8 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/pulseengine/scry/releases/tag/v0.5.0
 [0.4.0]: https://github.com/pulseengine/scry/releases/tag/v0.4.0
 [0.3.0]: https://github.com/pulseengine/scry/releases/tag/v0.3.0
 [0.2.1]: https://github.com/pulseengine/scry/releases/tag/v0.2.1
