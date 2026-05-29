@@ -49,3 +49,8 @@ scry-provenance = { path = "../scry-provenance" }
 # `component-provenance` custom section and walk it back out with the
 # exact API the analyzer's pre-pass uses (Parser + CustomSection).
 wasmparser = { workspace = true }
+
+# FEAT-009: native falsification of the shipped security-label lattice
+# (the same scry-taint crate wasm-lattice's WIT `label-*` exports
+# delegate to) in tests/taint.rs.
+scry-taint = { path = "../scry-taint" }

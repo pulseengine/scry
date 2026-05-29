@@ -150,6 +150,49 @@ public
       Data_Size => 16 MByte;  -- list of (fused-idx, component-id, orig-idx) entries
   end ComponentProvenance;
 
+  data SecurityLabel
+    -- v0.8 (FEAT-009 / AC-007): a two-point security label from the
+    -- lattice low ⊑ high, exported by the LatticeProcess as part of
+    -- the taint/noninterference domain (label-bottom = low,
+    -- label-top = high, plus label-leq / label-join / label-meet).
+    -- The AnalyzerProcess lifts this label pointwise over operand-
+    -- stack and local values (a "shadow" taint state threaded
+    -- alongside the interval/region abstract value) and over the
+    -- control-context (program-counter) label, giving the implicit-
+    -- flow tracking that makes the result termination-insensitive
+    -- noninterference rather than mere explicit-flow taint. The
+    -- label composes WITH the interval and region domains rather
+    -- than replacing them.
+    properties
+      Data_Size => 1 Bytes;  -- a single low/high enum tag
+  end SecurityLabel;
+
+  data TaintPolicy
+    -- v0.8 (FEAT-009): the declared information-flow policy carried
+    -- into an analyze request — which function parameters are High
+    -- sources and which function results are Low sinks. Sourced from
+    -- the AnalysisConfig (additive config field). The AnalyzerProcess
+    -- seeds each analyzed function's parameter labels from the policy
+    -- and, at function exit, reports a noninterference violation when
+    -- a result slot declared Low carries the High label.
+    properties
+      Data_Size => 4 KByte;  -- lists of high-param / low-result indices
+  end TaintPolicy;
+
+  data TaintFindings
+    -- v0.8 (FEAT-009): the set of noninterference findings the
+    -- AnalyzerProcess emits — one TaintFinding per High→Low flow
+    -- reaching a declared Low sink (with the originating func index,
+    -- program-counter offset, and the source/sink labels). Emitted
+    -- alongside the InvariantBundle. Soundness (REQ-001, AC-007):
+    -- every concrete High→Low flow under termination-insensitive
+    -- assumptions is covered — the absence of a finding implies
+    -- noninterference; false alarms are possible, missed real flows
+    -- are not.
+    properties
+      Data_Size => 4 MByte;  -- list of TaintFinding records
+  end TaintFindings;
+
   -- ══════════════════════════════════════════════════════════════════
   -- Threads — one per component's primary worker
   -- ══════════════════════════════════════════════════════════════════
@@ -194,6 +237,11 @@ public
       -- when the analyzed fused module carried a `component-provenance`
       -- custom section.
       provenance_out:  out event data port ComponentProvenance;
+      -- v0.8 (FEAT-009): the declared information-flow policy (High
+      -- sources / Low sinks) carried in, and the noninterference
+      -- findings emitted out.
+      taint_policy_in:    in event data port TaintPolicy;
+      taintfindings_out:  out event data port TaintFindings;
       -- Connection to LatticeOps. Modelled as a port pair; in the
       -- Component Model this is a WIT cross-component import.
       lattice_call_out: out event data port;
@@ -238,6 +286,8 @@ public
       callgraph_out:   out event data port CallGraph;
       summaries_out:   out event data port FunctionSummaries;
       provenance_out:  out event data port ComponentProvenance;
+      taint_policy_in:    in event data port TaintPolicy;
+      taintfindings_out:  out event data port TaintFindings;
       lattice_call_out: out event data port;
       lattice_result_in: in event data port Interval;
   end AnalyzerProcess;
@@ -253,6 +303,8 @@ public
       c_callgraph:     port analyzer_thread.callgraph_out -> callgraph_out;
       c_summaries:     port analyzer_thread.summaries_out -> summaries_out;
       c_provenance:    port analyzer_thread.provenance_out -> provenance_out;
+      c_taint_policy:  port taint_policy_in -> analyzer_thread.taint_policy_in;
+      c_taintfindings: port analyzer_thread.taintfindings_out -> taintfindings_out;
       c_lattice_call:  port analyzer_thread.lattice_call_out -> lattice_call_out;
       c_lattice_result: port lattice_result_in -> analyzer_thread.lattice_result_in;
   end AnalyzerProcess.IntervalV01;
@@ -270,6 +322,8 @@ public
       callgraph_out:   out event data port CallGraph;
       summaries_out:   out event data port FunctionSummaries;
       provenance_out:  out event data port ComponentProvenance;
+      taint_policy_in:    in event data port TaintPolicy;
+      taintfindings_out:  out event data port TaintFindings;
   end Scry;
 
   system implementation Scry.V01
@@ -289,6 +343,8 @@ public
       s_callgraph:     port analyzer.callgraph_out -> callgraph_out;
       s_summaries:     port analyzer.summaries_out -> summaries_out;
       s_provenance:    port analyzer.provenance_out -> provenance_out;
+      s_taint_policy:  port taint_policy_in -> analyzer.taint_policy_in;
+      s_taintfindings: port analyzer.taintfindings_out -> taintfindings_out;
       -- Internal cross-component wiring (analyzer → lattice)
       s_lattice_call:  port analyzer.lattice_call_out -> lattice.op_in;
       s_lattice_result: port lattice.op_out -> analyzer.lattice_result_in;

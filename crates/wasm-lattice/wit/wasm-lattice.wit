@@ -16,6 +16,12 @@
 // force scry.wit's `use` to track and ripple through composition.wac
 // (which we explicitly don't touch in this PR).
 //
+// v0.8 (FEAT-009) adds the security-label (taint) domain — a two-point
+// lattice `low ⊑ high` plus label-bottom/top/leq/join/meet — additive
+// over v0.3 in the same way. The analyzer lifts it pointwise over
+// values and the control-context to give termination-insensitive
+// noninterference (the Wanilla CCS 2025 technique, AC-007).
+//
 // Per DD-004, this is a separate component (not just a crate) so that
 // downstream tools (witness coverage-gap prediction, synth codegen
 // invariant generation) can depend on the lattice via WIT without
@@ -163,6 +169,56 @@ interface domain {
     /// region-ids differ). Required for fixpoint termination
     /// when region-tagged values flow into loop headers.
     region-widen: func(a: region, b: region) -> region;
+
+    // ── Security-label (taint) domain (FEAT-009, v0.8) ─────────────
+    //
+    // A two-point security lattice `low ⊑ high` (the classic
+    // confidentiality ordering: `high` is secret, `low` is public).
+    // The analyzer lifts this label pointwise over operand-stack and
+    // local abstract values (a "shadow" taint state threaded
+    // alongside the interval/region value) AND over the control-
+    // context (program-counter) label, so it tracks both explicit
+    // data flows and the implicit flows that make the result a
+    // termination-insensitive *noninterference* analysis (the Wanilla
+    // CCS 2025 technique, AC-007) rather than mere explicit-flow
+    // taint. The label domain composes WITH the interval and region
+    // domains; it does not replace them.
+    //
+    // The lattice is intentionally minimal (height 1) so its algebra
+    // is mechanically falsifiable in full: bottom = low, top = high,
+    // join = logical OR, meet = logical AND, and `leq` is the chain
+    // order low ⊑ low ⊑ high ⊑ high. Multi-principal / lattice-of-
+    // sets labels are a later FEAT-009 slice.
+
+    /// A confidentiality label drawn from the two-point lattice
+    /// `low ⊑ high`. `high` over-approximates "may depend on a
+    /// declared secret source"; `low` means "provably public".
+    enum label {
+        low,
+        high,
+    }
+
+    /// The bottom element of the label lattice (`low`; ⊥). A value
+    /// with no secret dependence carries this label.
+    label-bottom: func() -> label;
+
+    /// The top element of the label lattice (`high`; ⊤). The sound
+    /// over-approximation for any value that may carry secret data.
+    label-top: func() -> label;
+
+    /// `a ⊑ b` on labels — the chain order `low ⊑ high`. True unless
+    /// `a` is `high` and `b` is `low`.
+    label-leq: func(a: label, b: label) -> bool;
+
+    /// `a ⊔ b` — least upper bound (`high` iff either operand is
+    /// `high`). This is the propagation rule for a value derived from
+    /// two operands: the result is secret if either input was.
+    label-join: func(a: label, b: label) -> label;
+
+    /// `a ⊓ b` — greatest lower bound (`low` iff either operand is
+    /// `low`). Provided for lattice completeness / the reduced-product
+    /// combinator; the forward taint propagation uses `label-join`.
+    label-meet: func(a: label, b: label) -> label;
 }
 
 world wasm-lattice {

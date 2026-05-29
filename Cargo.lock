@@ -1840,6 +1840,7 @@ dependencies = [
  "anyhow",
  "jsonschema",
  "scry-provenance",
+ "scry-taint",
  "serde",
  "serde_json",
  "wasmparser 0.247.0",
@@ -1850,6 +1851,10 @@ dependencies = [
 
 [[package]]
 name = "scry-provenance"
+version = "0.1.0"
+
+[[package]]
+name = "scry-taint"
 version = "0.1.0"
 
 [[package]]
@@ -2458,6 +2463,7 @@ name = "wasm-lattice"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "scry-taint",
 ]
 
 [[package]]

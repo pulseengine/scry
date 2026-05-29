@@ -24,6 +24,7 @@ members = [
     "crates/wasm-lattice",
     "crates/scry-analyzer",
     "crates/scry-provenance",
+    "crates/scry-taint",
     "crates/scry-host-tests",
 ]
 

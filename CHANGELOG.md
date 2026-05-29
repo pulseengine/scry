@@ -7,6 +7,68 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-29
+
+### Added
+
+- **Taint / noninterference domain (FEAT-009, AC-007 — Wanilla-class).**
+  A two-point security-label lattice `low ⊑ high` lifted pointwise over
+  values and the control-context, giving a sound *termination-insensitive
+  noninterference* analysis that composes with (does not replace) the
+  interval and region domains.
+  - **`scry-taint` crate.** A new pure, zero-dependency crate holding the
+    label-lattice algebra (`bottom`/`top`/`leq`/`join`/`meet`). Like
+    `scry-provenance`, it compiles to both `wasm32-wasip2` (where
+    `wasm-lattice`'s WIT `label-*` exports delegate to it, so the shipped
+    lattice code is exactly the falsified code) and natively (where the
+    host harness checks the lattice laws).
+  - **`wasm-lattice` label domain.** The `pulseengine:wasm-lattice/domain`
+    interface gains `label` + `label-bottom`/`label-top`/`label-leq`/
+    `label-join`/`label-meet`, dogfooded across the WIT boundary (DD-008)
+    like the interval/region ops.
+  - **Analyzer taint pass.** Opt-in via `analysis-config.taint-policy`
+    (declared High `high-params` sources / Low `low-results` sinks). A
+    dedicated shadow-taint walk propagates labels through the operand
+    stack and locals and — unlike the interval pass, which scrubs on
+    control flow — interprets structured `if`/`else`/`block`/`end` to
+    raise a control-context label, capturing the *implicit* flows that
+    distinguish noninterference from mere explicit-flow taint. A
+    noninterference finding is emitted when a declared Low result carries
+    the High label at exit, surfaced on the new additive
+    `analysis-result.taint-findings` field (and an additive
+    `taint-findings` block in the v1 invariant contract). Any unmodelled
+    operator (`loop`, `br*`, value-typed blocks, `call*`, memory/global
+    ops) conservatively raises the taint state to High — sound: it can
+    only add taint, never miss a flow.
+- AADL (`SecurityLabel` / `TaintPolicy` / `TaintFindings` data + ports),
+  rivet FEAT-009 flipped to `draft` with the narrow v0.8 scope, and the
+  capability ladder updated (`docs/roadmap.md`,
+  `docs/taint-noninterference-v1.md`).
+
+### Known limitations (deferred to a later FEAT-009 slice)
+
+- Tainted store/load tracking through linear memory (memory as a sink),
+  multi-principal / lattice-of-sets labels, value-sensitive
+  declassification, unstructured-control implicit flows (`loop` taint
+  fixpoint, `br_table` post-dominator analysis), and the Wanilla
+  shared-benchmark differential corpus (AC#2).
+- As with FEAT-008, the live `analyze()` round-trip stays gated by the
+  wac_compose / wasmtime-45 root-import limitation, so the lattice and
+  finding shapes are falsified natively (`crates/scry-taint` +
+  `crates/scry-host-tests/tests/taint.rs` + `tests/contract.rs`), not via
+  a live component call.
+
+### Falsifiable kill-criterion
+
+- The security-label lattice obeys its algebraic laws AND forward
+  propagation never moves *down* the lattice (`join` is an upper bound;
+  `high` is absorbing) — so a Low result is provably independent of every
+  High source and "absence of a finding implies noninterference" is
+  sound. Checked exhaustively over the (height-1) lattice in
+  `crates/scry-taint` (12 tests) and `crates/scry-host-tests/tests/taint.rs`
+  (6 tests); the `taint-finding` contract shape is pinned in
+  `tests/contract.rs`. If any law fails, the build goes red.
+
 ## [0.7.0] — 2026-05-29
 
 Headline: **the meld→scry typed boundary**. scry can now decode the
@@ -617,7 +679,8 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/pulseengine/scry/releases/tag/v0.8.0
 [0.7.0]: https://github.com/pulseengine/scry/releases/tag/v0.7.0
 [0.6.0]: https://github.com/pulseengine/scry/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pulseengine/scry/releases/tag/v0.5.0

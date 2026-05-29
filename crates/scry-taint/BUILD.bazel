@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# scry-taint — the pure security-label lattice (low ⊑ high) for the
+# FEAT-009 taint / noninterference domain. Mirrors scry-provenance:
+# a dependency-free crate that cross-compiles to wasm32-wasip2 (where
+# wasm-lattice delegates its WIT `label-*` exports to it) AND native
+# (where scry-host-tests falsifies the lattice laws). The shipped
+# lattice code is therefore exactly the natively-falsified code.
+
+rust_library(
+    name = "scry_taint",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_taint",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    tags = ["feat-009"],
+)
+
+rust_test(
+    name = "scry_taint_test",
+    crate = ":scry_taint",
+    edition = "2024",
+    tags = ["feat-009"],
+)

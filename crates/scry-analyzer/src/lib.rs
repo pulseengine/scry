@@ -166,7 +166,8 @@ use wasmparser::{Operator, Parser, Payload};
 use scry_analyzer_component_bindings::exports::pulseengine::scry::analyzer::{
     AbstractValue, AnalysisConfig, AnalysisResult, AnalyzeError, CallEdge, ComponentOrigin,
     ComponentProvenance, Diagnostic, DiagnosticSeverity, FunctionSummary, Guest, InvariantBundle,
-    LocalInvariant, ProgramPoint, SoundnessTag,
+    LocalInvariant, ProgramPoint, SecurityLabel, SoundnessTag, TaintFinding, TaintFindingKind,
+    TaintPolicy,
 };
 use scry_analyzer_component_bindings::pulseengine::wasm_lattice::domain::{self, Interval};
 // The pure meld<->scry boundary crate (DD-002 / FEAT-002): the binary
@@ -178,7 +179,7 @@ use scry_provenance::ComponentOrigin as ProvOrigin;
 
 struct Component;
 
-const SCRY_VERSION: &str = "0.7.0";
+const SCRY_VERSION: &str = "0.8.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -1118,6 +1119,31 @@ impl Guest for Component {
             }
         });
 
+        // ───────────────────────────────────────────────────────────
+        // FEAT-009 (AC-007): taint / noninterference domain. Opt-in via
+        // `config.taint-policy`. For each defined function we run a
+        // dedicated label-propagation walk (a "shadow" taint state over
+        // operand stack + locals, plus a control-context label for
+        // implicit flows) seeded from the declared High sources, and
+        // report a finding when a declared Low result carries the High
+        // label at exit. The label lattice operations are dogfooded
+        // across the wasm-lattice WIT boundary (DD-008) just like the
+        // interval ops — `domain::label_*`. When no policy is supplied
+        // the field is empty and behaviour is exactly as before.
+        // ───────────────────────────────────────────────────────────
+        let mut taint_findings: Vec<TaintFinding> = Vec::new();
+        if let Some(policy) = config.taint_policy.as_ref() {
+            for func in &defined_funcs {
+                run_taint_analysis(
+                    func,
+                    policy,
+                    config.emit_diagnostics,
+                    &mut diagnostics,
+                    &mut taint_findings,
+                );
+            }
+        }
+
         let invariants = InvariantBundle {
             schema: INVARIANT_SCHEMA_URL.to_string(),
             module_sha256,
@@ -1130,6 +1156,7 @@ impl Guest for Component {
             call_graph,
             function_summaries,
             provenance,
+            taint_findings,
         })
     }
 }
@@ -2426,6 +2453,407 @@ fn join_abstract(a: &AbstractValue, b: &AbstractValue) -> AbstractValue {
 /// (full payloads) and tends to balloon diagnostic strings. The set
 /// below is the one we expect to see most often via the fallback
 /// path; anything else falls through to a debug-ish label.
+// ════════════════════════════════════════════════════════════════════
+// FEAT-009 (AC-007): taint / noninterference domain.
+//
+// A dedicated label-propagation walk over one function body. The
+// interval pass scrubs to top on control flow; the taint pass instead
+// interprets *structured* control (empty-typed `block` / `if` / `else`
+// / `end`) so it can raise a control-context label and capture the
+// IMPLICIT flows that make the result a sound termination-insensitive
+// noninterference analysis rather than mere explicit-flow taint. Every
+// lattice operation is dogfooded across the wasm-lattice WIT boundary
+// (DD-008): the propagation calls `domain::label_join` / `label_bottom`
+// / `label_top` / `label_leq`, never a local lattice op.
+//
+// Scope (sound for everything; precise for a bounded set, mirroring the
+// interval pass): handled precisely are constants, `local.get/set/tee`,
+// `drop`, `select`, the pure i32/i64 arithmetic + bitwise + comparison
+// + conversion operators, and empty-typed structured `block`/`if`/
+// `else`/`end`. ANY other operator — `loop` (needs a taint fixpoint),
+// `br*`, value-typed blocks, `call*`, memory and global ops — degrades
+// the function's taint state to High (the sound top) and stops precise
+// tracking. Degrading can only ADD taint, so it never misses a flow
+// (REQ-001): the absence of a finding still implies noninterference.
+// ════════════════════════════════════════════════════════════════════
+
+/// A shadow taint value: a security label plus, when the label is High,
+/// whether the High-ness arrived (at least partly) through an implicit
+/// (control-context) flow. The label is the WIT-imported `domain::Label`
+/// so every combination goes through the lattice component.
+#[derive(Clone, Copy)]
+struct Taint {
+    label: domain::Label,
+    implicit: bool,
+}
+
+impl Taint {
+    fn low() -> Self {
+        Taint {
+            label: domain::label_bottom(),
+            implicit: false,
+        }
+    }
+}
+
+/// `true` iff the label is High — expressed via the dogfooded
+/// `label-leq`: High is exactly the elements not below ⊥ (`low`).
+fn taint_is_high(l: domain::Label) -> bool {
+    !domain::label_leq(l, domain::label_bottom())
+}
+
+/// Join two shadow values (explicit data flow): `label = a ⊔ b`, and
+/// the result is implicit-High only if its High-ness is owed to an
+/// implicit-High operand.
+fn taint_join(a: Taint, b: Taint) -> Taint {
+    let label = domain::label_join(a.label, b.label);
+    let implicit = (taint_is_high(a.label) && a.implicit) || (taint_is_high(b.label) && b.implicit);
+    Taint {
+        label,
+        implicit: taint_is_high(label) && implicit,
+    }
+}
+
+/// Store a value under a control context: `label = v ⊔ ctx`. If the
+/// High-ness comes from `ctx` (the value itself was Low) the flow is
+/// implicit; otherwise the value's own implicit-ness is inherited.
+fn taint_store(v: Taint, ctx: domain::Label) -> Taint {
+    let label = domain::label_join(v.label, ctx);
+    let from_ctx = taint_is_high(ctx) && !taint_is_high(v.label);
+    let implicit = from_ctx || (taint_is_high(v.label) && v.implicit);
+    Taint {
+        label,
+        implicit: taint_is_high(label) && implicit,
+    }
+}
+
+/// The taint stack-effect of one operator (see the module banner for
+/// the scope rationale). `Scrub` is the sound catch-all.
+enum TaintEff {
+    /// Push a provably-Low value (a constant).
+    PushLow,
+    /// Push the shadow label of a local.
+    PushLocal(u32),
+    /// Pop a value and store it (joined with the control context) into a
+    /// local; `keep` (for `local.tee`) leaves the value's data taint on
+    /// the stack.
+    StoreLocal { idx: u32, keep: bool },
+    /// Pop `n` operands, push their join (pure data flow). `n >= 1`.
+    Reduce(u8),
+    /// Pop one operand, discard it.
+    Drop,
+    /// No stack effect.
+    Nop,
+    /// Open an empty-typed `block` (control context unchanged).
+    OpenBlock,
+    /// Open an empty-typed `if`: pop the condition, raise the context.
+    OpenIf,
+    /// `else` — the alternate arm stays under the raised context.
+    Else,
+    /// `end` — close the innermost control frame, restoring its context.
+    End,
+    /// `return` / `unreachable` — stop the walk.
+    Stop,
+    /// Anything unmodelled: conservatively raise the whole taint state
+    /// to High (sound) and stop precise tracking.
+    Scrub,
+}
+
+fn taint_effect(op: &Operator<'_>) -> TaintEff {
+    match op {
+        Operator::I32Const { .. }
+        | Operator::I64Const { .. }
+        | Operator::F32Const { .. }
+        | Operator::F64Const { .. } => TaintEff::PushLow,
+
+        Operator::LocalGet { local_index } => TaintEff::PushLocal(*local_index),
+        Operator::LocalSet { local_index } => TaintEff::StoreLocal {
+            idx: *local_index,
+            keep: false,
+        },
+        Operator::LocalTee { local_index } => TaintEff::StoreLocal {
+            idx: *local_index,
+            keep: true,
+        },
+
+        Operator::Drop => TaintEff::Drop,
+        Operator::Nop => TaintEff::Nop,
+
+        // `select` pops two values + a condition and pushes one. Joining
+        // all three folds the (implicit) dependence on the condition into
+        // the result's data taint — sound and precise here.
+        Operator::Select | Operator::TypedSelect { .. } => TaintEff::Reduce(3),
+
+        // Binary numeric / bitwise / comparison operators: pop 2, push 1.
+        Operator::I32Add
+        | Operator::I32Sub
+        | Operator::I32Mul
+        | Operator::I32DivS
+        | Operator::I32DivU
+        | Operator::I32RemS
+        | Operator::I32RemU
+        | Operator::I32And
+        | Operator::I32Or
+        | Operator::I32Xor
+        | Operator::I32Shl
+        | Operator::I32ShrS
+        | Operator::I32ShrU
+        | Operator::I32Rotl
+        | Operator::I32Rotr
+        | Operator::I32Eq
+        | Operator::I32Ne
+        | Operator::I32LtS
+        | Operator::I32LtU
+        | Operator::I32GtS
+        | Operator::I32GtU
+        | Operator::I32LeS
+        | Operator::I32LeU
+        | Operator::I32GeS
+        | Operator::I32GeU
+        | Operator::I64Add
+        | Operator::I64Sub
+        | Operator::I64Mul
+        | Operator::I64DivS
+        | Operator::I64DivU
+        | Operator::I64RemS
+        | Operator::I64RemU
+        | Operator::I64And
+        | Operator::I64Or
+        | Operator::I64Xor
+        | Operator::I64Shl
+        | Operator::I64ShrS
+        | Operator::I64ShrU
+        | Operator::I64Rotl
+        | Operator::I64Rotr
+        | Operator::I64Eq
+        | Operator::I64Ne
+        | Operator::I64LtS
+        | Operator::I64LtU
+        | Operator::I64GtS
+        | Operator::I64GtU
+        | Operator::I64LeS
+        | Operator::I64LeU
+        | Operator::I64GeS
+        | Operator::I64GeU => TaintEff::Reduce(2),
+
+        // Unary numeric / test / conversion operators: pop 1, push 1.
+        Operator::I32Eqz
+        | Operator::I64Eqz
+        | Operator::I32Clz
+        | Operator::I32Ctz
+        | Operator::I32Popcnt
+        | Operator::I64Clz
+        | Operator::I64Ctz
+        | Operator::I64Popcnt
+        | Operator::I32WrapI64
+        | Operator::I64ExtendI32S
+        | Operator::I64ExtendI32U
+        | Operator::I32Extend8S
+        | Operator::I32Extend16S
+        | Operator::I64Extend8S
+        | Operator::I64Extend16S
+        | Operator::I64Extend32S => TaintEff::Reduce(1),
+
+        // Structured control — only the empty (no value) block type is
+        // modelled precisely; a value-producing block/if would perturb
+        // the stack-depth model, so it degrades (sound).
+        Operator::Block { blockty } => match blockty {
+            wasmparser::BlockType::Empty => TaintEff::OpenBlock,
+            _ => TaintEff::Scrub,
+        },
+        Operator::If { blockty } => match blockty {
+            wasmparser::BlockType::Empty => TaintEff::OpenIf,
+            _ => TaintEff::Scrub,
+        },
+        Operator::Else => TaintEff::Else,
+        Operator::End => TaintEff::End,
+        Operator::Return | Operator::Unreachable => TaintEff::Stop,
+
+        _ => TaintEff::Scrub,
+    }
+}
+
+/// Run the taint / noninterference walk over one function body
+/// (FEAT-009). Seeds the parameter labels from the policy, propagates
+/// labels (and the implicit-flow control context) through the body, and
+/// pushes a `TaintFinding` for every declared Low result that carries
+/// the High label at exit.
+fn run_taint_analysis(
+    func: &DefinedFunc<'_>,
+    policy: &TaintPolicy,
+    emit_diagnostics: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+    findings: &mut Vec<TaintFinding>,
+) {
+    // Seed local labels: declared High params → High (explicit source);
+    // every other param and all declared locals → Low.
+    let mut t_locals: Vec<Taint> =
+        Vec::with_capacity(func.params.len() + func.declared_locals.len());
+    for i in 0..func.params.len() {
+        if policy.high_params.contains(&(i as u32)) {
+            t_locals.push(Taint {
+                label: domain::label_top(),
+                implicit: false,
+            });
+        } else {
+            t_locals.push(Taint::low());
+        }
+    }
+    for _ in &func.declared_locals {
+        t_locals.push(Taint::low());
+    }
+
+    let mut t_stack: Vec<Taint> = Vec::new();
+    let mut ctx: domain::Label = domain::label_bottom();
+    let mut frames: Vec<domain::Label> = Vec::new();
+    let mut degraded = false;
+
+    let mut pc: u32 = 0;
+    for op in &func.ops {
+        if degraded {
+            pc = pc.saturating_add(1);
+            continue;
+        }
+        match taint_effect(op) {
+            TaintEff::PushLow => t_stack.push(Taint::low()),
+            TaintEff::PushLocal(idx) => {
+                let v = t_locals.get(idx as usize).copied().unwrap_or(Taint {
+                    label: domain::label_top(),
+                    implicit: false,
+                });
+                t_stack.push(v);
+            }
+            TaintEff::StoreLocal { idx, keep } => {
+                let v = t_stack.pop().unwrap_or(Taint {
+                    label: domain::label_top(),
+                    implicit: false,
+                });
+                let stored = taint_store(v, ctx);
+                if let Some(slot) = t_locals.get_mut(idx as usize) {
+                    *slot = stored;
+                }
+                if keep {
+                    t_stack.push(v);
+                }
+            }
+            TaintEff::Reduce(n) => {
+                let mut acc = Taint::low();
+                for _ in 0..n {
+                    let x = t_stack.pop().unwrap_or(Taint {
+                        label: domain::label_top(),
+                        implicit: false,
+                    });
+                    acc = taint_join(acc, x);
+                }
+                t_stack.push(acc);
+            }
+            TaintEff::Drop => {
+                let _ = t_stack.pop();
+            }
+            TaintEff::Nop => {}
+            TaintEff::OpenBlock => frames.push(ctx),
+            TaintEff::OpenIf => {
+                let cond = t_stack.pop().unwrap_or(Taint {
+                    label: domain::label_top(),
+                    implicit: false,
+                });
+                frames.push(ctx);
+                ctx = domain::label_join(ctx, cond.label);
+            }
+            TaintEff::Else => {}
+            TaintEff::End => {
+                if let Some(saved) = frames.pop() {
+                    ctx = saved;
+                }
+            }
+            TaintEff::Stop => break,
+            TaintEff::Scrub => {
+                if emit_diagnostics {
+                    diagnostics.push(Diagnostic {
+                        severity: DiagnosticSeverity::Info,
+                        func_index: func.abs_index,
+                        pc,
+                        message: format!(
+                            "taint: operator {} not modelled — taint state conservatively \
+                             raised to High (sound, FEAT-009)",
+                            op_name(op)
+                        ),
+                    });
+                }
+                for slot in t_locals.iter_mut() {
+                    *slot = Taint {
+                        label: domain::label_top(),
+                        implicit: false,
+                    };
+                }
+                t_stack.clear();
+                ctx = domain::label_top();
+                degraded = true;
+            }
+        }
+        pc = pc.saturating_add(1);
+    }
+
+    // Exit: the function results are the top `n_results` of the value
+    // stack (in order). If the body degraded or left an under-full stack
+    // (e.g. an early `return` / `unreachable`), every result is High —
+    // sound.
+    let n_results = func.results.len();
+    let mut result_taints: Vec<Taint> = Vec::with_capacity(n_results);
+    if !degraded && t_stack.len() >= n_results {
+        let start = t_stack.len() - n_results;
+        for t in &t_stack[start..] {
+            result_taints.push(*t);
+        }
+    } else {
+        for _ in 0..n_results {
+            result_taints.push(Taint {
+                label: domain::label_top(),
+                implicit: false,
+            });
+        }
+    }
+
+    // The exit pc is the function body's terminating `end`.
+    let exit_pc = func.ops.len().saturating_sub(1) as u32;
+    for &res_idx in &policy.low_results {
+        if let Some(t) = result_taints.get(res_idx as usize) {
+            if taint_is_high(t.label) {
+                let kind = if t.implicit {
+                    TaintFindingKind::HighResultImplicit
+                } else {
+                    TaintFindingKind::HighResultExplicit
+                };
+                let flow = if t.implicit { "implicit" } else { "explicit" };
+                findings.push(TaintFinding {
+                    func_index: func.abs_index,
+                    pc: exit_pc,
+                    kind,
+                    source_label: SecurityLabel::High,
+                    sink_label: SecurityLabel::Low,
+                    message: format!(
+                        "noninterference violation: result {res_idx} of function \
+                         {} is declared Low but carries High via an {flow} flow",
+                        func.abs_index
+                    ),
+                });
+                if emit_diagnostics {
+                    diagnostics.push(Diagnostic {
+                        severity: DiagnosticSeverity::Warning,
+                        func_index: func.abs_index,
+                        pc: exit_pc,
+                        message: format!(
+                            "taint: High→Low {flow} flow — result {res_idx} of function {} \
+                             leaks a declared High source (FEAT-009 / AC-007)",
+                            func.abs_index
+                        ),
+                    });
+                }
+            }
+        }
+    }
+}
+
 fn op_name(op: &Operator<'_>) -> &'static str {
     match op {
         Operator::Unreachable => "unreachable",

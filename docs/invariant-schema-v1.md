@@ -212,3 +212,28 @@ wasmtime 45 rejects (see the module-level doc in
 plus its mechanical validation against a representative value; wiring a live
 component round-trip is gated on the compose-toolchain fix. The loom-side
 consumption of this contract is tracked as a separate cross-repo issue.
+
+## v0.8 addition — taint-findings (FEAT-009)
+
+v0.8 adds one additive, optional top-level property, `taint-findings`
+(WIT `analysis-result.taint-findings: list<taint-finding>`), plus the
+`taint-finding`, `taint-finding-kind`, and `security-label` `$defs`. It
+is the serialized form of the noninterference findings the taint domain
+([[FEAT-009]], AC-007) emits when an `analysis-config.taint-policy` is
+supplied. Each entry maps to one declared Low sink that carries the High
+label:
+
+| JSON field | WIT field | Meaning |
+|---|---|---|
+| `func-index` | `taint-finding.func-index` | Function whose result violates the policy |
+| `pc` | `taint-finding.pc` | Program-counter of the violating site (the function `end`) |
+| `kind` | `taint-finding.kind` | `high-result-explicit` or `high-result-implicit` (data vs control-context flow) |
+| `source-label` | `taint-finding.source-label` | `security-label` of the offending value (`high`) |
+| `sink-label` | `taint-finding.sink-label` | declared `security-label` of the sink (`low`) |
+| `message` | `taint-finding.message` | Human-readable description |
+
+`taint-findings` is **not** in the schema's `required` set, so a v0.7
+document with no taint findings still validates — the property is
+backward-compatible. The shape is pinned by
+`crates/scry-host-tests/tests/contract.rs`
+(`taint_findings_optional_and_tight`).
