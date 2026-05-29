@@ -23,6 +23,7 @@ resolver = "3"
 members = [
     "crates/wasm-lattice",
     "crates/scry-analyzer",
+    "crates/scry-provenance",
     "crates/scry-host-tests",
 ]
 

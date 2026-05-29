@@ -7,6 +7,80 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-29
+
+Headline: **the meld→scry typed boundary**. scry can now decode the
+`component-provenance` custom section meld emits into a fused module and
+*project* every analyzed fused-module function index back to the
+component + function it was lowered from. This is the provenance-first
+slice of [[FEAT-002]] (Component-Model AI), realizing the option-(b)
+decision locked in [[DD-002]]: meld owns Core Wasm fusion correctness,
+scry owns Component-Model semantics, and the custom section is the typed
+contract between them.
+
+### Added
+
+- **`crates/scry-provenance`** — a pure, zero-dependency crate ([[FEAT-002]],
+  [[DD-002]]) defining the `component-provenance` section's binary format
+  (`SCPV` v1: magic + version + little-endian function-origin entries),
+  a strict `decode`, an `encode`, and the `project()` lookup. The *same
+  source* compiles into the `wasm32-wasip2` scry-analyzer component
+  (`#![no_std]` + `alloc`) and natively into the host harness, so the
+  contract is mechanically falsifiable on the cargo path. Carries inline
+  round-trip / strict-rejection / projection unit tests.
+- **Analyzer provenance pre-pass + projection** (`crates/scry-analyzer`).
+  The pre-pass decodes a `component-provenance` custom section via
+  `scry_provenance::decode` (a malformed section is a `Warning` + `none`,
+  never a partial parse); after the analysis phases, every analyzed fused
+  function is projected to its component origin via
+  `scry_provenance::project` and surfaced as a per-function diagnostic.
+- **WIT + contract additions** (additive, backward-compatible).
+  `analysis-result` gains `provenance: option<component-provenance>`
+  (records `component-provenance` / `component-origin`); the v1 JSON
+  contract (`contracts/scry-invariants-v1.schema.json`) gains an optional
+  `provenance` object — a v0.6 document with no `provenance` key still
+  validates.
+- **`docs/component-provenance-v1.md`** (`DOC-COMPONENT-PROVENANCE-V1`) —
+  the section's binary format, the meld⇄scry data flow (mermaid), and how
+  scry consumes it. `docs/invariant-schema-v1.md` extended with the
+  provenance field mapping.
+- **Native provenance test** (`crates/scry-host-tests/tests/provenance.rs`)
+  — exercises the boundary crate end-to-end, including round-tripping the
+  payload through a *real Wasm custom section* parsed back with the exact
+  `wasmparser` API the analyzer uses. The contract test gains a
+  `provenance_is_optional_and_tight` case. CI grows
+  `cargo clippy/test --package scry-provenance`.
+
+### Known limitations / deferred
+
+- **The meld-side section emitter is a separate cross-repo concern**
+  (the producer half), mirroring the [[FEAT-008]] / meld#192 pattern.
+  v0.7.0 ships scry's half: the format, the strict decoder, and the
+  projection primitive.
+- **Handle-state analysis is a later FEAT-002 slice.** The resource
+  handle lattice (fresh/owned/borrowed/dropped) + use-after-drop
+  detection (AC#1), host-call may-reach effect sets (AC#3), and WIT
+  refinement-predicate discharge (AC#4) are deferred.
+- **Projection validated against constructed origin tables**, not a live
+  `analyze()` call — the abstract-side host harness stays skipped on the
+  `wac_compose` root-import / wasmtime-45 limitation. The decode/project
+  mapping is well-defined and tested; live end-to-end projection lights
+  up when that limitation lifts.
+- `Verus Formal Proofs` CI job still informational.
+
+### Falsifiable kill-criterion for v0.7.0
+
+This release is wrong if a function-origin table that meld could
+legitimately emit fails to survive `decode(encode(x)) == x` lossless
+round-trip, or if `project()` ever mis-attributes a fused-module
+function index to the wrong component origin — or invents an origin for
+an unmapped index. The `crates/scry-provenance` unit tests and
+`crates/scry-host-tests/tests/provenance.rs` are the live falsifiers:
+they assert lossless round-trip (including through a real Wasm custom
+section), exact attribution, `None` for unmapped indices, and strict
+rejection of every malformed payload shape (bad magic, unknown version,
+truncation, trailing garbage).
+
 ## [0.6.0] — 2026-05-28
 
 Headline: **the analyzer→optimizer contract**. scry's invariant

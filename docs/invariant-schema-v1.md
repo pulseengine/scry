@@ -2,6 +2,7 @@
 id: DOC-INVARIANT-SCHEMA-V1
 type: spec
 status: draft
+title: scry invariant JSON-schema contract (v1)
 tags: [contract, loom, schema, v0.6]
 ---
 
@@ -36,7 +37,7 @@ v0.5, in the Stiévenart & De Roover summary style — [[AC-010]]). But making l
 link against scry's `wit-bindgen` output would couple the optimizer to scry's
 component ABI and release cadence. Per [[DD-007]], the analysis output is
 schema-stable and decoupled from the WIT: loom ingests a plain JSON document and
-validates it against this versioned schema. This mirrors FEAT-002 / meld#192,
+validates it against this versioned schema. This mirrors [[FEAT-002]] / meld#192,
 where the producer publishes the contract and the consumer side is a separate
 cross-repo concern.
 
@@ -51,11 +52,16 @@ union. Numeric widths are range-constrained in JSON (`u32`, `s64`).
 
 | WIT type / field | JSON encoding |
 | --- | --- |
-| `analysis-result` | object `{ "invariants", "diagnostics"?, "call-graph", "function-summaries" }` |
+| `analysis-result` | object `{ "invariants", "diagnostics"?, "call-graph", "function-summaries", "provenance"? }` |
 | `analysis-result.invariants: invariant-bundle` | `"invariants"` — object |
 | `analysis-result.diagnostics: list<diagnostic>` | `"diagnostics"` — array (optional; loom ignores it) |
 | `analysis-result.call-graph: list<call-edge>` | `"call-graph"` — array |
 | `analysis-result.function-summaries: list<function-summary>` | `"function-summaries"` — array |
+| `analysis-result.provenance: option<component-provenance>` | `"provenance"` — object (optional; [[FEAT-002]]) |
+| `component-provenance.origins: list<component-origin>` | `"origins"` — array |
+| `component-origin.fused-func-index: u32` | `"fused-func-index"` — integer u32 |
+| `component-origin.component-id: u32` | `"component-id"` — integer u32 |
+| `component-origin.orig-func-index: u32` | `"orig-func-index"` — integer u32 |
 | `invariant-bundle.schema: string` | `"schema"` — `const` = the v1 URI |
 | `invariant-bundle.module-sha256: string` | `"module-sha256"` — `^[0-9a-f]{64}$` (lowercase hex) |
 | `invariant-bundle.points: list<program-point>` | `"points"` — array |

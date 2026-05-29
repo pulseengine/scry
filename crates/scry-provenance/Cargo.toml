@@ -1,0 +1,19 @@
+[package]
+name = "scry-provenance"
+description = "Encode/decode + projection for meld's `component-provenance` custom section (DD-002, FEAT-002)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library. Intentionally zero dependencies: the same source compiles
+# both into the `wasm32-wasip2` scry-analyzer component (#![no_std] +
+# alloc) and natively into the scry-host-tests harness, so the
+# encode->decode->project round-trip is mechanically falsifiable on the
+# native cargo path even while the live component `analyze()` round-trip
+# stays blocked by the wac-compose / wasmtime-45 limitation.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

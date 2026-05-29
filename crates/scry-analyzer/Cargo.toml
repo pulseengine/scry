@@ -24,3 +24,10 @@ bitflags = { workspace = true }
 # rules_wasm_component.
 wasmparser = { workspace = true }
 sha2 = { workspace = true }
+
+# FEAT-002 (DD-002): the pure meld<->scry provenance boundary crate.
+# Same source compiles into this wasm32-wasip2 component and natively
+# into scry-host-tests. The Bazel build wires it via the
+# //crates/scry-provenance:scry_provenance rust_library target; this
+# path entry keeps the cargo metadata coherent.
+scry-provenance = { path = "../scry-provenance" }

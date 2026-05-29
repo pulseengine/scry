@@ -50,6 +50,10 @@ struct AnalysisResult {
     diagnostics: Vec<Diagnostic>,
     call_graph: Vec<CallEdge>,
     function_summaries: Vec<FunctionSummary>,
+    // FEAT-002: optional in the contract (WIT `option<component-provenance>`).
+    // Skipped when None so a v0.6-shaped document still validates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ComponentProvenance>,
 }
 
 #[derive(Serialize)]
@@ -127,6 +131,21 @@ struct FunctionSummary {
     result_summary: Vec<AbstractValue>,
     context_sensitive: bool,
     recursive: bool,
+}
+
+/// FEAT-002 — serde mirror of WIT `component-provenance` / `component-origin`.
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct ComponentProvenance {
+    origins: Vec<ComponentOrigin>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct ComponentOrigin {
+    fused_func_index: u32,
+    component_id: u32,
+    orig_func_index: u32,
 }
 
 // ── Schema location + representative value ───────────────────────────
@@ -252,6 +271,22 @@ fn representative_result() -> AnalysisResult {
                 recursive: true,
             },
         ],
+        // FEAT-002: a decoded component-provenance map attributing two
+        // fused functions to their originating components.
+        provenance: Some(ComponentProvenance {
+            origins: vec![
+                ComponentOrigin {
+                    fused_func_index: 0,
+                    component_id: 0,
+                    orig_func_index: 0,
+                },
+                ComponentOrigin {
+                    fused_func_index: 3,
+                    component_id: 1,
+                    orig_func_index: 1,
+                },
+            ],
+        }),
     }
 }
 
@@ -424,5 +459,60 @@ fn schema_rejects_malformed_instances() {
     assert!(
         !validator.is_valid(&base),
         "missing required call-graph must be rejected"
+    );
+}
+
+/// FEAT-002: the optional `provenance` field is backward-compatible and
+/// tightly typed. A document with no provenance (the v0.6 shape) still
+/// validates; a well-formed provenance map validates; a malformed one is
+/// rejected.
+#[test]
+#[allow(clippy::no_effect)]
+fn provenance_is_optional_and_tight() {
+    let validator = compile();
+
+    // With provenance (the representative value carries it).
+    let with_prov = serde_json::to_value(representative_result()).expect("serialize");
+    assert!(
+        with_prov.is_object() && with_prov.get("provenance").is_some(),
+        "representative value must carry provenance"
+    );
+    assert!(
+        validator.is_valid(&with_prov),
+        "a value WITH provenance must validate"
+    );
+
+    // Without provenance — a v0.6-shaped document. Backward compat: the
+    // optional field's absence must still validate.
+    let mut without_prov = with_prov.clone();
+    without_prov.as_object_mut().unwrap().remove("provenance");
+    assert!(
+        validator.is_valid(&without_prov),
+        "a v0.6 document with no provenance must still validate (backward compat)"
+    );
+
+    // Malformed: an origin missing a required field.
+    let mut bad = with_prov.clone();
+    bad["provenance"]["origins"][0] =
+        serde_json::json!({ "fused-func-index": 0, "component-id": 0 });
+    assert!(
+        !validator.is_valid(&bad),
+        "component-origin missing orig-func-index must be rejected"
+    );
+
+    // Malformed: an unexpected property on the closed origin object.
+    let mut bad = with_prov.clone();
+    bad["provenance"]["origins"][0]["bogus"] = serde_json::json!(1);
+    assert!(
+        !validator.is_valid(&bad),
+        "additionalProperties on component-origin must be rejected"
+    );
+
+    // Malformed: an unexpected property on the closed provenance object.
+    let mut bad = with_prov;
+    bad["provenance"]["extra"] = serde_json::json!(true);
+    assert!(
+        !validator.is_valid(&bad),
+        "additionalProperties on component-provenance must be rejected"
     );
 }
