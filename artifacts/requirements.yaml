@@ -525,23 +525,53 @@ artifacts:
 
   - id: FEAT-008
     type: feature
-    title: "v0.5 — loom integration: invariant schema + consumption"
-    status: proposed
+    title: "v0.6 — loom contract: published invariant JSON schema (v1)"
+    status: draft
     description: >
-      Define a stable on-disk JSON schema (v1) for scry's per-
-      instruction and per-function abstract invariants. Add loom's
-      side: ingest the JSON, attach invariants to loom's IR, use
-      them to strengthen the preconditions of bounds-check elision,
-      constant folding, and DCE transformations.
-    tags: [integration, loom, v0.5]
+      Publish a stable, versioned JSON schema (v1) for scry's per-
+      instruction and per-function abstract invariants so the loom
+      optimizer can validate scry output without coupling to scry's
+      WIT bindings. The v0.6 deliverable is the contract itself:
+      contracts/scry-invariants-v1.schema.json (JSON Schema draft
+      2020-12, $id https://pulseengine.eu/scry-invariants/v1),
+      documented field-by-field against the WIT analysis-result in
+      docs/invariant-schema-v1.md (DOC-INVARIANT-SCHEMA-V1). The
+      schema is the serialized form of the existing invariant-bundle
+      / call-graph / function-summaries types (no new WIT types). It
+      maps each invariant kind to a sound loom transform: a singleton
+      interval (lo == hi) enables constant folding; a region-pointer
+      whose offset is proven within the region size enables bounds-
+      check elision; a singleton, sound call-edge target set enables
+      devirtualization of call_indirect to a direct call. Loom-side
+      consumption of the contract is tracked as a separate cross-repo
+      issue (mirrors FEAT-002 / meld#192). Honest constraint: the
+      contract is validated against a HAND-CONSTRUCTED analysis-result
+      -shaped value, not a live analyze() run, because
+      rules_wasm_component's wac_compose emits root-level component
+      imports that wasmtime 45 rejects (the abstract-side host harness
+      is skipped — see crates/scry-host-tests/tests/soundness.rs).
+    tags: [integration, loom, contract, v0.5, v0.6]
     fields:
       phase: phase-1
       acceptance-criteria:
-        - "Given a meld→scry→loom pipeline run, When loom reports its applied transformations, Then loom names the scry invariants that enabled each invariant-dependent transformation."
-        - "Given the invariant schema, When loom is given a malformed or version-mismatched invariant file, Then loom refuses to apply invariant-dependent transformations and produces a clear error."
+        - "Given contracts/scry-invariants-v1.schema.json, When it is loaded as a JSON Schema, Then it is a valid draft 2020-12 schema declaring $id https://pulseengine.eu/scry-invariants/v1 and faithfully describes the WIT analysis-result (invariant-bundle, call-graph of call-edge, function-summaries of function-summary, abstract-value as a kind-tagged oneOf)."
+        - "Given a representative analysis-result-shaped value built with plain serde structs (independent of the WIT bindings), When the native contract test crates/scry-host-tests/tests/contract.rs serializes it via serde_json and validates it with the jsonschema crate, Then it validates against the v1 schema and the schema rejects malformed instances (bad kind, missing variant payload, additionalProperties, wrong schema URI, bad module-sha256, invalid soundness enum, missing required field)."
+        - "Given the v1 contract, When an invariant kind is read, Then the contract expresses each of the three loom transforms: a singleton interval (lo == hi) for constant folding (FEAT-001); a region-pointer with a bounded offset for bounds-check elision (FEAT-005); a singleton sound call-edge target set for devirtualizing call_indirect to call (FEAT-006)."
+        - "Given a meld→scry→loom pipeline run, When loom reports its applied transformations, Then loom names the scry invariants that enabled each invariant-dependent transformation. (Loom-side; deferred to the cross-repo loom-consumption issue.)"
+        - "Given the invariant schema, When loom is given a malformed or version-mismatched invariant file, Then loom refuses to apply invariant-dependent transformations and produces a clear error. (Loom-side; deferred to the cross-repo loom-consumption issue.)"
     links:
       - type: satisfies
         target: REQ-004
+      - type: traces-to
+        target: DD-007
+      - type: references-paper
+        target: AC-010
+      - type: depends-on
+        target: FEAT-001
+      - type: depends-on
+        target: FEAT-005
+      - type: depends-on
+        target: FEAT-006
 
   - id: FEAT-009
     type: feature

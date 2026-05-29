@@ -61,3 +61,17 @@ wasmtime = "45"
 wasmtime-wasi = "45"
 wat = "1"
 anyhow = "1"
+
+# ── FEAT-008: invariant JSON-schema contract validation (native) ─────
+# Consumed only by the native scry-host-tests crate's contract test
+# (tests/contract.rs). serde derives the representative analysis-result
+# structs, serde_json serializes them, and jsonschema validates the
+# serialized value against contracts/scry-invariants-v1.schema.json.
+# None of these reach the wasm32-wasip2 component build.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Pinned to =0.18.3 for a deterministic API surface. The contract test
+# uses the default-feature `JSONSchema::compile` + `is_valid` API, which
+# is available without the `resolve-*` features (the crate-root
+# `validator_for` / `Validator` re-exports are gated behind those).
+jsonschema = "=0.18.3"
