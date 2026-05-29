@@ -7,6 +7,81 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-05-29
+
+Headline: **relational reasoning + the first mechanized soundness proof**.
+Two legs of [[FEAT-010]] land together: the octagon relational abstract
+domain ([[AC-011]], Miné) and the first Rocq theorem proving scry's
+interval transfer functions are *sound* — they over-approximate the
+concrete integer semantics ([[AC-003]] / [[AC-001]]). Where the v0.2
+`Lattice.v` proved only the order laws, v0.9 proves the Galois
+soundness, including `add_sound` — the soundness of the interval `add`
+the analyzer reduces `i32.add`/`i64.add` to.
+
+### Added
+
+- **Octagon relational domain** ([[FEAT-010]], [[AC-011]]). New pure,
+  zero-dependency crate `crates/scry-octagon`: the standard
+  Difference-Bound-Matrix encoding of `±x±y ≤ c` constraints —
+  `top`/`bottom`/`is-bottom`, Floyd–Warshall `close`, `leq`/`join`
+  (pointwise max of closed DBMs, over-approximating the union)/`meet`
+  (pointwise min, exact intersection)/`widen` (keep-stable-drop-growing,
+  for fixpoint termination)/`add-bound`. Like `scry-taint` /
+  `scry-provenance`, the same source compiles to `wasm32-wasip2` (where
+  `wasm-lattice`'s new WIT `octagon` record + `octagon-*` ops delegate to
+  it — [[DD-008]] dogfood, so shipped == falsified code) and natively
+  (where the host harness checks the lattice laws AND concretization
+  soundness). The octagon crosses the WIT boundary as `(dim, list<s64>)`
+  because the DBM is variable-length. Composes with the interval/region/
+  taint domains rather than replacing them.
+- **Mechanized interval-domain soundness** ([[FEAT-010]] AC#2,
+  [[AC-003]]). `proofs/rocq/Soundness.v` proves, in Rocq with **no
+  admits and no axioms**, that the interval transfer functions
+  over-approximate the concrete integer semantics via a concretization
+  `γ`: `γ(⊥)=∅`, constant soundness, `⊑`→γ-inclusion (the Galois
+  order), `join` over-approximates the union, `meet` = intersection, and
+  `add_sound` (`za∈γ(a) → zb∈γ(b) → za+zb ∈ γ(a⊞b)`). Extends the v0.2
+  Rocq scaffold ([[FEAT-012]]). Verified by
+  `bazel test //proofs/rocq:soundness_test` (9 theorems, 9 `Qed`, 0
+  admits).
+- **AADL `data Octagon`** in `spar/scry.aadl` (the relational domain on
+  the lattice surface, mirroring `Interval`/`MemoryRegion`); rivet
+  FEAT-010 flipped to `draft` with the narrow v0.9 scope; new
+  `docs/octagon-and-soundness-v1.md` ([[DOC-OCTAGON-SOUNDNESS-V1]]);
+  roadmap capability ladder extended.
+
+### Known limitations (deferred to a later FEAT-010 slice)
+
+- The analyzer's **loop-carried relational fixpoint** (maintaining an
+  octagon over local pairs across loop iterations — AC#1's "across loop
+  iterations"). v0.9 ships the domain + WIT dogfood + native
+  falsification; wiring the relational fixpoint into the analyzer's
+  two-phase walk is next (mirrors how FEAT-008 shipped the contract
+  before the live `analyze()` path).
+- Miné's **strong/tight closure** (a precision, not soundness,
+  refinement).
+- Importing the **WasmCert-Coq** `i32` module ([[TE-004]]) as the
+  concrete model to mechanize the wrap-aware bounded `i32.add` transfer.
+  `Soundness.v` proves the unbounded/no-wrap core; the shipped `i32_add`
+  widens to `⊤` on possible wrap, which is trivially sound (`γ(⊤)=ℤ`).
+- As with FEAT-008, the live `analyze()` round-trip stays gated by the
+  wac_compose / wasmtime-45 limitation, so the octagon algebra is
+  falsified natively (`crates/scry-octagon` +
+  `crates/scry-host-tests/tests/octagon.rs`).
+
+### Falsifiable kill-criterion
+
+Two, both mechanical and CI-gated:
+1. **Octagon soundness:** closure preserves the concretization γ, `join`
+   over-approximates the union, `meet` is exactly the intersection, and
+   `add-bound` encodes the intended difference constraint — checked
+   against an independently-recomputed γ over dense concrete sweeps in
+   `crates/scry-octagon` and `crates/scry-host-tests/tests/octagon.rs`.
+   If any op drops a concrete point, the build goes red.
+2. **Interval soundness:** `proofs/rocq/Soundness.v` builds with no
+   admits and no axioms (`bazel test //proofs/rocq:soundness_test`). If
+   any γ-soundness theorem fails to close, the proof build goes red.
+
 ## [0.8.0] — 2026-05-29
 
 ### Added
@@ -679,7 +754,8 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/pulseengine/scry/releases/tag/v0.9.0
 [0.8.0]: https://github.com/pulseengine/scry/releases/tag/v0.8.0
 [0.7.0]: https://github.com/pulseengine/scry/releases/tag/v0.7.0
 [0.6.0]: https://github.com/pulseengine/scry/releases/tag/v0.6.0

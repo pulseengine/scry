@@ -193,6 +193,27 @@ public
       Data_Size => 4 MByte;  -- list of TaintFinding records
   end TaintFindings;
 
+  data Octagon
+    -- v0.9 (FEAT-010 / AC-011): the octagon relational abstract domain
+    -- (Miné HOSC 2006), exported by the LatticeProcess as part of the
+    -- relational-domain surface and consumed by the AnalyzerProcess.
+    -- An octagon tracks `±x±y ≤ c` constraints over a set of variables,
+    -- encoded as a Difference-Bound Matrix (DBM): for `dim` variables
+    -- the matrix is (2·dim)×(2·dim) of signed bounds (s64.MAX = +∞).
+    -- It is the mid-precision relational domain between the non-
+    -- relational Interval (above) and exponential-cost polyhedra, and
+    -- composes WITH the Interval and MemoryRegion domains rather than
+    -- replacing them. Like Interval/MemoryRegion it crosses the
+    -- LatticeProcess→AnalyzerProcess boundary on the existing lattice
+    -- port pair; the DBM algebra is dogfooded over the WIT
+    -- `octagon-*` ops (the pure scry-octagon crate). The mechanized
+    -- Rocq soundness theorem shipped alongside (proofs/rocq/
+    -- Soundness.v) is for the Interval transfer functions; the octagon
+    -- closure/join/meet/widen are falsified natively.
+    properties
+      Data_Size => 16 MByte;  -- variable-length DBM: (2·dim)^2 s64 entries
+  end Octagon;
+
   -- ══════════════════════════════════════════════════════════════════
   -- Threads — one per component's primary worker
   -- ══════════════════════════════════════════════════════════════════

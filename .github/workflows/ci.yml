@@ -83,6 +83,12 @@ jobs:
       # to it).
       - name: cargo clippy --package scry-taint
         run: cargo clippy --package scry-taint --all-targets -- -D warnings
+      # FEAT-010: the pure octagon relational-domain crate also lints on
+      # the cargo path (it compiles natively as well as to
+      # wasm32-wasip2, where wasm-lattice's WIT octagon-* exports
+      # delegate to it).
+      - name: cargo clippy --package scry-octagon
+        run: cargo clippy --package scry-octagon --all-targets -- -D warnings
 
   test:
     name: Test
@@ -135,6 +141,15 @@ jobs:
       # (tests/taint.rs) re-exercises it on the cargo path.
       - name: cargo test --package scry-taint
         run: cargo test --package scry-taint -- --nocapture
+      # FEAT-010: the octagon relational-domain kill-criterion — the DBM
+      # operations are sound w.r.t. the concretization γ (closure
+      # preserves γ; join over-approximates the union; meet =
+      # intersection). The same crate links into the wasm component; the
+      # host harness (tests/octagon.rs) re-exercises it on the cargo
+      # path. The Rocq interval-soundness proof
+      # (proofs/rocq/Soundness.v) is gated by the dedicated Rocq job.
+      - name: cargo test --package scry-octagon
+        run: cargo test --package scry-octagon -- --nocapture
 
   rivet-validate:
     name: Rivet artifact validation

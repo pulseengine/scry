@@ -54,3 +54,8 @@ wasmparser = { workspace = true }
 # (the same scry-taint crate wasm-lattice's WIT `label-*` exports
 # delegate to) in tests/taint.rs.
 scry-taint = { path = "../scry-taint" }
+
+# FEAT-010: native falsification of the shipped octagon relational
+# domain (the same scry-octagon crate wasm-lattice's WIT `octagon-*`
+# exports delegate to) in tests/octagon.rs.
+scry-octagon = { path = "../scry-octagon" }

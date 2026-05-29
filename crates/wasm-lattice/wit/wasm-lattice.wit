@@ -22,6 +22,12 @@
 // values and the control-context to give termination-insensitive
 // noninterference (the Wanilla CCS 2025 technique, AC-007).
 //
+// v0.9 (FEAT-010) adds the octagon relational domain — a DBM-encoded
+// `±x±y ≤ c` lattice plus octagon-top/bottom/is-bottom/close/leq/join/
+// meet/widen/add-bound — additive in the same way. It is the
+// mid-precision relational domain (Miné HOSC 2006, AC-011) and composes
+// with the interval/region/taint domains rather than replacing them.
+//
 // Per DD-004, this is a separate component (not just a crate) so that
 // downstream tools (witness coverage-gap prediction, synth codegen
 // invariant generation) can depend on the lattice via WIT without
@@ -219,6 +225,84 @@ interface domain {
     /// `low`). Provided for lattice completeness / the reduced-product
     /// combinator; the forward taint propagation uses `label-join`.
     label-meet: func(a: label, b: label) -> label;
+
+    // ── Octagon relational domain (FEAT-010, v0.9) ─────────────────
+    //
+    // The octagon domain (Miné HOSC 2006, AC-011) tracks relational
+    // constraints of the form `±x_i ± x_j ≤ c` over `dim` variables —
+    // the mid-precision relational domain between non-relational
+    // intervals and exponential-cost polyhedra. It composes WITH the
+    // interval and region domains (a reduced product), it does not
+    // replace them: intervals stay the default; the octagon is added
+    // where a relationship between two locals (or a memory offset and
+    // a length) must survive a join or a loop.
+    //
+    // Encoding: the standard Difference-Bound Matrix (DBM). Each
+    // variable `x_k` has a positive form at index `2k` and a negative
+    // form at `2k+1`; writing `v(2k) = x_k`, `v(2k+1) = -x_k`, the
+    // entry `m[i*n + j]` (n = 2·dim) is an upper bound on `v(j) - v(i)`,
+    // with the sentinel `s64::MAX` meaning "no bound" (+∞). The matrix
+    // is variable-length, so it crosses the boundary as `(dim, m)`
+    // rather than a fixed record of scalars.
+    //
+    // The algebra lives in the pure `scry-octagon` crate; these exports
+    // delegate to it (DD-008 dogfood), so the shipped relational code is
+    // exactly the code scry-host-tests falsifies natively. Soundness:
+    // `octagon-close` is Floyd–Warshall closure (never drops a concrete
+    // point; a negative diagonal marks ⊥); `octagon-join` is the
+    // pointwise max of closed DBMs (over-approximates the union);
+    // `octagon-meet` the pointwise min (exact intersection);
+    // `octagon-widen` keeps stable bounds and discards growing ones
+    // (fixpoint termination). Miné's strong/tight closure (a precision,
+    // not soundness, refinement) is a later FEAT-010 slice.
+
+    /// A relational octagon over `dim` variables, as a row-major
+    /// `(2·dim)²` Difference-Bound Matrix. `m` has length `(2·dim)²`;
+    /// `m[i*(2·dim) + j]` upper-bounds `v(j) - v(i)`; `s64` max value
+    /// is the +∞ ("no bound") sentinel.
+    record octagon {
+        dim: u32,
+        m: list<s64>,
+    }
+
+    /// The top octagon over `dim` variables — no constraints
+    /// (`γ = ℤ^dim`). Off-diagonal entries +∞, diagonal 0.
+    octagon-top: func(dim: u32) -> octagon;
+
+    /// A canonical bottom octagon over `dim` variables — infeasible
+    /// (`γ = ∅`), encoded by a negative diagonal entry.
+    octagon-bottom: func(dim: u32) -> octagon;
+
+    /// True iff the octagon is infeasible (empty concretization) —
+    /// detected by a negative diagonal entry.
+    octagon-is-bottom: func(o: octagon) -> bool;
+
+    /// Floyd–Warshall shortest-path closure: make every implied bound
+    /// explicit. Sound — never drops a concrete point. Idempotent.
+    octagon-close: func(o: octagon) -> octagon;
+
+    /// `a ⊑ b` — the octagon partial order (`γ(a) ⊆ γ(b)`), computed on
+    /// the closed form of `a`.
+    octagon-leq: func(a: octagon, b: octagon) -> bool;
+
+    /// `a ⊔ b` — least upper bound: pointwise max of the closed DBMs.
+    /// Over-approximates `γ(a) ∪ γ(b)` (sound).
+    octagon-join: func(a: octagon, b: octagon) -> octagon;
+
+    /// `a ⊓ b` — greatest lower bound: pointwise min of the DBMs (exact
+    /// intersection; may be ⊥, detectable via `octagon-close` +
+    /// `octagon-is-bottom`).
+    octagon-meet: func(a: octagon, b: octagon) -> octagon;
+
+    /// DBM widening: keep stable bounds, discard growing ones (→ +∞).
+    /// Guarantees fixpoint termination on the non-Noetherian octagon
+    /// lattice.
+    octagon-widen: func(a: octagon, b: octagon) -> octagon;
+
+    /// Tighten the octagon with the single bound `v(j) - v(i) ≤ c`
+    /// (DBM indices `i`, `j` in `[0, 2·dim)`). Out-of-range indices are
+    /// a sound no-op.
+    octagon-add-bound: func(o: octagon, i: u32, j: u32, c: s64) -> octagon;
 }
 
 world wasm-lattice {

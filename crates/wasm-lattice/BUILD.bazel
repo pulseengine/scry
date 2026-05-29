@@ -29,5 +29,11 @@ rust_wasm_component_bindgen(
     # delegate to it, so the shipped lattice code is exactly the code
     # scry-host-tests falsifies natively. Mirrors scry-analyzer's dep on
     # scry-provenance.
-    deps = ["//crates/scry-taint:scry_taint"],
+    deps = [
+        "//crates/scry-taint:scry_taint",
+        # FEAT-010: the octagon relational domain's DBM algebra — same
+        # pure-crate delegation pattern; the WIT `octagon-*` exports
+        # call into it.
+        "//crates/scry-octagon:scry_octagon",
+    ],
 )
