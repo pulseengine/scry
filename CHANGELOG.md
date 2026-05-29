@@ -7,6 +7,65 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-28
+
+Headline: **the analyzer→optimizer contract**. scry's invariant
+output is now a stable, versioned JSON-schema contract that loom (or
+any consumer) can validate against without coupling to scry's WIT
+types. Five releases of *proving* things — intervals, regions, call
+graphs, summaries — become a machine-consumable artifact another
+tool can act on ([[FEAT-008]], satisfies [[REQ-004]]).
+
+### Added
+
+- **Versioned invariant JSON-schema contract** ([[FEAT-008]], #19).
+  `contracts/scry-invariants-v1.schema.json` — JSON Schema draft
+  2020-12, `$id https://pulseengine.eu/scry-invariants/v1`,
+  `additionalProperties: false` throughout, faithful to the WIT
+  `analysis-result`. This is the URL the `invariant-bundle.schema`
+  field has carried since v0.1; v0.6.0 formally defines it.
+- **`docs/invariant-schema-v1.md`** (`DOC-INVARIANT-SCHEMA-V1`) —
+  the field-by-field WIT→JSON mapping, a mermaid scry→loom data-flow
+  diagram, a worked `fixture-01-constant-fold` example, and the
+  rationale tying each invariant kind to the loom transform it
+  unlocks:
+  - **singleton interval** (`lo == hi`) on an instruction result →
+    loom can **constant-fold** to `i32.const lo`.
+  - **in-region load** (region-pointer offset proven within
+    `memory.size`) → loom can **elide the bounds check**.
+  - **singleton call-edge target set** → loom can **devirtualize**
+    `call_indirect` to a direct `call`.
+- **Native contract test** (`crates/scry-host-tests/tests/contract.rs`)
+  — builds a representative `analysis-result` value, serializes it
+  via `serde_json`, validates against the schema with `jsonschema`,
+  and asserts 7 malformed instances are rejected. Runs in CI's Test
+  job (pure native serde+jsonschema; independent of the skipped
+  component-loading path).
+
+### Known limitations / deferred
+
+- **Loom-side consumption is a separate cross-repo issue** (filed
+  against `pulseengine/loom`, the FEAT-002/meld#192 pattern). v0.6.0
+  is scry's half of the contract: publish + validate the schema.
+  loom ingesting it to drive transforms + Z3 translation-validation
+  is loom's half.
+- **Contract validated against a hand-built `analysis-result`**, not
+  a live `analyze()` call — the abstract-side host harness stays
+  skipped on the `wac_compose` root-import / wasmtime-45 limitation.
+  The serialization mapping is well-defined and tested; live
+  end-to-end serialization lights up when that limitation lifts.
+- `Verus Formal Proofs` CI job still informational.
+
+### Falsifiable kill-criterion for v0.6.0
+
+This release is wrong if a representative `analysis-result` value —
+one the analyzer could legitimately emit — serializes to JSON that
+*fails* validation against `contracts/scry-invariants-v1.schema.json`,
+or if a structurally-malformed bundle *passes* it. The
+`crates/scry-host-tests/tests/contract.rs` suite is the live
+falsifier: it asserts both directions (valid bundle accepted, 7
+malformed bundles rejected).
+
 ## [0.5.0] — 2026-05-28
 
 Headline: **interprocedural precision**. scry no longer throws away
@@ -484,7 +543,8 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/pulseengine/scry/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pulseengine/scry/releases/tag/v0.5.0
 [0.4.0]: https://github.com/pulseengine/scry/releases/tag/v0.4.0
 [0.3.0]: https://github.com/pulseengine/scry/releases/tag/v0.3.0
