@@ -64,6 +64,22 @@ jobs:
           echo "VERSION=$TAG" >> "$GITHUB_ENV"
           echo "BARE_VERSION=$BARE" >> "$GITHUB_ENV"
 
+      - name: Install Nix
+        # FEAT-012: scry's MODULE.bazel registers the Rocq toolchain
+        # unconditionally (mirroring synth's pattern), which forces
+        # Bazel to resolve `@rocq_toolchains` (via rules_nixpkgs) during
+        # analysis even for `bazel build //:scry`. Without nix-build on
+        # PATH that resolution fails with "Platform is not supported:
+        # nix-build not found in PATH". The CI `bazel-build` and `test`
+        # jobs already install Nix for exactly this reason; the release
+        # job must too. Earlier releases only survived on a warm Bazel
+        # cache that already held the nix-fetched repo — a fragile
+        # accident that broke the moment a BUILD.bazel / Cargo.lock
+        # change rotated the cache key (v0.7.0).
+        uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
       - uses: bazelbuild/setup-bazelisk@v3
 
       - name: Cache Bazel
