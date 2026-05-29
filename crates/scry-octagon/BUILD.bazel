@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# scry-octagon — the pure octagon relational abstract domain (DBM;
+# ±x±y ≤ c) for FEAT-010. Mirrors scry-taint / scry-provenance: a
+# dependency-free crate that cross-compiles to wasm32-wasip2 (where
+# wasm-lattice delegates its WIT `octagon-*` exports to it) AND native
+# (where scry-host-tests falsifies the lattice laws + concretization
+# soundness). The shipped relational code is therefore exactly the
+# natively-falsified code.
+
+rust_library(
+    name = "scry_octagon",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_octagon",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    tags = ["feat-010"],
+)
+
+rust_test(
+    name = "scry_octagon_test",
+    crate = ":scry_octagon",
+    edition = "2024",
+    tags = ["feat-010"],
+)

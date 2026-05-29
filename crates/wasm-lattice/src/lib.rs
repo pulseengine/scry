@@ -9,8 +9,11 @@
 #![no_std]
 
 use wasm_lattice_component_bindings::exports::pulseengine::wasm_lattice::domain::{
-    Guest, Interval, Label, Region,
+    Guest, Interval, Label, Octagon, Region,
 };
+
+extern crate alloc;
+use alloc::vec::Vec;
 
 struct Component;
 
@@ -34,6 +37,23 @@ fn from_taint(l: scry_taint::Label) -> Label {
         scry_taint::Label::Low => Label::Low,
         scry_taint::Label::High => Label::High,
     }
+}
+
+// ── Octagon relational domain conversions (FEAT-010, v0.9) ──────────
+//
+// The DBM algebra lives in the pure `scry_octagon` crate so the code
+// shipped in this wasm32-wasip2 component is exactly the code
+// scry-host-tests falsifies natively. The only logic local to this
+// file is the trivial conversion between the WIT-generated `Octagon`
+// record (`dim` + flat `Vec<s64>`) and `scry_octagon::Octagon` (same
+// shape) — they are field-identical, so it is a move of `m`.
+
+fn to_oct(o: Octagon) -> scry_octagon::Octagon {
+    scry_octagon::Octagon { dim: o.dim, m: o.m }
+}
+
+fn from_oct(o: scry_octagon::Octagon) -> Octagon {
+    Octagon { dim: o.dim, m: o.m }
 }
 
 /// Bottom (empty) interval — the conventional encoding is { lo: 1, hi: 0 }.
@@ -332,6 +352,48 @@ impl Guest for Component {
 
     fn label_meet(a: Label, b: Label) -> Label {
         from_taint(scry_taint::meet(to_taint(a), to_taint(b)))
+    }
+
+    // ── Octagon relational domain (FEAT-010, v0.9) ─────────────────
+    //
+    // Delegated to the pure `scry_octagon` crate (see the conversion
+    // helpers above). The DBM-encoded `±x±y ≤ c` lattice; the shipped
+    // relational code is exactly the natively-falsified crate code.
+
+    fn octagon_top(dim: u32) -> Octagon {
+        from_oct(scry_octagon::top(dim))
+    }
+
+    fn octagon_bottom(dim: u32) -> Octagon {
+        from_oct(scry_octagon::bottom(dim))
+    }
+
+    fn octagon_is_bottom(o: Octagon) -> bool {
+        scry_octagon::is_bottom(&to_oct(o))
+    }
+
+    fn octagon_close(o: Octagon) -> Octagon {
+        from_oct(scry_octagon::close(&to_oct(o)))
+    }
+
+    fn octagon_leq(a: Octagon, b: Octagon) -> bool {
+        scry_octagon::leq(&to_oct(a), &to_oct(b))
+    }
+
+    fn octagon_join(a: Octagon, b: Octagon) -> Octagon {
+        from_oct(scry_octagon::join(&to_oct(a), &to_oct(b)))
+    }
+
+    fn octagon_meet(a: Octagon, b: Octagon) -> Octagon {
+        from_oct(scry_octagon::meet(&to_oct(a), &to_oct(b)))
+    }
+
+    fn octagon_widen(a: Octagon, b: Octagon) -> Octagon {
+        from_oct(scry_octagon::widen(&to_oct(a), &to_oct(b)))
+    }
+
+    fn octagon_add_bound(o: Octagon, i: u32, j: u32, c: i64) -> Octagon {
+        from_oct(scry_octagon::add_bound(&to_oct(o), i, j, c))
     }
 }
 

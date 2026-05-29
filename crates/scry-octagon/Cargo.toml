@@ -1,0 +1,21 @@
+[package]
+name = "scry-octagon"
+description = "Pure octagon relational abstract domain (DBM; ±x±y ≤ c) for scry (FEAT-010, Miné HOSC 2006 / AC-011)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library. Intentionally zero dependencies: the same source
+# compiles both into the wasm32-wasip2 wasm-lattice component
+# (#![no_std] + alloc, where it backs the WIT `octagon-*` exports) and
+# natively into the scry-host-tests harness, so the lattice laws and
+# concretization soundness are mechanically falsifiable on the native
+# cargo path even while the live component `analyze()` round-trip stays
+# blocked by the wac-compose / wasmtime-45 limitation. Mirrors
+# scry-taint / scry-provenance.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

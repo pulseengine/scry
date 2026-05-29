@@ -1,8 +1,11 @@
-# FEAT-012 — Rocq proof targets for scry's wasm-lattice interval domain.
+# Rocq proof targets for scry's wasm-lattice interval domain.
 #
-# Single-file proof at v0.2: `Lattice.v` mechanically proves that the
-# interval-lattice partial order `⊑` is reflexive. Full mechanized
-# soundness against WasmCert-Coq lands at v0.9 (FEAT-010).
+#   * `Lattice.v` (FEAT-012, v0.2): the interval-lattice partial order
+#     `⊑` is reflexive + transitive — lit up the Rocq toolchain.
+#   * `Soundness.v` (FEAT-010, v0.9): the mechanized *soundness* of the
+#     interval domain — γ-based over-approximation of bottom, constant,
+#     `⊑` (the Galois order), join, meet, and the `add` transfer
+#     function. No admits, no axioms (the FEAT-010 AC#2 kill-criterion).
 #
 # The Rocq toolchain is provided by rules_rocq_rust via Nix
 # (see `//:MODULE.bazel` — rules_rocq_rust @ 090b875c, nixpkgs
@@ -22,4 +25,17 @@ rocq_proof_test(
     name = "lattice_test",
     deps = [":lattice"],
     tags = ["rocq", "verification", "feat-012"],
+)
+
+# FEAT-010 (v0.9): mechanized interval-domain soundness.
+rocq_library(
+    name = "soundness",
+    srcs = ["Soundness.v"],
+    tags = ["rocq", "verification", "feat-010"],
+)
+
+rocq_proof_test(
+    name = "soundness_test",
+    deps = [":soundness"],
+    tags = ["rocq", "verification", "feat-010"],
 )

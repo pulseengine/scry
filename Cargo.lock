@@ -1839,6 +1839,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "jsonschema",
+ "scry-octagon",
  "scry-provenance",
  "scry-taint",
  "serde",
@@ -1848,6 +1849,10 @@ dependencies = [
  "wasmtime-wasi",
  "wat",
 ]
+
+[[package]]
+name = "scry-octagon"
+version = "0.1.0"
 
 [[package]]
 name = "scry-provenance"
@@ -2463,6 +2468,7 @@ name = "wasm-lattice"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "scry-octagon",
  "scry-taint",
 ]
 

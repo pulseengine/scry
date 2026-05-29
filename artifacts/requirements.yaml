@@ -676,19 +676,65 @@ artifacts:
   - id: FEAT-010
     type: feature
     title: "v0.9 — Octagon domain + mechanized soundness for interval domain"
-    status: proposed
+    status: draft
     description: >
-      Add the octagon abstract domain (Miné HOSC 2006) for relational
-      reasoning over Wasm memory offsets and call-table indices. In
-      parallel: land the first mechanized soundness theorem in Rocq,
-      proving the v0.1 interval domain over-approximates the
-      WasmCert-Coq operational semantics.
+      Add the octagon abstract domain (Miné HOSC 2006, AC-011) for
+      relational reasoning over Wasm memory offsets and call-table
+      indices, and land the first mechanized soundness theorem in Rocq
+      for the interval domain (AC-003 / TE-004). The octagon composes
+      with the interval and region domains rather than replacing them.
+
+      v0.9 narrow scope (this draft — the full FEAT-010 deliverable in
+      two legs, both falsified):
+
+      (1) Octagon relational domain. The pure, zero-dep `crates/scry-
+      octagon` crate implements the standard Difference-Bound-Matrix
+      (DBM) encoding of `±x±y ≤ c` constraints: `top`/`bottom`/
+      `is-bottom`, Floyd–Warshall `close`, `leq`/`join` (pointwise max
+      of closed DBMs, over-approximating the union)/`meet` (pointwise
+      min, exact intersection)/`widen` (keep-stable-drop-growing, for
+      fixpoint termination), and `add-bound`. Like scry-taint/scry-
+      provenance the same source compiles to wasm32-wasip2 — where the
+      `pulseengine:wasm-lattice/domain` interface's new `octagon` record
+      + `octagon-*` ops delegate to it (dogfooded across the WIT boundary
+      like the interval/region/label ops) — and natively,
+      where the host harness falsifies the lattice laws AND the
+      concretization soundness (`close` preserves γ; `join` over-
+      approximates the union; `meet` = intersection; `add-bound` encodes
+      a difference constraint) in `crates/scry-host-tests/tests/
+      octagon.rs`. The octagon record crosses the WIT boundary as
+      `(dim, list<s64>)` because the DBM is variable-length.
+
+      (2) Mechanized interval-domain soundness. `proofs/rocq/
+      Soundness.v` proves, in Rocq with NO admits and NO axioms, that
+      scry's interval transfer functions over-approximate the concrete
+      integer semantics via a concretization `γ : interval → Z → Prop`:
+      γ(⊥)=∅, constant soundness, `⊑`→γ-inclusion (the Galois order),
+      join over-approximates the union, meet = intersection, and the
+      key `add_sound` (`za∈γ(a) → zb∈γ(b) → za+zb ∈ γ(a⊞b)` — the
+      soundness of the interval `add` transfer the analyzer reduces
+      `i32.add`/`i64.add` to). Extends the v0.2 Rocq proof scaffold
+      (Lattice.v proved only the order laws); the proof-toolchain
+      dependency is recorded by the `depends-on` link below. Specified
+      in `docs/octagon-and-soundness-v1.md`.
+
+      Deferred to a later FEAT-010 slice: the analyzer's loop-carried
+      relational fixpoint that maintains an octagon over local pairs
+      across loop iterations (AC#1's "across loop iterations" — the
+      domain + WIT dogfood + native falsification ship now; wiring the
+      relational fixpoint into the analyzer's two-phase walk is the next
+      slice); Miné's strong/tight closure (a precision, not soundness,
+      refinement); and importing the WasmCert-Coq `i32` module as the
+      concrete model to mechanize the wrap-aware bounded `i32.add`
+      transfer (Soundness.v proves the unbounded/no-wrap core, and the
+      shipped `i32_add` widens to ⊤ on possible wrap, which is trivially
+      sound — γ(⊤)=ℤ).
     tags: [domains, mechanization, v0.9]
     fields:
       phase: phase-2
       acceptance-criteria:
-        - "Given a Wasm module where two locals are related by an octagon constraint, When scry runs with the interval+octagon product, Then the relational constraint is preserved across loop iterations without false widening."
-        - "Given the Rocq development atop WasmCert-Coq, When the soundness theorem of the interval domain is built, Then `make` succeeds with no admits or axioms."
+        - "Given a Wasm module where two locals are related by an octagon constraint, When scry runs with the interval+octagon product, Then the relational constraint is preserved across loop iterations without false widening. (v0.9 ships the octagon domain — DBM algebra + WIT dogfood + native concretization-soundness falsification; the analyzer's loop-carried relational fixpoint is the deferred next FEAT-010 slice.)"
+        - "Given the Rocq development, When the soundness theorem of the interval domain is built, Then it succeeds with no admits or axioms. (v0.9: proofs/rocq/Soundness.v proves γ-soundness of bottom/constant/⊑/join/meet/add via `bazel test //proofs/rocq:soundness_test`, 9 theorems, 0 admits, 0 axioms. Importing WasmCert-Coq as the concrete model for the wrap-aware bounded transfer is the deferred slice.)"
     links:
       - type: satisfies
         target: REQ-002
@@ -698,6 +744,16 @@ artifacts:
         target: AC-003
       - type: evaluates-tech
         target: TE-004
+      - type: depends-on
+        target: FEAT-001
+      - type: depends-on
+        target: FEAT-012
+      - type: traces-to
+        target: FEAT-003
+      # The octagon ops are dogfooded across the wasm-lattice WIT
+      # boundary (named DD-008 in the description); typed link records it.
+      - type: traces-to
+        target: DD-008
 
   - id: FEAT-011
     type: feature

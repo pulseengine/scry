@@ -19,3 +19,6 @@ bitflags = { workspace = true }
 # exports to this pure crate, so the shipped lattice code is exactly
 # the code scry-host-tests falsifies natively.
 scry-taint = { path = "../scry-taint" }
+# FEAT-010: same pattern for the octagon relational domain — the WIT
+# `octagon-*` exports delegate to this pure DBM crate.
+scry-octagon = { path = "../scry-octagon" }
