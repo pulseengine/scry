@@ -1,0 +1,20 @@
+[package]
+name = "scry-taint"
+description = "Pure security-label lattice (low ⊑ high) for scry's taint / noninterference domain (FEAT-009, AC-007)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library. Intentionally zero dependencies: the same source
+# compiles both into the wasm32-wasip2 wasm-lattice component
+# (#![no_std], where it backs the WIT `label-*` exports) and natively
+# into the scry-host-tests harness, so the lattice laws are
+# mechanically falsifiable on the native cargo path even while the live
+# component `analyze()` round-trip stays blocked by the wac-compose /
+# wasmtime-45 limitation. Mirrors scry-provenance.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

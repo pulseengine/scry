@@ -54,6 +54,28 @@ struct AnalysisResult {
     // Skipped when None so a v0.6-shaped document still validates.
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ComponentProvenance>,
+    // FEAT-009: optional in the contract (WIT `list<taint-finding>`;
+    // empty when no policy/violation). Additive — a v0.7 document with
+    // no taint-findings still validates.
+    #[serde(rename = "taint-findings", skip_serializing_if = "Vec::is_empty")]
+    taint_findings: Vec<TaintFinding>,
+}
+
+/// FEAT-009 — serde mirror of WIT `taint-finding`. The `kind`,
+/// `source-label`, and `sink-label` enums are modelled as strings; the
+/// schema's enum constraint is what pins their legal values.
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct TaintFinding {
+    func_index: u32,
+    pc: u32,
+    /// "high-result-explicit" | "high-result-implicit".
+    kind: String,
+    /// Always "high" for a finding.
+    source_label: String,
+    /// Always "low" for a finding.
+    sink_label: String,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -287,6 +309,18 @@ fn representative_result() -> AnalysisResult {
                 },
             ],
         }),
+        // FEAT-009: a representative noninterference finding — function
+        // 3's Low-declared result carries High via an implicit flow.
+        taint_findings: vec![TaintFinding {
+            func_index: 3,
+            pc: 7,
+            kind: "high-result-implicit".to_string(),
+            source_label: "high".to_string(),
+            sink_label: "low".to_string(),
+            message: "result 0 of function 3 is declared Low but carries High via an \
+                      implicit flow"
+                .to_string(),
+        }],
     }
 }
 
@@ -514,5 +548,68 @@ fn provenance_is_optional_and_tight() {
     assert!(
         !validator.is_valid(&bad),
         "additionalProperties on component-provenance must be rejected"
+    );
+}
+
+/// FEAT-009: the optional `taint-findings` field is backward-compatible
+/// and tightly typed. A v0.7-shaped document with no taint-findings
+/// still validates; a well-formed finding validates; malformed findings
+/// (bad enum, missing field, additionalProperties) are rejected.
+#[test]
+fn taint_findings_optional_and_tight() {
+    let validator = compile();
+
+    // With taint-findings (the representative value carries one).
+    let with_tf = serde_json::to_value(representative_result()).unwrap();
+    assert!(
+        with_tf.get("taint-findings").is_some(),
+        "representative value must carry taint-findings"
+    );
+    assert!(
+        validator.is_valid(&with_tf),
+        "a value WITH taint-findings must validate"
+    );
+
+    // Without taint-findings — a v0.7-shaped document. Backward compat.
+    let mut without = with_tf.clone();
+    without.as_object_mut().unwrap().remove("taint-findings");
+    assert!(
+        validator.is_valid(&without),
+        "a v0.7 document with no taint-findings must still validate (backward compat)"
+    );
+
+    // Malformed: an unknown `kind` enum value.
+    let mut bad = with_tf.clone();
+    bad["taint-findings"][0]["kind"] = serde_json::json!("high-result-sideways");
+    assert!(
+        !validator.is_valid(&bad),
+        "an unknown taint-finding-kind must be rejected"
+    );
+
+    // Malformed: an illegal security-label value.
+    let mut bad = with_tf.clone();
+    bad["taint-findings"][0]["source-label"] = serde_json::json!("secret");
+    assert!(
+        !validator.is_valid(&bad),
+        "an illegal security-label must be rejected"
+    );
+
+    // Malformed: a missing required field.
+    let mut bad = with_tf.clone();
+    bad["taint-findings"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("message");
+    assert!(
+        !validator.is_valid(&bad),
+        "a taint-finding missing `message` must be rejected"
+    );
+
+    // Malformed: an unexpected property on the closed taint-finding.
+    let mut bad = with_tf.clone();
+    bad["taint-findings"][0]["bogus"] = serde_json::json!(true);
+    assert!(
+        !validator.is_valid(&bad),
+        "additionalProperties on taint-finding must be rejected"
     );
 }

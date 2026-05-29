@@ -4,7 +4,11 @@
   "title": "scry analysis-result (invariant contract v1)",
   "description": "Stable, versioned JSON form of scry's `analysis-result` (crates/scry-analyzer/wit/scry.wit). Published for downstream optimizers (loom) and verifiers (witness) so they can consume scry invariants without coupling to scry's WIT bindings. FEAT-008. This schema is the serialized form of the existing InvariantBundle / CallGraph / FunctionSummaries types; it introduces no new types.",
   "type": "object",
-  "required": ["invariants", "call-graph", "function-summaries"],
+  "required": [
+    "invariants",
+    "call-graph",
+    "function-summaries"
+  ],
   "additionalProperties": false,
   "properties": {
     "invariants": {
@@ -14,21 +18,33 @@
     "diagnostics": {
       "description": "WIT field `analysis-result.diagnostics: list<diagnostic>`. Optional in the contract: loom does not consume diagnostics, but they may be present.",
       "type": "array",
-      "items": { "$ref": "#/$defs/diagnostic" }
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
     },
     "call-graph": {
       "description": "WIT field `analysis-result.call-graph: list<call-edge>` (FEAT-006).",
       "type": "array",
-      "items": { "$ref": "#/$defs/call-edge" }
+      "items": {
+        "$ref": "#/$defs/call-edge"
+      }
     },
     "function-summaries": {
       "description": "WIT field `analysis-result.function-summaries: list<function-summary>` (FEAT-007).",
       "type": "array",
-      "items": { "$ref": "#/$defs/function-summary" }
+      "items": {
+        "$ref": "#/$defs/function-summary"
+      }
     },
     "provenance": {
       "description": "WIT field `analysis-result.provenance: option<component-provenance>` (FEAT-002). Optional in the contract: present only when the analyzed module carried a well-formed `component-provenance` custom section emitted by meld. A v0.6 document with no provenance still validates.",
       "$ref": "#/$defs/component-provenance"
+    },
+    "taint-findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/taint-finding"
+      }
     }
   },
   "$defs": {
@@ -45,7 +61,11 @@
     "invariant-bundle": {
       "type": "object",
       "description": "WIT record `invariant-bundle`: per-program-point abstract values (FEAT-001/FEAT-005).",
-      "required": ["schema", "module-sha256", "points"],
+      "required": [
+        "schema",
+        "module-sha256",
+        "points"
+      ],
       "additionalProperties": false,
       "properties": {
         "schema": {
@@ -61,14 +81,20 @@
         "points": {
           "type": "array",
           "description": "Per-program-point invariants. Order is not significant.",
-          "items": { "$ref": "#/$defs/program-point" }
+          "items": {
+            "$ref": "#/$defs/program-point"
+          }
         }
       }
     },
     "program-point": {
       "type": "object",
       "description": "WIT record `program-point`: invariants at one (func-index, pc).",
-      "required": ["func-index", "pc", "locals"],
+      "required": [
+        "func-index",
+        "pc",
+        "locals"
+      ],
       "additionalProperties": false,
       "properties": {
         "func-index": {
@@ -82,27 +108,37 @@
         "locals": {
           "type": "array",
           "description": "Abstract values for the locals tracked at this point.",
-          "items": { "$ref": "#/$defs/local-invariant" }
+          "items": {
+            "$ref": "#/$defs/local-invariant"
+          }
         }
       }
     },
     "local-invariant": {
       "type": "object",
       "description": "WIT record `local-invariant`: abstract value for one local.",
-      "required": ["local-index", "value"],
+      "required": [
+        "local-index",
+        "value"
+      ],
       "additionalProperties": false,
       "properties": {
         "local-index": {
           "description": "Local index.",
           "$ref": "#/$defs/u32"
         },
-        "value": { "$ref": "#/$defs/abstract-value" }
+        "value": {
+          "$ref": "#/$defs/abstract-value"
+        }
       }
     },
     "interval": {
       "type": "object",
       "description": "WIT record `interval` (from pulseengine:wasm-lattice/domain): inclusive integer range [lo, hi] over s64.",
-      "required": ["lo", "hi"],
+      "required": [
+        "lo",
+        "hi"
+      ],
       "additionalProperties": false,
       "properties": {
         "lo": {
@@ -118,7 +154,10 @@
     "region": {
       "type": "object",
       "description": "WIT record `region-pointer-payload`: a memory-region pointer (FEAT-005). region-id plus a byte-offset interval into that region.",
-      "required": ["region-id", "offset"],
+      "required": [
+        "region-id",
+        "offset"
+      ],
       "additionalProperties": false,
       "properties": {
         "region-id": {
@@ -137,40 +176,65 @@
         {
           "type": "object",
           "description": "i32-interval(interval): 32-bit integer interval.",
-          "required": ["kind", "interval"],
+          "required": [
+            "kind",
+            "interval"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "i32-interval" },
-            "interval": { "$ref": "#/$defs/interval" }
+            "kind": {
+              "const": "i32-interval"
+            },
+            "interval": {
+              "$ref": "#/$defs/interval"
+            }
           }
         },
         {
           "type": "object",
           "description": "i64-interval(interval): 64-bit integer interval.",
-          "required": ["kind", "interval"],
+          "required": [
+            "kind",
+            "interval"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "i64-interval" },
-            "interval": { "$ref": "#/$defs/interval" }
+            "kind": {
+              "const": "i64-interval"
+            },
+            "interval": {
+              "$ref": "#/$defs/interval"
+            }
           }
         },
         {
           "type": "object",
           "description": "region-pointer(region-pointer-payload): pointer into a memory region.",
-          "required": ["kind", "region"],
+          "required": [
+            "kind",
+            "region"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "region-pointer" },
-            "region": { "$ref": "#/$defs/region" }
+            "kind": {
+              "const": "region-pointer"
+            },
+            "region": {
+              "$ref": "#/$defs/region"
+            }
           }
         },
         {
           "type": "object",
           "description": "unknown: top of the abstract domain.",
-          "required": ["kind"],
+          "required": [
+            "kind"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "unknown" }
+            "kind": {
+              "const": "unknown"
+            }
           }
         }
       ]
@@ -178,22 +242,43 @@
     "diagnostic": {
       "type": "object",
       "description": "WIT record `diagnostic`: a non-fatal note emitted alongside the invariant bundle.",
-      "required": ["severity", "func-index", "pc", "message"],
+      "required": [
+        "severity",
+        "func-index",
+        "pc",
+        "message"
+      ],
       "additionalProperties": false,
       "properties": {
         "severity": {
           "description": "WIT enum `diagnostic-severity`.",
-          "enum": ["info", "warning", "unsoundness-fallback"]
+          "enum": [
+            "info",
+            "warning",
+            "unsoundness-fallback"
+          ]
         },
-        "func-index": { "$ref": "#/$defs/u32" },
-        "pc": { "$ref": "#/$defs/u32" },
-        "message": { "type": "string" }
+        "func-index": {
+          "$ref": "#/$defs/u32"
+        },
+        "pc": {
+          "$ref": "#/$defs/u32"
+        },
+        "message": {
+          "type": "string"
+        }
       }
     },
     "call-edge": {
       "type": "object",
       "description": "WIT record `call-edge`: one resolved call site (FEAT-006).",
-      "required": ["caller-func", "pc", "indirect", "resolved-targets", "soundness"],
+      "required": [
+        "caller-func",
+        "pc",
+        "indirect",
+        "resolved-targets",
+        "soundness"
+      ],
       "additionalProperties": false,
       "properties": {
         "caller-func": {
@@ -211,18 +296,27 @@
         "resolved-targets": {
           "type": "array",
           "description": "Resolved target function indices. A singleton sound set permits devirtualization. Empty means provably unreachable.",
-          "items": { "$ref": "#/$defs/u32" }
+          "items": {
+            "$ref": "#/$defs/u32"
+          }
         },
         "soundness": {
           "description": "WIT enum `soundness-tag`. `sound`: a sound (possibly over-approximating) cover of every reachable target. `unsound-fallback`: conservative fallback retained for constructs the analyzer cannot resolve soundly.",
-          "enum": ["sound", "unsound-fallback"]
+          "enum": [
+            "sound",
+            "unsound-fallback"
+          ]
         }
       }
     },
     "component-origin": {
       "type": "object",
       "description": "WIT record `component-origin` (FEAT-002 / DD-002): one fused-module function's origin. Decoded from meld's `component-provenance` custom section (binary format `SCPV` v1, defined by the scry-provenance crate).",
-      "required": ["fused-func-index", "component-id", "orig-func-index"],
+      "required": [
+        "fused-func-index",
+        "component-id",
+        "orig-func-index"
+      ],
       "additionalProperties": false,
       "properties": {
         "fused-func-index": {
@@ -242,20 +336,30 @@
     "component-provenance": {
       "type": "object",
       "description": "WIT record `component-provenance` (FEAT-002): the decoded function-origin map meld emitted for a fused module.",
-      "required": ["origins"],
+      "required": [
+        "origins"
+      ],
       "additionalProperties": false,
       "properties": {
         "origins": {
           "type": "array",
           "description": "One entry per fused-module function meld recorded, in file order.",
-          "items": { "$ref": "#/$defs/component-origin" }
+          "items": {
+            "$ref": "#/$defs/component-origin"
+          }
         }
       }
     },
     "function-summary": {
       "type": "object",
       "description": "WIT record `function-summary`: compositional per-function summary (FEAT-007).",
-      "required": ["func-index", "param-count", "result-summary", "context-sensitive", "recursive"],
+      "required": [
+        "func-index",
+        "param-count",
+        "result-summary",
+        "context-sensitive",
+        "recursive"
+      ],
       "additionalProperties": false,
       "properties": {
         "func-index": {
@@ -269,7 +373,9 @@
         "result-summary": {
           "type": "array",
           "description": "Abstract value of each function result under the context-insensitive (top-input) summary, in result order.",
-          "items": { "$ref": "#/$defs/abstract-value" }
+          "items": {
+            "$ref": "#/$defs/abstract-value"
+          }
         },
         "context-sensitive": {
           "type": "boolean",
@@ -280,6 +386,54 @@
           "description": "True iff the function is in a non-trivial call-graph SCC (self- or mutually-recursive)."
         }
       }
+    },
+    "security-label": {
+      "type": "string",
+      "enum": [
+        "low",
+        "high"
+      ]
+    },
+    "taint-finding-kind": {
+      "type": "string",
+      "enum": [
+        "high-result-explicit",
+        "high-result-implicit"
+      ]
+    },
+    "taint-finding": {
+      "type": "object",
+      "properties": {
+        "func-index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pc": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/taint-finding-kind"
+        },
+        "source-label": {
+          "$ref": "#/$defs/security-label"
+        },
+        "sink-label": {
+          "$ref": "#/$defs/security-label"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "func-index",
+        "pc",
+        "kind",
+        "source-label",
+        "sink-label",
+        "message"
+      ],
+      "additionalProperties": false
     }
   }
 }

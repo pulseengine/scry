@@ -23,4 +23,11 @@ rust_wasm_component_bindgen(
     srcs = ["src/lib.rs"],
     profiles = ["release"],
     wit = ":wasm_lattice_wit",
+    # FEAT-009: the security-label (taint) lattice algebra lives in the
+    # pure first-party scry-taint crate (no external deps), cross-
+    # compiled to wasm32-wasip2; this component's WIT `label-*` exports
+    # delegate to it, so the shipped lattice code is exactly the code
+    # scry-host-tests falsifies natively. Mirrors scry-analyzer's dep on
+    # scry-provenance.
+    deps = ["//crates/scry-taint:scry_taint"],
 )

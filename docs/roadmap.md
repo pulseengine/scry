@@ -12,7 +12,7 @@
 | Version | Status | Capability |
 |---|---|---|
 | pre-v0.1 | shipped 2026-05-26 | research + requirements + design + safety-case as 56 rivet artifacts; `research-ext` local schema; PASS validate; README + this roadmap |
-| v0.1 → v0.7 | shipped 2026-05-27 … 2026-05-29 | the capability ladder below, built in dependency order: interval fixpoint (v0.1/v0.2) → Verus+Rocq proof toolchain (v0.2) → region memory + host-oracle harness (v0.3) → sound `call_indirect` call graph (v0.4) → compositional interprocedural summaries (v0.5) → loom invariant JSON contract (v0.6) → `component-provenance` typed meld↔scry boundary + invariant projection (v0.7, FEAT-002 provenance slice). See `CHANGELOG.md` for the per-release falsification kill-criteria. |
+| v0.1 → v0.8 | shipped 2026-05-27 … 2026-05-29 | the capability ladder below, built in dependency order: interval fixpoint (v0.1/v0.2) → Verus+Rocq proof toolchain (v0.2) → region memory + host-oracle harness (v0.3) → sound `call_indirect` call graph (v0.4) → compositional interprocedural summaries (v0.5) → loom invariant JSON contract (v0.6) → `component-provenance` typed meld↔scry boundary + invariant projection (v0.7, FEAT-002 provenance slice) → taint / termination-insensitive-noninterference domain (v0.8, FEAT-009: `low ⊑ high` label lattice + explicit & implicit-flow propagation + High→Low findings). See `CHANGELOG.md` for the per-release falsification kill-criteria. |
 
 ## Forward path
 

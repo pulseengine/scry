@@ -102,8 +102,44 @@ interface analyzer {
         message: string,
     }
 
+    /// A confidentiality label (FEAT-009, v0.8). Declared locally in
+    /// the scry interface — structurally the two-point lattice
+    /// `low ⊑ high` exported by `pulseengine:wasm-lattice/domain` as
+    /// `label`, but declared here (not `use`d) so the scry exported
+    /// interface does not re-export the lattice's `label` type through
+    /// the WAC composition — the same decision taken for
+    /// `region-pointer-payload` vs the lattice's `region`. Conversion
+    /// is trivial (same two cases) and performed inside the analyzer.
+    enum security-label {
+        /// Provably public.
+        low,
+        /// May depend on a declared secret source (sound top).
+        high,
+    }
+
+    /// The declared information-flow policy for an analyze call
+    /// (FEAT-009): which function parameters are High (secret)
+    /// sources and which function results are Low (public) sinks.
+    /// Applied per analyzed function — each function's parameter
+    /// labels are seeded `high` for the indices in `high-params`
+    /// (`low` otherwise), and at function exit a result slot whose
+    /// index is in `low-results` carrying the `high` label is a
+    /// noninterference violation. An empty policy (no high-params)
+    /// taints nothing and reports nothing.
+    record taint-policy {
+        /// Parameter indices treated as High sources on every
+        /// analyzed function's entry.
+        high-params: list<u32>,
+        /// Result indices required to remain Low at function exit.
+        low-results: list<u32>,
+    }
+
     /// v0.1 analyzer configuration. Kept narrow; v0.2+ will add
     /// fields for region-memory parameters, octagon thresholds, etc.
+    /// v0.8 (FEAT-009) adds the optional `taint-policy`: when present
+    /// the analyzer runs the taint/noninterference domain alongside
+    /// the interval/region analysis; when absent (`none`) behaviour
+    /// is exactly as before.
     record analysis-config {
         /// Maximum number of fixpoint iterations per loop header
         /// before widening kicks in. Default if not set by the
@@ -112,6 +148,9 @@ interface analyzer {
         /// Whether to emit diagnostics for unsupported instructions
         /// (default true). Useful to suppress noise in tests.
         emit-diagnostics: bool,
+        /// Optional information-flow policy (FEAT-009). `none` disables
+        /// the taint domain (default, fully backward-compatible).
+        taint-policy: option<taint-policy>,
     }
 
     /// Soundness classification of a single call-graph edge.
@@ -249,6 +288,43 @@ interface analyzer {
     /// `component-provenance` map when the fused module carried one. All
     /// fields are additive over the earlier shape — consumers that only
     /// read `invariants` / `diagnostics` keep working.
+    /// How a noninterference finding's High value reached a Low sink
+    /// (FEAT-009, v0.8).
+    enum taint-finding-kind {
+        /// The Low-declared result carries the High label via an
+        /// explicit data flow (a High source value computed through
+        /// arithmetic / copies into the result).
+        high-result-explicit,
+        /// The Low-declared result carries the High label via an
+        /// implicit flow — assigned under a control-context tainted
+        /// High (inside a branch whose guard depended on a secret).
+        /// This is the case that distinguishes a sound noninterference
+        /// analysis from plain explicit-flow taint.
+        high-result-implicit,
+    }
+
+    /// One noninterference finding (FEAT-009): a declared Low sink that
+    /// carries the High label, i.e. a sound information-flow violation
+    /// under termination-insensitive assumptions. Soundness (REQ-001,
+    /// AC-007): every concrete High→Low flow is covered — the absence
+    /// of any finding implies noninterference. False alarms are
+    /// possible; missed real flows are not.
+    record taint-finding {
+        /// Function whose result violates the policy.
+        func-index: u32,
+        /// Program-counter offset of the violating site (the function
+        /// `end` for a result-at-exit finding).
+        pc: u32,
+        /// How the High value reached the Low sink.
+        kind: taint-finding-kind,
+        /// Label of the offending value (always `high` for a finding).
+        source-label: security-label,
+        /// Declared label of the sink it reached (always `low`).
+        sink-label: security-label,
+        /// Human-readable description (which result index, etc.).
+        message: string,
+    }
+
     record analysis-result {
         invariants: invariant-bundle,
         diagnostics: list<diagnostic>,
@@ -263,6 +339,10 @@ interface analyzer {
         /// the analyzed module carried a well-formed
         /// `component-provenance` custom section emitted by meld.
         provenance: option<component-provenance>,
+        /// Noninterference findings (FEAT-009): one per declared Low
+        /// sink that carries the High label. Empty when no
+        /// `taint-policy` was configured or no violation was found.
+        taint-findings: list<taint-finding>,
     }
 
     /// Reasons an analyze call can fail without producing a partial

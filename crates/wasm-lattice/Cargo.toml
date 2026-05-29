@@ -15,3 +15,7 @@ bitflags = { workspace = true }
 
 # wit-bindgen is injected by rules_wasm_component's
 # rust_wasm_component_bindgen rule; not listed here.
+# FEAT-009: the wasm-lattice component delegates its WIT `label-*`
+# exports to this pure crate, so the shipped lattice code is exactly
+# the code scry-host-tests falsifies natively.
+scry-taint = { path = "../scry-taint" }

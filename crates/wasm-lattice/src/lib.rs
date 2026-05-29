@@ -9,10 +9,32 @@
 #![no_std]
 
 use wasm_lattice_component_bindings::exports::pulseengine::wasm_lattice::domain::{
-    Guest, Interval, Region,
+    Guest, Interval, Label, Region,
 };
 
 struct Component;
+
+// ── Security-label (taint) domain conversions (FEAT-009, v0.8) ──────
+//
+// The label lattice algebra lives in the pure `scry_taint` crate so the
+// code shipped in this wasm32-wasip2 component is *exactly* the code
+// scry-host-tests falsifies natively (the lattice-law tests). The only
+// logic local to this file is the trivial enum conversion between the
+// WIT-generated `Label` and `scry_taint::Label`.
+
+fn to_taint(l: Label) -> scry_taint::Label {
+    match l {
+        Label::Low => scry_taint::Label::Low,
+        Label::High => scry_taint::Label::High,
+    }
+}
+
+fn from_taint(l: scry_taint::Label) -> Label {
+    match l {
+        scry_taint::Label::Low => Label::Low,
+        scry_taint::Label::High => Label::High,
+    }
+}
 
 /// Bottom (empty) interval — the conventional encoding is { lo: 1, hi: 0 }.
 /// Any interval with `lo > hi` is considered bottom; the constructor
@@ -284,6 +306,32 @@ impl Guest for Component {
             region_id: a.region_id,
             offset: off,
         }
+    }
+
+    // ── Security-label (taint) domain (FEAT-009, v0.8) ─────────────
+    //
+    // Delegated to the pure `scry_taint` crate (see the conversion
+    // helpers above). The two-point lattice `low ⊑ high`: bottom =
+    // low, top = high, join = OR, meet = AND, leq = the chain order.
+
+    fn label_bottom() -> Label {
+        from_taint(scry_taint::bottom())
+    }
+
+    fn label_top() -> Label {
+        from_taint(scry_taint::top())
+    }
+
+    fn label_leq(a: Label, b: Label) -> bool {
+        scry_taint::leq(to_taint(a), to_taint(b))
+    }
+
+    fn label_join(a: Label, b: Label) -> Label {
+        from_taint(scry_taint::join(to_taint(a), to_taint(b)))
+    }
+
+    fn label_meet(a: Label, b: Label) -> Label {
+        from_taint(scry_taint::meet(to_taint(a), to_taint(b)))
     }
 }
 

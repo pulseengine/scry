@@ -612,24 +612,66 @@ artifacts:
   - id: FEAT-009
     type: feature
     title: "v0.8 — Taint / noninterference domain (Wanilla-class)"
-    status: proposed
+    status: draft
     description: >
       Add a security-label lattice (Low ⊑ High) lifted pointwise over
       values and memory; lift to a relational analysis sufficient for
       termination-insensitive noninterference per the Wanilla CCS 2025
-      technique. The taint domain composes with the interval and region
-      domains rather than replacing them.
+      technique (AC-007). The taint domain composes with the interval
+      and region domains rather than replacing them.
+
+      v0.8 narrow scope (this draft): ship the security-label lattice
+      and the explicit + implicit-flow taint propagation that make the
+      result a sound termination-insensitive noninterference analysis,
+      falsified natively. The deliverables are: (1) the two-point label
+      lattice `low ⊑ high` added to the `pulseengine:wasm-lattice/domain`
+      interface (`label`, `label-bottom`/`label-top`/`label-leq`/
+      `label-join`/`label-meet`), dogfooded across the WIT boundary like
+      the interval/region ops; (2) the analyzer's taint lift — a shadow
+      taint state (a `security-label` per operand-stack slot and per
+      local) threaded alongside the interval/region abstract value, with
+      `taint = ⊔ operand taints` on every transfer function and a
+      control-context (program-counter) label raised to High inside the
+      structured-control region dominated by a High branch guard, which
+      is what tracks implicit flows; (3) a config-declared policy
+      (`analysis-config.taint-policy`: High `high-params` sources / Low
+      `low-results` sinks) applied per analyzed function, with a
+      noninterference finding emitted when a Low-declared result carries
+      the High label at function exit, surfaced as diagnostics and on the
+      new additive `analysis-result.taint-findings` field (and an
+      additive `taint-findings` block in the v1 invariant contract).
+      The label lattice and the finding shape are falsified natively
+      (`crates/wasm-lattice` label-lattice law tests +
+      `crates/scry-host-tests/tests/taint.rs`), since the live
+      `analyze()` round-trip remains gated by the wac_compose /
+      wasmtime-45 root-import limitation (the same constraint FEAT-008
+      documented). Deferred to a later FEAT-009 slice: tainted-store /
+      tainted-load tracking through linear memory (memory as a sink),
+      multi-principal / lattice-of-sets labels, value-sensitive
+      declassification, unstructured-control implicit flows (irreducible
+      CFGs / `br_table` post-dominator analysis), and the Wanilla
+      shared-benchmark differential corpus (AC#2, which needs the corpus
+      milestone).
     tags: [security, taint, v0.8]
     fields:
       phase: phase-2
       acceptance-criteria:
-        - "Given a Wasm module with declared High inputs and Low outputs, When scry runs the taint domain, Then any sound noninterference violation is reported and the absence of a report implies noninterference (under termination-insensitive assumptions)."
-        - "Given the Wanilla benchmark corpus, When scry's taint analysis is compared to Wanilla's, Then scry produces equivalent or stricter results on shared benchmarks."
+        - "Given a Wasm module with declared High inputs and Low outputs, When scry runs the taint domain, Then any sound noninterference violation is reported and the absence of a report implies noninterference (under termination-insensitive assumptions). (v0.8: the analyzer lifts the `low ⊑ high` label over values and the control-context, seeds `high-params` as High sources, and reports a `taint-finding` when a `low-results` sink carries High at function exit — covering both explicit and structured implicit flows.)"
+        - "Given the Wanilla benchmark corpus, When scry's taint analysis is compared to Wanilla's, Then scry produces equivalent or stricter results on shared benchmarks. (Deferred to the v0.8+ corpus milestone — the differential harness needs the shared benchmark set.)"
     links:
       - type: satisfies
         target: REQ-001
       - type: references-paper
         target: AC-007
+      - type: depends-on
+        target: FEAT-001
+      - type: traces-to
+        target: FEAT-003
+      # The wac_compose / wasmtime-45 native-falsification constraint
+      # named in the description is the same one FEAT-008 documented;
+      # typed link records the mention.
+      - type: traces-to
+        target: FEAT-008
 
   - id: FEAT-010
     type: feature

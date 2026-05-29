@@ -77,6 +77,12 @@ jobs:
       # cargo path (it compiles natively as well as to wasm32-wasip2).
       - name: cargo clippy --package scry-provenance
         run: cargo clippy --package scry-provenance --all-targets -- -D warnings
+      # FEAT-009: the pure security-label (taint) lattice crate also
+      # lints on the cargo path (it compiles natively as well as to
+      # wasm32-wasip2, where wasm-lattice's WIT label-* exports delegate
+      # to it).
+      - name: cargo clippy --package scry-taint
+        run: cargo clippy --package scry-taint --all-targets -- -D warnings
 
   test:
     name: Test
@@ -122,6 +128,13 @@ jobs:
         # links into the wasm component). The provenance round-trip is
         # additionally exercised through scry-host-tests/tests/provenance.rs.
         run: cargo test --package scry-provenance -- --nocapture
+      # FEAT-009: the security-label lattice kill-criterion — the label
+      # lattice obeys its algebraic laws and forward propagation never
+      # moves down the lattice (exhaustive over the height-1 lattice).
+      # The same crate links into the wasm component; the host harness
+      # (tests/taint.rs) re-exercises it on the cargo path.
+      - name: cargo test --package scry-taint
+        run: cargo test --package scry-taint -- --nocapture
 
   rivet-validate:
     name: Rivet artifact validation
