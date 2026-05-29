@@ -40,5 +40,10 @@ rust_wasm_component_bindgen(
     deps = [
         "@scry_crates//:wasmparser",
         "@scry_crates//:sha2",
+        # FEAT-002 (DD-002): the pure meld<->scry boundary crate. A
+        # first-party rust_library (no external deps) cross-compiled to
+        # wasm32-wasip2 alongside this component; provides the
+        # `component-provenance` section decode + projection lookup.
+        "//crates/scry-provenance:scry_provenance",
     ],
 )

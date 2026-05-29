@@ -25,6 +25,10 @@
       "description": "WIT field `analysis-result.function-summaries: list<function-summary>` (FEAT-007).",
       "type": "array",
       "items": { "$ref": "#/$defs/function-summary" }
+    },
+    "provenance": {
+      "description": "WIT field `analysis-result.provenance: option<component-provenance>` (FEAT-002). Optional in the contract: present only when the analyzed module carried a well-formed `component-provenance` custom section emitted by meld. A v0.6 document with no provenance still validates.",
+      "$ref": "#/$defs/component-provenance"
     }
   },
   "$defs": {
@@ -212,6 +216,39 @@
         "soundness": {
           "description": "WIT enum `soundness-tag`. `sound`: a sound (possibly over-approximating) cover of every reachable target. `unsound-fallback`: conservative fallback retained for constructs the analyzer cannot resolve soundly.",
           "enum": ["sound", "unsound-fallback"]
+        }
+      }
+    },
+    "component-origin": {
+      "type": "object",
+      "description": "WIT record `component-origin` (FEAT-002 / DD-002): one fused-module function's origin. Decoded from meld's `component-provenance` custom section (binary format `SCPV` v1, defined by the scry-provenance crate).",
+      "required": ["fused-func-index", "component-id", "orig-func-index"],
+      "additionalProperties": false,
+      "properties": {
+        "fused-func-index": {
+          "description": "Function index in the fused Core Wasm module — the key program-point.func-index / call-edge.caller-func are also keyed by.",
+          "$ref": "#/$defs/u32"
+        },
+        "component-id": {
+          "description": "Opaque identifier of the originating component. Only equality is meaningful.",
+          "$ref": "#/$defs/u32"
+        },
+        "orig-func-index": {
+          "description": "Function index within the originating component, before fusion.",
+          "$ref": "#/$defs/u32"
+        }
+      }
+    },
+    "component-provenance": {
+      "type": "object",
+      "description": "WIT record `component-provenance` (FEAT-002): the decoded function-origin map meld emitted for a fused module.",
+      "required": ["origins"],
+      "additionalProperties": false,
+      "properties": {
+        "origins": {
+          "type": "array",
+          "description": "One entry per fused-module function meld recorded, in file order.",
+          "items": { "$ref": "#/$defs/component-origin" }
         }
       }
     },

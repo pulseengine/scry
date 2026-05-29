@@ -73,6 +73,10 @@ jobs:
       # promotes clippy to a hard gate per the witness/spar pattern.
       - name: cargo clippy --package scry-host-tests
         run: cargo clippy --package scry-host-tests --all-targets -- -D warnings
+      # FEAT-002: the pure meld<->scry boundary crate also lints on the
+      # cargo path (it compiles natively as well as to wasm32-wasip2).
+      - name: cargo clippy --package scry-provenance
+        run: cargo clippy --package scry-provenance --all-targets -- -D warnings
 
   test:
     name: Test
@@ -112,6 +116,12 @@ jobs:
         # override needed in CI; the env var is supported for local
         # iteration where bazel-bin may be elsewhere.
         run: cargo test --package scry-host-tests -- --nocapture
+      - name: cargo test --package scry-provenance
+        # FEAT-002: inline encode/decode/project unit tests for the
+        # meld<->scry boundary crate (the same source the analyzer
+        # links into the wasm component). The provenance round-trip is
+        # additionally exercised through scry-host-tests/tests/provenance.rs.
+        run: cargo test --package scry-provenance -- --nocapture
 
   rivet-validate:
     name: Rivet artifact validation

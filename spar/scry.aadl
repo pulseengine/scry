@@ -133,6 +133,23 @@ public
       Data_Size => 16 MByte;  -- list of FunctionSummary records
   end FunctionSummaries;
 
+  data ComponentProvenance
+    -- v0.7 (FEAT-002 / DD-002): the decoded `component-provenance`
+    -- custom section meld emits into a fused module — the
+    -- function-origin map (fused-module function index → originating
+    -- component id + originating function index). meld is the
+    -- producer; the AnalyzerProcess decodes the section in its
+    -- pre-pass (via the pure scry-provenance crate, binary format
+    -- `SCPV` v1) and projects its Component-Model invariants onto the
+    -- fused-module locations so loom / witness / sigil can attribute
+    -- them back to their component source. Optional on the analysis
+    -- result: present only when the analyzed module carried a
+    -- well-formed section. See docs/component-provenance-v1.md
+    -- (DOC-COMPONENT-PROVENANCE-V1).
+    properties
+      Data_Size => 16 MByte;  -- list of (fused-idx, component-id, orig-idx) entries
+  end ComponentProvenance;
+
   -- ══════════════════════════════════════════════════════════════════
   -- Threads — one per component's primary worker
   -- ══════════════════════════════════════════════════════════════════
@@ -173,6 +190,10 @@ public
       -- v0.5 (FEAT-007): the per-function abstract summaries emitted
       -- alongside the invariant bundle and call graph.
       summaries_out:   out event data port FunctionSummaries;
+      -- v0.7 (FEAT-002): the decoded component provenance, emitted
+      -- when the analyzed fused module carried a `component-provenance`
+      -- custom section.
+      provenance_out:  out event data port ComponentProvenance;
       -- Connection to LatticeOps. Modelled as a port pair; in the
       -- Component Model this is a WIT cross-component import.
       lattice_call_out: out event data port;
@@ -216,6 +237,7 @@ public
       diagnostics_out: out event data port AnalysisDiagnostic;
       callgraph_out:   out event data port CallGraph;
       summaries_out:   out event data port FunctionSummaries;
+      provenance_out:  out event data port ComponentProvenance;
       lattice_call_out: out event data port;
       lattice_result_in: in event data port Interval;
   end AnalyzerProcess;
@@ -230,6 +252,7 @@ public
       c_diagnostics:   port analyzer_thread.diagnostics_out -> diagnostics_out;
       c_callgraph:     port analyzer_thread.callgraph_out -> callgraph_out;
       c_summaries:     port analyzer_thread.summaries_out -> summaries_out;
+      c_provenance:    port analyzer_thread.provenance_out -> provenance_out;
       c_lattice_call:  port analyzer_thread.lattice_call_out -> lattice_call_out;
       c_lattice_result: port lattice_result_in -> analyzer_thread.lattice_result_in;
   end AnalyzerProcess.IntervalV01;
@@ -246,6 +269,7 @@ public
       diagnostics_out: out event data port AnalysisDiagnostic;
       callgraph_out:   out event data port CallGraph;
       summaries_out:   out event data port FunctionSummaries;
+      provenance_out:  out event data port ComponentProvenance;
   end Scry;
 
   system implementation Scry.V01
@@ -264,6 +288,7 @@ public
       s_diagnostics:   port analyzer.diagnostics_out -> diagnostics_out;
       s_callgraph:     port analyzer.callgraph_out -> callgraph_out;
       s_summaries:     port analyzer.summaries_out -> summaries_out;
+      s_provenance:    port analyzer.provenance_out -> provenance_out;
       -- Internal cross-component wiring (analyzer → lattice)
       s_lattice_call:  port analyzer.lattice_call_out -> lattice.op_in;
       s_lattice_result: port lattice.op_out -> analyzer.lattice_result_in;

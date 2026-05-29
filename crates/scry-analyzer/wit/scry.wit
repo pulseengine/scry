@@ -205,13 +205,50 @@ interface analyzer {
         recursive: bool,
     }
 
+    /// One fused-module function's origin (FEAT-002 / DD-002). Decoded
+    /// from meld's `component-provenance` custom section: it maps a
+    /// function index in the fused Core Wasm module back to the
+    /// component + function it was lowered from. This is the minimal
+    /// function-origin map of DD-002 variant (b.1) — resource/handle
+    /// shapes are NOT carried here (scry derives those from the
+    /// original component sources directly).
+    record component-origin {
+        /// Index of the function in the fused Core Wasm module. This is
+        /// the same index scry's `program-point.func-index` and
+        /// `call-edge.caller-func` are keyed by, so projecting an
+        /// invariant onto its origin is a join on this field.
+        fused-func-index: u32,
+        /// Opaque identifier of the originating component in the
+        /// composition graph. Only equality is meaningful.
+        component-id: u32,
+        /// Index of the function within its originating component,
+        /// before fusion.
+        orig-func-index: u32,
+    }
+
+    /// The decoded `component-provenance` custom section (FEAT-002):
+    /// the function-origin map meld emitted for a fused module. Present
+    /// on `analysis-result.provenance` only when the analyzed module
+    /// actually carried a well-formed section; a module with no section
+    /// (e.g. a single un-fused component, or any v0.1-style Core Wasm
+    /// input) yields `none`, and a malformed section is reported via a
+    /// `diagnostic` and also yields `none` (never a partial parse).
+    record component-provenance {
+        /// One entry per fused-module function meld recorded, in file
+        /// order. The byte format is defined by the `scry-provenance`
+        /// crate (`SCPV` v1).
+        origins: list<component-origin>,
+    }
+
     /// Full analyzer output for one analyze call. v0.4 (FEAT-006)
     /// adds the `call-graph` field: the list of resolved call-site
     /// edges discovered during the abstract interpretation. v0.5
     /// (FEAT-007) adds `function-summaries`: the per-function abstract
-    /// summary computed bottom-up over the call graph. Both fields are
-    /// additive over the earlier shape — consumers that only read
-    /// `invariants` / `diagnostics` keep working.
+    /// summary computed bottom-up over the call graph. v0.7 (FEAT-002)
+    /// adds the optional `provenance` field: the decoded
+    /// `component-provenance` map when the fused module carried one. All
+    /// fields are additive over the earlier shape — consumers that only
+    /// read `invariants` / `diagnostics` keep working.
     record analysis-result {
         invariants: invariant-bundle,
         diagnostics: list<diagnostic>,
@@ -222,6 +259,10 @@ interface analyzer {
         /// defined (non-import) function, computed bottom-up over the
         /// call-graph SCC condensation and applied at call sites.
         function-summaries: list<function-summary>,
+        /// Decoded component provenance (FEAT-002), present only when
+        /// the analyzed module carried a well-formed
+        /// `component-provenance` custom section emitted by meld.
+        provenance: option<component-provenance>,
     }
 
     /// Reasons an analyze call can fail without producing a partial

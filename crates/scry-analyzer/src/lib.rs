@@ -164,15 +164,21 @@ use sha2::{Digest, Sha256};
 use wasmparser::{Operator, Parser, Payload};
 
 use scry_analyzer_component_bindings::exports::pulseengine::scry::analyzer::{
-    AbstractValue, AnalysisConfig, AnalysisResult, AnalyzeError, CallEdge, Diagnostic,
-    DiagnosticSeverity, FunctionSummary, Guest, InvariantBundle, LocalInvariant, ProgramPoint,
-    SoundnessTag,
+    AbstractValue, AnalysisConfig, AnalysisResult, AnalyzeError, CallEdge, ComponentOrigin,
+    ComponentProvenance, Diagnostic, DiagnosticSeverity, FunctionSummary, Guest, InvariantBundle,
+    LocalInvariant, ProgramPoint, SoundnessTag,
 };
 use scry_analyzer_component_bindings::pulseengine::wasm_lattice::domain::{self, Interval};
+// The pure meld<->scry boundary crate (DD-002 / FEAT-002): the binary
+// format of the `component-provenance` custom section plus the
+// projection lookup. Aliased to avoid colliding with the WIT-binding
+// `ComponentOrigin` type above; conversion between the two is a trivial
+// field copy at the point we build the WIT `provenance` field.
+use scry_provenance::ComponentOrigin as ProvOrigin;
 
 struct Component;
 
-const SCRY_VERSION: &str = "0.5.0";
+const SCRY_VERSION: &str = "0.7.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -600,6 +606,14 @@ impl Guest for Component {
         // table (sound, imprecise).
         let mut table_contents_unknown: bool = false;
 
+        // ── FEAT-002 component-provenance (DD-002) ───────────────────
+        // Decoded function-origin map from meld's `component-provenance`
+        // custom section, if the fused module carried one. `None` means
+        // either no section (a single un-fused component, or any plain
+        // Core Wasm input) or a section that failed to decode (reported
+        // via a Warning diagnostic — never a partial parse).
+        let mut provenance_origins: Option<Vec<ProvOrigin>> = None;
+
         for payload in Parser::new(0).parse_all(&module_bytes) {
             let payload = payload.map_err(|e| {
                 AnalyzeError::InvalidModule(format!("wasm parse failed (pre-pass): {e}"))
@@ -756,6 +770,33 @@ impl Guest for Component {
                                 // (which v0.4 doesn't model) — treat
                                 // the table contents as unknown.
                                 table_contents_unknown = true;
+                            }
+                        }
+                    }
+                }
+                Payload::CustomSection(reader) => {
+                    // FEAT-002 / DD-002: meld emits the function-origin
+                    // map as a `component-provenance` custom section.
+                    // Decode it strictly here — a malformed section is a
+                    // Warning + `none`, never a partial parse — so
+                    // phase 2 can project invariants onto component
+                    // origins. Other custom sections (name, producers,
+                    // dwarf, …) are ignored.
+                    if reader.name() == scry_provenance::SECTION_NAME {
+                        match scry_provenance::decode(reader.data()) {
+                            Ok(origins) => provenance_origins = Some(origins),
+                            Err(e) => {
+                                if config.emit_diagnostics {
+                                    diagnostics.push(Diagnostic {
+                                        severity: DiagnosticSeverity::Warning,
+                                        func_index: 0,
+                                        pc: 0,
+                                        message: format!(
+                                            "component-provenance section present but malformed: \
+                                             {e}; FEAT-002 projection disabled for this module"
+                                        ),
+                                    });
+                                }
                             }
                         }
                     }
@@ -1027,6 +1068,56 @@ impl Guest for Component {
             }
         }
 
+        // ───────────────────────────────────────────────────────────
+        // FEAT-002 (DD-002): project Component-Model results onto fused-
+        // module locations. With the decoded `component-provenance` map,
+        // every analyzed (fused) function index resolves to the
+        // component + function it was lowered from — the association that
+        // lets loom / witness / sigil attribute a fused-module invariant
+        // back to its component source. v0.7 emits the projection as
+        // per-function diagnostics and carries the decoded map on
+        // `analysis-result.provenance`; the richer handle-state /
+        // capability-flow analysis is a later FEAT-002 slice.
+        // ───────────────────────────────────────────────────────────
+        let provenance = provenance_origins.as_ref().map(|origins| {
+            if config.emit_diagnostics {
+                for func in &defined_funcs {
+                    match scry_provenance::project(origins, func.abs_index) {
+                        Some(origin) => diagnostics.push(Diagnostic {
+                            severity: DiagnosticSeverity::Info,
+                            func_index: func.abs_index,
+                            pc: 0,
+                            message: format!(
+                                "FEAT-002 projection: fused func {} originates from component {} \
+                                 function {}",
+                                func.abs_index, origin.component_id, origin.orig_func_index
+                            ),
+                        }),
+                        None => diagnostics.push(Diagnostic {
+                            severity: DiagnosticSeverity::Warning,
+                            func_index: func.abs_index,
+                            pc: 0,
+                            message: format!(
+                                "FEAT-002 projection: fused func {} has no component-provenance \
+                                 entry — invariant left unattributed",
+                                func.abs_index
+                            ),
+                        }),
+                    }
+                }
+            }
+            ComponentProvenance {
+                origins: origins
+                    .iter()
+                    .map(|o| ComponentOrigin {
+                        fused_func_index: o.fused_func_index,
+                        component_id: o.component_id,
+                        orig_func_index: o.orig_func_index,
+                    })
+                    .collect(),
+            }
+        });
+
         let invariants = InvariantBundle {
             schema: INVARIANT_SCHEMA_URL.to_string(),
             module_sha256,
@@ -1038,6 +1129,7 @@ impl Guest for Component {
             diagnostics,
             call_graph,
             function_summaries,
+            provenance,
         })
     }
 }

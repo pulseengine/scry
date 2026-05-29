@@ -1,0 +1,36 @@
+"""scry-provenance — the typed meld<->scry boundary (DD-002, FEAT-002).
+
+A pure, zero-dependency Rust library: the binary format of meld's
+`component-provenance` custom section plus the projection lookup scry
+uses to associate Component-Model invariants with fused-module
+locations. Built for `wasm32-wasip2` as a dependency of the
+scry-analyzer component, and natively for the scry-host-tests harness.
+"""
+
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# The library. No deps — it is `#![no_std]` + `alloc` only, so it
+# composes into the wasm32-wasip2 component build without pulling in
+# anything the cdylib doesn't already have.
+rust_library(
+    name = "scry_provenance",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_provenance",
+    edition = "2024",
+    tags = ["feat-002"],
+)
+
+# Inline unit tests (#[cfg(test)] in src/lib.rs): encode/decode
+# round-trip, strict malformed-payload rejection, and projection
+# hit/miss. Builds with `--cfg test` (std test harness) for the host.
+# The same assertions are exercised on the cargo path by CI's
+# `cargo test --package scry-provenance` and by the scry-host-tests
+# harness (tests/provenance.rs, which deps this crate natively).
+rust_test(
+    name = "scry_provenance_test",
+    crate = ":scry_provenance",
+    edition = "2024",
+    tags = ["feat-002"],
+)
