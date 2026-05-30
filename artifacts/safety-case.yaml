@@ -260,6 +260,63 @@ artifacts:
       - type: traces-to
         target: FEAT-004
 
+  - id: Sn-005
+    type: safety-solution
+    title: Six-domain credit dossier (FEAT-011) — assembled per-standard regulatory-coverage evidence
+    status: draft
+    description: >
+      The v1.0 credit dossier (docs/credit-dossier-v1.md,
+      DOC-CREDIT-DOSSIER-V1) is the assembled evidence for the top-level
+      goal G-001: a per-standard (DO-178C/DO-333, ISO 26262-6, IEC 61508,
+      IEC 62304, EN 50128, ECSS) credit cross-walk for the abstract-
+      interpretation technique class plus a REQ-001..008 →
+      mechanized/runnable/contract/paper evidence map, shipped inside the
+      cosign-signed release compliance bundle (REQ-005). Together with
+      the deductive-proof (Verus/Rocq) and model-checking (Kani) legs it
+      demonstrates that no DO-333 technique class is unstaffed.
+    fields:
+      evidence-type: analysis
+      evidence-ref: "docs/credit-dossier-v1.md (DOC-CREDIT-DOSSIER-V1); rivet matrix; release.yml compliance-evidence tarball (cosign keyless OIDC)"
+      confidence: high
+    links:
+      - type: supports
+        target: G-001
+      - type: traces-to
+        target: FEAT-011
+      - type: traces-to
+        target: REQ-005
+
+  - id: Sn-006
+    type: safety-solution
+    title: Mechanized soundness stack (FEAT-010/011) — proven AI-soundness evidence
+    status: draft
+    description: >
+      The Rocq mechanized soundness proofs are the proven soundness
+      evidence for G-002: the interval (proofs/rocq/Soundness.v, v0.9),
+      region-memory (Region.v), call-graph resolution (CallGraph.v), and
+      reachability lattice (Reachability.v) domains each over-approximate
+      the concrete semantics with no admits and no axioms, verified by
+      `bazel test //proofs/rocq:soundness_test //proofs/rocq:region_test
+      //proofs/rocq:callgraph_test //proofs/rocq:reachability_test`. This
+      upgrades the G-002 soundness evidence from asserted (Sn-001) /
+      placeholder (Sn-002) to mechanized, and discharges the REQ-002
+      mechanization obligation for the v0.1–v0.4 domain stack (the
+      WasmCert-Coq-backed wrap-aware bound remains the named TE-004
+      future slice).
+    fields:
+      evidence-type: formal-proof
+      evidence-ref: "bazel test //proofs/rocq:soundness_test //proofs/rocq:region_test //proofs/rocq:callgraph_test //proofs/rocq:reachability_test — all PASS, 0 admits / 0 axioms"
+      confidence: high
+    links:
+      - type: supports
+        target: G-002
+      - type: traces-to
+        target: FEAT-010
+      - type: traces-to
+        target: FEAT-011
+      - type: traces-to
+        target: REQ-002
+
   # ── Justifications ───────────────────────────────────────────────────
 
   - id: J-001

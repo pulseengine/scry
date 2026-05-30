@@ -39,3 +39,46 @@ rocq_proof_test(
     deps = [":soundness"],
     tags = ["rocq", "verification", "feat-010"],
 )
+
+# FEAT-011 (v1.0): extend the mechanized soundness to the full
+# v0.1–v0.4 shipped domain stack — region-memory (FEAT-005), the
+# call-graph resolution (FEAT-006), and the reachability lattice
+# (the abstract foundation; analyzer integration is named future
+# work in the credit dossier). Each is γ-soundness with no admits,
+# no axioms (the FEAT-011 AC#1 kill-criterion).
+
+rocq_library(
+    name = "region",
+    srcs = ["Region.v"],
+    tags = ["rocq", "verification", "feat-011"],
+)
+
+rocq_proof_test(
+    name = "region_test",
+    deps = [":region"],
+    tags = ["rocq", "verification", "feat-011"],
+)
+
+rocq_library(
+    name = "callgraph",
+    srcs = ["CallGraph.v"],
+    tags = ["rocq", "verification", "feat-011"],
+)
+
+rocq_proof_test(
+    name = "callgraph_test",
+    deps = [":callgraph"],
+    tags = ["rocq", "verification", "feat-011"],
+)
+
+rocq_library(
+    name = "reachability",
+    srcs = ["Reachability.v"],
+    tags = ["rocq", "verification", "feat-011"],
+)
+
+rocq_proof_test(
+    name = "reachability_test",
+    deps = [":reachability"],
+    tags = ["rocq", "verification", "feat-011"],
+)

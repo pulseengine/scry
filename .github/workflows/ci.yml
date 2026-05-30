@@ -150,6 +150,9 @@ jobs:
       # (proofs/rocq/Soundness.v) is gated by the dedicated Rocq job.
       - name: cargo test --package scry-octagon
         run: cargo test --package scry-octagon -- --nocapture
+      # FEAT-011: the full-stack Rocq soundness proofs (Soundness /
+      # Region / CallGraph / Reachability) are gated by the dedicated
+      # Rocq Formal Proofs job (bazel test //proofs/rocq/...).
 
   rivet-validate:
     name: Rivet artifact validation
