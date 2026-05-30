@@ -272,6 +272,14 @@ pub fn add_bound(o: &Octagon, i: u32, j: u32, c: i64) -> Octagon {
 }
 
 #[cfg(test)]
+// These tests spell out DBM cell indices in their pedagogical form
+// `(2*i)*n + (2*j)` and octagonal bounds as `±2*c`, mirroring the
+// octagon variable encoding `v(2k)=x_k, v(2k+1)=-x_k`. For i=0 / c=0
+// that yields `*0` / identity terms, which clippy's identity_op and
+// erasing_op flag — but collapsing them to bare `0` would erase the
+// index/bound formula the assertions are meant to document. Allow both
+// in the test module only.
+#[allow(clippy::identity_op, clippy::erasing_op)]
 mod tests {
     use super::*;
 
@@ -285,7 +293,7 @@ mod tests {
         // v(2k) = x_k, v(2k+1) = -x_k.
         let v = |idx: usize| -> i64 {
             let k = idx / 2;
-            if idx % 2 == 0 { vals[k] } else { -vals[k] }
+            if idx.is_multiple_of(2) { vals[k] } else { -vals[k] }
         };
         for i in 0..n {
             for j in 0..n {
