@@ -21,13 +21,22 @@ package(default_visibility = ["//visibility:public"])
 
 # The distributable: the self-contained analyzer component, copied to the
 # stable filename `scry.wasm` that release.yml and the host harness
-# (crates/scry-host-tests) read. The bare `scry_analyzer_component` label
-# emits the core module (`_wasm_base.wasm`); the *packaged component* is
-# the `_release` profile target, which emits `scry_analyzer_component.wasm`
-# (~2.5 MB, analyzer embedded, WASI-only imports, validates). Copy that.
+# (crates/scry-host-tests) read.
+#
+# `//crates/scry-analyzer:scry_analyzer_component` is the PUBLIC alias the
+# rust_wasm_component macro creates for the default (release) profile —
+# `native.alias(name = {name}, actual = :{name}_release, visibility = ...)`,
+# inheriting the analyzer package's public `default_visibility`. Its
+# DefaultInfo is exactly one file: the packaged wasip2 component (~2.5 MB,
+# analyzer embedded, WASI-only imports, validates). We copy that.
+#
+# (v1.1 history: an earlier revision pointed this at the private
+# `scry_analyzer_component_release` sub-target, which is visible only to
+# //crates/scry-analyzer:__pkg__ — a cross-package visibility error that
+# broke the build. The public alias resolves to the identical file.)
 genrule(
     name = "scry",
-    srcs = ["//crates/scry-analyzer:scry_analyzer_component_release"],
+    srcs = ["//crates/scry-analyzer:scry_analyzer_component"],
     outs = ["scry.wasm"],
-    cmd = "cp $(location //crates/scry-analyzer:scry_analyzer_component_release) $@",
+    cmd = "cp $(location //crates/scry-analyzer:scry_analyzer_component) $@",
 )

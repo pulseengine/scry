@@ -426,9 +426,18 @@ fn run_analyzer(component_bytes_path: &Path, module_bytes: &[u8]) -> Result<Inva
 
     // Build the input args as dynamic `Val`s.
     let bytes_val = Val::List(module_bytes.iter().copied().map(Val::U8).collect());
+    // `analysis-config` has carried three fields since v0.8 (FEAT-009
+    // added `taint-policy`). All three must be supplied or wasmtime
+    // rejects the lowering with "expected 3 fields, got N". `none` for
+    // `taint-policy` keeps the taint domain disabled (the default,
+    // backward-compatible behaviour). Before v1.1 this marshalling code
+    // was never reached — the component couldn't instantiate, so the
+    // call path was always skipped, and the stale 2-field config went
+    // undetected. The v1.1 runnable gate is what surfaced it.
     let config_val = Val::Record(vec![
         ("widening-threshold".to_string(), Val::Option(None)),
         ("emit-diagnostics".to_string(), Val::Bool(true)),
+        ("taint-policy".to_string(), Val::Option(None)),
     ]);
 
     // Wasmtime 45's `Func::call` returns the lowered result slice
