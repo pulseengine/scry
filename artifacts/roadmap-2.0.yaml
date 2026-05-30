@@ -52,6 +52,8 @@ artifacts:
         target: REQ-001
       - type: addresses-finding
         target: MF-005
+      - type: traces-to
+        target: FEAT-019
 
   - id: TE-009
     type: technology-evaluation
@@ -80,6 +82,10 @@ artifacts:
         target: REQ-001
       - type: addresses-finding
         target: MF-005
+      - type: traces-to
+        target: TE-001
+      - type: traces-to
+        target: FEAT-020
 
   - id: TE-010
     type: technology-evaluation
@@ -108,6 +114,8 @@ artifacts:
         target: REQ-002
       - type: addresses-finding
         target: MF-005
+      - type: traces-to
+        target: FEAT-019
 
   - id: MF-005
     type: market-finding
@@ -147,6 +155,16 @@ artifacts:
         target: REQ-001
       - type: references-paper
         target: AC-003
+      - type: traces-to
+        target: TE-001
+      - type: traces-to
+        target: TE-008
+      - type: traces-to
+        target: TE-009
+      - type: traces-to
+        target: TE-010
+      - type: traces-to
+        target: FEAT-020
 
   # ──────────────────────────────────────────────────────────────────────
   # Design decision — the foundational 2.0 reality-track decision.
@@ -207,6 +225,12 @@ artifacts:
         target: DD-008
       - type: traces-to
         target: DD-009
+      - type: traces-to
+        target: DD-004
+      - type: traces-to
+        target: REQ-010
+      - type: traces-to
+        target: FEAT-013
 
   # ──────────────────────────────────────────────────────────────────────
   # Requirements added for the 2.0 line.
@@ -235,6 +259,8 @@ artifacts:
         target: DD-011
       - type: traces-to
         target: REQ-001
+      - type: traces-to
+        target: REQ-010
 
   - id: REQ-010
     type: requirement
@@ -295,6 +321,8 @@ artifacts:
         target: DD-011
       - type: depends-on
         target: FEAT-001
+      - type: traces-to
+        target: DD-008
 
   - id: FEAT-014
     type: feature
@@ -348,6 +376,10 @@ artifacts:
         target: REQ-001
       - type: depends-on
         target: FEAT-013
+      - type: traces-to
+        target: FEAT-001
+      - type: traces-to
+        target: G-002
 
   - id: FEAT-016
     type: feature
@@ -407,6 +439,8 @@ artifacts:
         target: AC-005
       - type: depends-on
         target: FEAT-011
+      - type: traces-to
+        target: MF-005
 
   - id: FEAT-018
     type: feature
@@ -434,6 +468,8 @@ artifacts:
         target: AC-009
       - type: depends-on
         target: FEAT-002
+      - type: traces-to
+        target: G-003
 
   - id: FEAT-019
     type: feature
@@ -491,6 +527,8 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-005
+      - type: satisfies
+        target: REQ-002
       - type: evaluates-tech
         target: TE-001
       - type: evaluates-tech

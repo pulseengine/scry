@@ -285,6 +285,8 @@ artifacts:
         target: FEAT-011
       - type: traces-to
         target: REQ-005
+      - type: traces-to
+        target: REQ-001
 
   - id: Sn-006
     type: safety-solution
@@ -316,6 +318,8 @@ artifacts:
         target: FEAT-011
       - type: traces-to
         target: REQ-002
+      - type: evaluates-tech
+        target: TE-004
 
   # ── Justifications ───────────────────────────────────────────────────
 

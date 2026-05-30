@@ -815,3 +815,17 @@ artifacts:
         target: AC-005
       - type: references-paper
         target: AC-003
+      # Bidirectional-mention links (the v1.0 capstone prose names these;
+      # the typed edges were dropped in the v1.0 PR and are restored here).
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: REQ-005
+      - type: evaluates-tech
+        target: TE-004
+      - type: depends-on
+        target: FEAT-010
+      - type: traces-to
+        target: G-001
+      - type: traces-to
+        target: G-002
