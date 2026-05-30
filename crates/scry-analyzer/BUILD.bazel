@@ -1,6 +1,12 @@
-"""scry-analyzer — the v0.1 interval-domain abstract interpreter as
-a Wasm component. Imports the `pulseengine:wasm-lattice/domain`
-interface from `//crates/wasm-lattice` (per DD-008's dogfood story).
+"""scry-analyzer — the scry abstract interpreter as a Wasm component.
+
+v1.1 (FEAT-013 / DD-011): self-contained. The interval/region/taint/
+octagon algebra is linked as Rust crate dependencies (scry-interval,
+scry-taint, scry-octagon, scry-provenance), NOT imported over WIT, so
+the composed component imports only WASI and runs standalone in
+wasmtime — closing the v1.0.1 open finding. The wasm-lattice component
+still exports the same `domain` interface (DD-008 dogfood), but it is no
+longer on the analyzer's execution path.
 """
 
 load("@rules_wasm_component//rust:defs.bzl", "rust_wasm_component_bindgen")
@@ -8,17 +14,16 @@ load("@rules_wasm_component//wit:defs.bzl", "wit_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# WIT interface this component exports — declares the cross-package
-# import of pulseengine:wasm-lattice via deps. The Bazel rule builds
-# the proper `deps/` directory layout under bazel-bin so wit-bindgen
-# can resolve `use pulseengine:wasm-lattice/domain@0.1.0` at codegen
-# time.
+# WIT interface this component exports. v1.1: no `deps` — the world no
+# longer imports pulseengine:wasm-lattice (the `interval` record is
+# declared locally in scry.wit), so wit-bindgen needs no cross-package
+# resolution and the composed component carries no root-level component
+# import for wasmtime to reject.
 wit_library(
     name = "scry_analyzer_wit",
     package_name = "pulseengine:scry@0.1.0",
     srcs = ["wit/scry.wit"],
     world = "scry",
-    deps = ["//crates/wasm-lattice:wasm_lattice_wit"],
 )
 
 # The Wasm component. The `_bindings` crate produced by the macro is
@@ -45,5 +50,13 @@ rust_wasm_component_bindgen(
         # wasm32-wasip2 alongside this component; provides the
         # `component-provenance` section decode + projection lookup.
         "//crates/scry-provenance:scry_provenance",
+        # FEAT-013 (DD-011): the abstract-domain algebra as crate deps,
+        # replacing the WIT `pulseengine:wasm-lattice/domain` import so the
+        # analyzer is self-contained and executable. scry-interval is the
+        # interval+region domain (extracted from wasm-lattice); scry-taint
+        # the security-label domain; scry-octagon the relational domain.
+        "//crates/scry-interval:scry_interval",
+        "//crates/scry-taint:scry_taint",
+        "//crates/scry-octagon:scry_octagon",
     ],
 )

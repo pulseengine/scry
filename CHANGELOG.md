@@ -7,6 +7,50 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-05-30
+
+Headline: **the shipped artifact is finally the real one.** v1.1 closes
+the composition gap recorded as the v1.0.1 open finding (FEAT-013 /
+DD-011): through v1.0 the composed `//:scry` was a ~4.6 KB hollow shell —
+wac's `--import-dependencies` left both sub-components as root-level
+component imports, which wasmtime 45 rejects, so `analyze()` could never
+run and analyzer source never reached the shipped binary. v1.1 makes the
+analyzer self-contained and executable.
+
+### Added / Changed
+
+- **`crates/scry-interval`** — new pure, zero-dep crate holding the
+  interval + region-memory algebra, extracted from `wasm-lattice`
+  (byte-identical transfer functions; soundness mechanized in
+  `proofs/rocq/Soundness.v` + `Region.v`). Same dual-compile pattern as
+  scry-octagon / scry-taint / scry-provenance.
+- **Self-contained analyzer (FEAT-013 / DD-011).** The analyzer now links
+  the interval/region (scry-interval), taint (scry-taint), and octagon
+  (scry-octagon) algebra as Rust crate deps via a thin local `domain`
+  module, instead of importing `pulseengine:wasm-lattice/domain` over WIT.
+  The `scry` world drops the cross-component import (the `interval` record
+  is declared locally), so the composed component imports only WASI and
+  runs standalone. `//:scry` is now ~2.4 MB (analyzer embedded), 0
+  root-level component imports, `wasm-tools validate` ok. The wasm-lattice
+  component still exports the same `domain` interface (DD-008 dogfood),
+  now off the analyzer's execution path. `SCRY_VERSION` → 1.1.0.
+- **Live runnable gate (`feat013_live_analyze_gate`).** A no-skip host
+  test that loads the shipped component and invokes the live `analyze()`
+  on a real module — the process exits non-zero if it cannot run. Prior
+  to v1.1 it would have failed on the wasmtime root-level-import
+  rejection; it now passes.
+
+### Falsifiable kill-criterion
+
+Two binary properties, both now true (were both false through v1.0.1):
+1. **AC#1** — a source edit to the analyzer changes the composed
+   artifact's SHA-256 (the version bump moved it off the frozen
+   `30f8d4e2…` hash that was identical across v0.9–v1.0.1).
+2. **AC#2** — the live `analyze()` runs in wasmtime 45 on the shipped
+   `//:scry` (`feat013_live_analyze_gate`, no skip path, exit 0).
+If either regresses, the gap has reopened.
+
+
 ## [1.0.1] — 2026-05-30
 
 ### Fixed
@@ -839,7 +883,8 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/pulseengine/scry/releases/tag/v1.1.0
 [1.0.1]: https://github.com/pulseengine/scry/releases/tag/v1.0.1
 [1.0.0]: https://github.com/pulseengine/scry/releases/tag/v1.0.0
 [0.9.0]: https://github.com/pulseengine/scry/releases/tag/v0.9.0
