@@ -212,8 +212,8 @@ pub fn join(a: &Octagon, b: &Octagon) -> Octagon {
     }
     let n = ca.n();
     let mut m = vec![INF; n * n];
-    for idx in 0..n * n {
-        m[idx] = ca.m[idx].max(cb.m[idx]);
+    for (slot, (&av, &bv)) in m.iter_mut().zip(ca.m.iter().zip(cb.m.iter())) {
+        *slot = av.max(bv);
     }
     Octagon { dim: a.dim, m }
 }
@@ -226,8 +226,8 @@ pub fn meet(a: &Octagon, b: &Octagon) -> Octagon {
     debug_assert_eq!(a.dim, b.dim);
     let n = a.n();
     let mut m = vec![INF; n * n];
-    for idx in 0..n * n {
-        m[idx] = a.m[idx].min(b.m[idx]);
+    for (slot, (&av, &bv)) in m.iter_mut().zip(a.m.iter().zip(b.m.iter())) {
+        *slot = av.min(bv);
     }
     Octagon { dim: a.dim, m }
 }
@@ -246,13 +246,9 @@ pub fn widen(a: &Octagon, b: &Octagon) -> Octagon {
     }
     let n = ca.n();
     let mut m = vec![INF; n * n];
-    for idx in 0..n * n {
-        // Keep the bound only if it did not relax; otherwise → INF.
-        m[idx] = if b.m[idx] <= ca.m[idx] {
-            ca.m[idx]
-        } else {
-            INF
-        };
+    // Keep the bound only if it did not relax; otherwise → INF.
+    for (slot, (&cav, &bv)) in m.iter_mut().zip(ca.m.iter().zip(b.m.iter())) {
+        *slot = if bv <= cav { cav } else { INF };
     }
     Octagon { dim: a.dim, m }
 }
