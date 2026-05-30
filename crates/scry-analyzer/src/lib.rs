@@ -179,7 +179,7 @@ use scry_provenance::ComponentOrigin as ProvOrigin;
 
 struct Component;
 
-const SCRY_VERSION: &str = "0.9.0";
+const SCRY_VERSION: &str = "1.0.1";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
