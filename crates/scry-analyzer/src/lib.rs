@@ -169,7 +169,13 @@ use scry_analyzer_component_bindings::exports::pulseengine::scry::analyzer::{
     LocalInvariant, ProgramPoint, SecurityLabel, SoundnessTag, TaintFinding, TaintFindingKind,
     TaintPolicy,
 };
-use scry_analyzer_component_bindings::pulseengine::wasm_lattice::domain::{self, Interval};
+// v1.1 (FEAT-013 / DD-011): the abstract-domain algebra is now a Rust
+// crate dependency, not a WIT cross-component import. `domain` is a local
+// module (defined below) that delegates to the pure scry-interval /
+// scry-taint / scry-octagon crates and re-exports their types — so all
+// existing `domain::*` call sites compile unchanged, but the analyzer no
+// longer imports `pulseengine:wasm-lattice/domain` and runs standalone.
+use domain::Interval;
 // The pure meld<->scry boundary crate (DD-002 / FEAT-002): the binary
 // format of the `component-provenance` custom section plus the
 // projection lookup. Aliased to avoid colliding with the WIT-binding
@@ -177,9 +183,83 @@ use scry_analyzer_component_bindings::pulseengine::wasm_lattice::domain::{self, 
 // field copy at the point we build the WIT `provenance` field.
 use scry_provenance::ComponentOrigin as ProvOrigin;
 
+/// The abstract-domain interface the analyzer dispatches every transfer
+/// function through. Through v1.0 this was the WIT-generated bindings for
+/// the imported `pulseengine:wasm-lattice/domain` interface; as of v1.1
+/// (FEAT-013) it is a thin local module over the pure domain crates, so
+/// the analyzer is self-contained and executable (DD-011). The surface
+/// (types + free fns) is identical to the old WIT binding, so the ~44
+/// `domain::*` call sites are unchanged.
+mod domain {
+    // The currency interval type is the WIT-generated `interval` record
+    // the analyzer's `abstract-value` / `region-pointer-payload` are
+    // built from. The pure `scry_interval::Interval` is field-identical
+    // but a distinct type, so we convert at each crate-call boundary
+    // (a trivial `{lo, hi}` copy). `Region` is never stored into an
+    // `abstract-value` (the analyzer synthesises it only for the
+    // bounds-check soundness story), so it can be the pure type directly.
+    pub use scry_analyzer_component_bindings::exports::pulseengine::scry::analyzer::Interval;
+    pub use scry_interval::Region;
+    pub use scry_taint::Label;
+
+    #[inline]
+    fn to_pure(i: Interval) -> scry_interval::Interval {
+        scry_interval::Interval { lo: i.lo, hi: i.hi }
+    }
+    #[inline]
+    fn from_pure(i: scry_interval::Interval) -> Interval {
+        Interval { lo: i.lo, hi: i.hi }
+    }
+
+    // ── Interval lattice + transfer functions ──────────────────────
+    pub fn top() -> Interval {
+        from_pure(scry_interval::top())
+    }
+    pub fn constant_i32(c: i32) -> Interval {
+        from_pure(scry_interval::constant_i32(c))
+    }
+    pub fn constant_i64(c: i64) -> Interval {
+        from_pure(scry_interval::constant_i64(c))
+    }
+    pub fn join(a: Interval, b: Interval) -> Interval {
+        from_pure(scry_interval::join(to_pure(a), to_pure(b)))
+    }
+    pub fn i32_add(a: Interval, b: Interval) -> Interval {
+        from_pure(scry_interval::i32_add(to_pure(a), to_pure(b)))
+    }
+    pub fn i32_sub(a: Interval, b: Interval) -> Interval {
+        from_pure(scry_interval::i32_sub(to_pure(a), to_pure(b)))
+    }
+    pub fn i32_mul(a: Interval, b: Interval) -> Interval {
+        from_pure(scry_interval::i32_mul(to_pure(a), to_pure(b)))
+    }
+
+    // ── Region-memory domain ───────────────────────────────────────
+    pub fn region_create(region_id: u32) -> Region {
+        scry_interval::region_create(region_id)
+    }
+    pub fn region_offset(r: Region, delta: Interval) -> Region {
+        scry_interval::region_offset(r, to_pure(delta))
+    }
+
+    // ── Security-label (taint) domain ──────────────────────────────
+    pub fn label_bottom() -> Label {
+        scry_taint::bottom()
+    }
+    pub fn label_top() -> Label {
+        scry_taint::top()
+    }
+    pub fn label_leq(a: Label, b: Label) -> bool {
+        scry_taint::leq(a, b)
+    }
+    pub fn label_join(a: Label, b: Label) -> Label {
+        scry_taint::join(a, b)
+    }
+}
+
 struct Component;
 
-const SCRY_VERSION: &str = "1.0.1";
+const SCRY_VERSION: &str = "1.1.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
