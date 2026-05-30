@@ -7,6 +7,27 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-05-30
+
+### Fixed
+
+- **`SCRY_VERSION` self-report corrected to the shipped version.** The
+  `analyze()` diagnostic banner ("scry &lt;version&gt; — wasm-lattice
+  cross-component import alive") hard-codes `SCRY_VERSION`, which was left
+  at `"0.9.0"` when v1.0.0 shipped (the version-bump edit did not land in
+  the v1.0.0 PR). The constant feeds only an `Info`-level diagnostic
+  string — no soundness, invariant, or analysis behaviour was affected,
+  and the v1.0.0 artifact is otherwise correct — but a v1.0.0 component
+  that self-reports `0.9.0` is the kind of provenance mismatch scry
+  exists to catch, so it is corrected here to `"1.0.1"`.
+
+### Falsifiable kill-criterion
+
+`grep 'SCRY_VERSION: &str = "1.0.1"' crates/scry-analyzer/src/lib.rs`
+matches, and the released artifact's `analyze()` diagnostic reports the
+same version string as the release tag. If the constant and the tag ever
+disagree again, this release is wrong.
+
 ## [1.0.0] — 2026-05-29
 
 Headline: **the safety goal closes**. v1.0 is the capstone: the mechanized
@@ -818,7 +839,8 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/pulseengine/scry/releases/tag/v1.0.1
 [1.0.0]: https://github.com/pulseengine/scry/releases/tag/v1.0.0
 [0.9.0]: https://github.com/pulseengine/scry/releases/tag/v0.9.0
 [0.8.0]: https://github.com/pulseengine/scry/releases/tag/v0.8.0
