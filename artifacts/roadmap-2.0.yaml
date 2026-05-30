@@ -1,0 +1,531 @@
+# scry roadmap-to-2.0 artifacts.
+#
+# Generated 2026-05-30 as the typed-traceability backing for
+# docs/roadmap-2.0.md. Adds the research artifacts grounding the 2.0
+# competitive thesis (TE-008..010, MF-005), the foundational
+# composition-gap design decision (DD-011), two new requirements
+# (REQ-009/010), the v1.1→v2.0 feature ladder (FEAT-013..020), and the
+# v2.0 tool-qualification safety goal (G-005).
+#
+# Sequencing (per the "both, sequenced" scope decision):
+#   * Reality track  v1.1–v1.3 : FEAT-013, FEAT-014, FEAT-015
+#   * Capability track v1.4–v2.0: FEAT-016..020
+#
+# All features ship status: proposed — provisional until built, exactly
+# as v0.2–v1.0 were carried before each release.
+
+artifacts:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Research grounding the 2.0 competitive thesis (deep-research, 2026-05-30).
+  # Strong/verified evidence only; the academic-frontier and Wasm-ecosystem
+  # citations the brief asked for were flagged thin by the research and are
+  # NOT fabricated here — the existing AC-003/005/007/011 + TE-004 cover that
+  # ground.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: TE-008
+    type: technology-evaluation
+    title: "TrustInSoft Analyzer — sound analysis adds Rust (2025.10, with Ferrous Systems)"
+    status: draft
+    description: >
+      TrustInSoft Analyzer is a commercial sound static analyzer in the
+      Frama-C/abstract-interpretation lineage, historically C/C++. In
+      2025 TrustInSoft added Rust support in partnership with Ferrous
+      Systems, reaching general availability in the 2025.10 release on
+      2025-11-04. This is the most important forward signal for scry's
+      strategy: it is direct, datable evidence that sound static analysis
+      is expanding from C/C++ toward memory-safe / emerging-target
+      languages — the exact motion scry bets on with Wasm. Validates the
+      language-expansion thesis (MF-005) as a real market motion rather
+      than a speculative bet.
+    fields:
+      technology: "TrustInSoft Analyzer"
+      category: framework
+      maturity: production
+      rust-compatible: true
+      wasm-compatible: false
+      license: "Commercial (TrustInSoft)"
+      recommendation: assess
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: addresses-finding
+        target: MF-005
+
+  - id: TE-009
+    type: technology-evaluation
+    title: "MathWorks Polyspace Code Prover — sound abstract-interpretation prover (commercial bar)"
+    status: draft
+    description: >
+      Polyspace Code Prover uses abstract interpretation to soundly prove
+      the absence of run-time errors (overflow, divide-by-zero,
+      out-of-bounds access) in C/C++ without executing the code, and
+      carries ISO 26262 / IEC 61508 certification (TÜV SÜD) plus a DO-178
+      qualification kit. With Astrée (TE-001) it defines the commercial
+      bar scry's credit positioning and v2.0 qualification dossier
+      (FEAT-020) must meet. Like Astrée its soundness is a vendor design
+      claim, not mechanically proven against a formal language semantics —
+      the gap scry's Rocq-against-WasmCert-Coq proofs fill (MF-005).
+    fields:
+      technology: "Polyspace Code Prover"
+      category: framework
+      maturity: production
+      rust-compatible: false
+      wasm-compatible: false
+      license: "Commercial (MathWorks)"
+      recommendation: assess
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: addresses-finding
+        target: MF-005
+
+  - id: TE-010
+    type: technology-evaluation
+    title: "Frama-C EVA — open-source sound C value analysis (Zinc 30.0, 2024-12-06)"
+    status: draft
+    description: >
+      Frama-C is an open-source C analysis platform; its EVA (Evolved
+      Value Analysis) plug-in performs sound value analysis by abstract
+      interpretation. The 30.0 "Zinc" release (2024-12-06) actively fixed
+      soundness gaps — evidence that even mature sound analyzers maintain
+      soundness by continuous patching of a hand-audited implementation,
+      precisely the maintenance burden that a mechanized soundness proof
+      (REQ-002) discharges once-and-for-all. The closest open-source
+      reference point for scry's value-analysis core; a candidate
+      differential-corpus baseline (FEAT-019) on the C side.
+    fields:
+      technology: "Frama-C / EVA"
+      category: framework
+      maturity: production
+      rust-compatible: false
+      wasm-compatible: false
+      license: "LGPL-2.1 (open source)"
+      recommendation: assess
+    links:
+      - type: traces-to
+        target: REQ-002
+      - type: addresses-finding
+        target: MF-005
+
+  - id: MF-005
+    type: market-finding
+    title: "No commercial sound analyzer offers mechanized soundness, and none targets Wasm — scry's niche"
+    status: draft
+    description: >
+      Deep-research (2026-05-30) over primary vendor sources establishes
+      the competitive shape of sound abstract interpretation in 2025–2026:
+      (1) AbsInt Astrée (TE-001) targets C/C++ only — no public Ada, Rust,
+      Wasm, or ML roadmap — and its recent releases (25.04 / 25.10) refine
+      existing domains (dynamic octagon packs, symbolic-domain and
+      Boolean-pack precision) rather than adding new domain theory: a
+      maturity plateau. (2) Polyspace (TE-009) and Frama-C EVA (TE-010)
+      occupy the same sound-prover category; Infer/Pulse is deliberately
+      UNSOUND (incorrectness logic) and is a methodological contrast, not
+      a competitor. (3) Crucially, every commercial sound analyzer's
+      soundness is a vendor *design claim* backed by audit and
+      qualification kits (QSK/QSLCD), NOT a machine-checked theorem
+      against a formal language semantics. (4) TrustInSoft adding Rust in
+      2025-11 (TE-008) shows sound AI is expanding to memory-safe /
+      emerging-target languages. scry's defensible niche is the
+      intersection no incumbent occupies: a sound analyzer for Wasm whose
+      soundness is *mechanically proven* in Rocq against WasmCert-Coq
+      (REQ-002) — soundness as a theorem, not a brochure. This is the
+      thesis the 2.0 capability track and the qualification dossier
+      (FEAT-020) are built to defend.
+    tags: [competitive, sound-ai, mechanized-soundness, wasm, niche]
+    fields:
+      domain: aerospace
+      finding-type: opportunity
+      source: "deep-research 2026-05-30 over absint.com, mathworks.com, frama-c.com, trust-in-soft.com primary sources"
+      confidence: high
+    links:
+      - type: motivates
+        target: REQ-002
+      - type: motivates
+        target: REQ-001
+      - type: references-paper
+        target: AC-003
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Design decision — the foundational 2.0 reality-track decision.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: DD-011
+    type: design-decision
+    title: Close the analyzer↔composed-artifact decoupling so the shipped artifact embeds and runs the analyzer
+    status: draft
+    description: >
+      The v1.0.1 release tail established by reproducible experiment that
+      editing crates/scry-analyzer source produces a byte-identical
+      composed //:scry wasm (the 4.6 KB artifact is the WASI shim, not the
+      analyzer), and that analyze() has never executed in wasm form (the
+      wac_compose / wasmtime-45 root-import limitation). All analyzer
+      verification to date is native (host-tests against the pure crates).
+      This decision governs how the 2.0 reality track closes that gap.
+    fields:
+      decision: >
+        The shipped scry artifact shall embed the analyzer's compiled code
+        and be executable end-to-end, so that (a) source changes to the
+        analyzer are reflected in the released binary's hash, and (b) the
+        live analyze() oracle and witness MC/DC can run against it. The
+        leading approach is to ship a single self-contained analyzer
+        module/component (the analyzer linking wasm-lattice's domain
+        algebra as a Rust crate dependency rather than only as a separate
+        wac-composed component), while retaining the two-component
+        wac_compose path as the DD-008 dogfood demonstration. The exact
+        mechanism is resolved in FEAT-013.
+      rationale: >
+        scry's entire credit story rests on the shipped artifact being the
+        thing that was verified. As long as the composed binary does not
+        contain the analyzer and never runs, "runnable evidence" in the
+        credit dossier is aspirational, the witness MC/DC step (REQ-010)
+        is unreachable, and the abstract-vs-concrete soundness oracle stays
+        skipped. Fixing this is the precondition for every other 2.0
+        capability being real rather than native-only — hence it leads the
+        reality track.
+      alternatives: >
+        (a) Debug the wac_compose rebuild edge so analyzer source reaches
+            //:scry while keeping the two-component split as the sole
+            artifact — keeps DD-008 pure but inherits the wasmtime-45
+            root-import execution block, so analyze() still cannot run.
+        (b) Single self-contained analyzer module/component (the leading
+            choice) — analyzer is executable and witness-measurable;
+            wasm-lattice stays a reusable component for DD-004 but is also
+            a crate dep of the shipped analyzer.
+        (c) Standalone wasm32-wasip1 analyzer module purely as a
+            witness/execution harness target, separate from the
+            distributable — cheapest path to closing task #12, but leaves
+            the distributable hollow, so it is a stepping stone, not the
+            end state.
+      source-ref: "scry memory: scry-v1-shipped.md OPEN FINDING (2026-05-30)"
+    links:
+      - type: satisfies
+        target: REQ-009
+      - type: traces-to
+        target: DD-008
+      - type: traces-to
+        target: DD-009
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Requirements added for the 2.0 line.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: REQ-009
+    type: requirement
+    title: The shipped scry artifact shall embed and execute its analyzer
+    status: draft
+    description: >
+      The distributable scry artifact shall contain the compiled analyzer
+      code and shall be executable end-to-end, such that a change to the
+      analyzer source changes the released artifact's content hash and the
+      analyze() entry point can be invoked on a real input module in a
+      Wasm runtime. This closes the analyzer↔composed-artifact decoupling
+      recorded as the v1.0.1 open finding and governed by DD-011. It is
+      the precondition for live-soundness and structural-coverage evidence
+      (REQ-010) to apply to the shipped artifact rather than only to native
+      crate tests.
+    tags: [reality, composition, executable, v1.1]
+    fields:
+      priority: must
+      category: functional
+    links:
+      - type: traces-to
+        target: DD-011
+      - type: traces-to
+        target: REQ-001
+
+  - id: REQ-010
+    type: requirement
+    title: The analyzer's decision logic shall carry structural (MC/DC) coverage evidence
+    status: draft
+    description: >
+      The analyzer's branch/decision logic (the transfer-function and
+      fixpoint control flow) shall carry modified-condition/decision
+      coverage evidence measured on the executable Wasm artifact via
+      witness, surfaced as a signed truth-table report and consumed by
+      rivet as requirement-to-test evidence. This is the structural-
+      coverage leg of the defense-in-depth chain (the third DO-178C/DO-330
+      evidence kind alongside soundness proof and host-test soundness
+      oracle), and it depends on REQ-009 being met (the analyzer must
+      execute to be measured).
+    tags: [reality, structural-coverage, mcdc, witness, v1.2]
+    fields:
+      priority: should
+      category: non-functional
+    links:
+      - type: traces-to
+        target: REQ-009
+      - type: traces-to
+        target: REQ-005
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Feature ladder v1.1 → v2.0.  status: proposed (provisional until built).
+  #
+  #   Reality track   (v1.1–v1.3): FEAT-013, FEAT-014, FEAT-015
+  #   Capability track (v1.4–v2.0): FEAT-016, FEAT-017, FEAT-018, FEAT-019, FEAT-020
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: FEAT-013
+    type: feature
+    title: "v1.1 — Composition-gap fix: shipped artifact embeds and runs the analyzer"
+    status: proposed
+    description: >
+      Resolve DD-011: make the distributable scry artifact contain the
+      analyzer and execute end-to-end. Audit why wac_compose //:scry does
+      not rebuild on scry-analyzer source changes, then ship the chosen
+      mechanism (leading candidate: a single self-contained analyzer
+      module/component linking wasm-lattice's domain algebra as a crate
+      dependency, with the two-component wac path retained as the DD-008
+      dogfood). The acceptance gate is the falsifier the open finding
+      defined: a sentinel edit to the analyzer source MUST change the
+      shipped artifact's hash, and analyze() MUST run on a real input
+      module in wasmtime. Depends on FEAT-001 (the analyzer being fixed).
+    tags: [reality, composition, v1.1]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a sentinel change to crates/scry-analyzer source, When the distributable artifact is rebuilt, Then its content hash changes (falsifying the v1.0.1 byte-identical finding)."
+        - "Given a small Wasm input module, When analyze() is invoked on the shipped artifact in a wasmtime/kiln host, Then it returns an analysis-result rather than failing on a root-level component import."
+    links:
+      - type: satisfies
+        target: REQ-009
+      - type: traces-to
+        target: DD-011
+      - type: depends-on
+        target: FEAT-001
+
+  - id: FEAT-014
+    type: feature
+    title: "v1.2 — witness MC/DC on the analyzer (closes the long-standing structural-coverage gap)"
+    status: proposed
+    description: >
+      With the analyzer executable (FEAT-013), measure modified-condition/
+      decision coverage on it with witness: instrument the analyzer Wasm,
+      drive it with the existing scry-host-tests fixtures as a
+      witness harness (witness's --harness subprocess mode, or its
+      embedded wasmtime runner), and emit the MC/DC truth-table report +
+      a signed coverage predicate consumed by rivet. This finally
+      discharges the structural-coverage requirement (REQ-010) and closes
+      the witness step of the original feature loop that has been blocked
+      since v0.1 by the composition gap. Gap rows in the truth table drive
+      new analyzer unit tests until the safety-relevant transfer-function
+      decisions are proved.
+    tags: [reality, structural-coverage, mcdc, witness, v1.2]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given the executable analyzer Wasm and the host-test fixtures as a harness, When witness runs, Then it emits an MC/DC truth table over the analyzer's decisions with zero unresolved gap rows on the safety-relevant transfer functions (or each remaining gap is named with its closing row vector)."
+        - "Given the witness run, When it completes, Then a signed coverage predicate is produced and validated by rivet as requirement-to-test evidence for REQ-010."
+    links:
+      - type: satisfies
+        target: REQ-010
+      - type: depends-on
+        target: FEAT-013
+
+  - id: FEAT-015
+    type: feature
+    title: "v1.3 — Live end-to-end soundness oracle (un-skip the abstract-vs-concrete harness)"
+    status: proposed
+    description: >
+      With analyze() executable (FEAT-013), un-skip the abstract-vs-
+      concrete soundness oracle that scry-host-tests/tests/soundness.rs
+      has stubbed since v0.3 (the wac/wasmtime-45 skip). Run each fixture
+      under both the live analyzer and a concrete wasmtime execution, and
+      mechanically assert every concrete value lies in the matching
+      abstract interval/region/octagon — making the soundness kill-
+      criterion total (live), not concrete-side-only. This upgrades the
+      G-002 evidence from native-crate-only to a live whole-artifact
+      oracle and completes FEAT-001 AC#3 as originally specified.
+    tags: [reality, soundness-oracle, v1.3]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a corpus of input modules, When each is analyzed by the live shipped analyzer and executed concretely in wasmtime, Then every observed concrete value is ⊑-contained in the analyzer's abstract result, with no skip."
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: depends-on
+        target: FEAT-013
+
+  - id: FEAT-016
+    type: feature
+    title: "v1.4 — Analyzer loop-carried octagon relational fixpoint (use the octagon, not just ship it)"
+    status: proposed
+    description: >
+      Promote the octagon domain from shipped-algebra (FEAT-010) to
+      analyzer-consumed: maintain an octagon over local/offset pairs
+      across the intraprocedural fixpoint, with widening at loop headers,
+      so relational constraints (e.g. i < len, base+off bounds) survive
+      loop iterations — the deferred "across loop iterations" half of the
+      FEAT-010 acceptance criteria. This is the first 2.0 precision leap
+      and the analyzer-integration the octagon crate was built for. Miné
+      strong/tight closure (AC-011) is the precision refinement to add
+      here. Depends on the analyzer being executable (FEAT-013) so the
+      precision win is measurable on the shipped artifact.
+    tags: [capability, relational, octagon, precision, v1.4]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a Wasm module where two locals are related by an octagon constraint inside a loop, When scry runs the interval+octagon product, Then the relational constraint is preserved across loop iterations without false widening."
+      acceptance-note: "the deferred half of FEAT-010 AC#1, now with a live analyzer to measure it on."
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: references-paper
+        target: AC-011
+      - type: depends-on
+        target: FEAT-010
+      - type: depends-on
+        target: FEAT-013
+
+  - id: FEAT-017
+    type: feature
+    title: "v1.5 — SpecTec soundness-by-construction backend (promote the deferred prototype)"
+    status: proposed
+    description: >
+      Build the SpecTec→transfer-function backend deferred from the v1.0
+      capstone (FEAT-011 AC#2): derive sound interval/region transfer
+      functions from the SpecTec source of the Wasm operational semantics
+      (AC-005), so soundness becomes a mechanically discharged side-
+      condition of code generation rather than a hand-written-then-proven
+      obligation. v1.5 promotes the removed scry-spectec prototype
+      (monotonicity-signature derivation, exhaustively falsified) toward a
+      real .watsup-consuming backend, beginning with the i32 arithmetic
+      fragment. Mechanized soundness (REQ-002) is the differentiator MF-005
+      identifies; soundness-by-construction is its strongest form.
+    tags: [capability, spectec, soundness-by-construction, v1.5]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given the SpecTec source for i32 arithmetic, When the backend runs, Then a sound interval transfer function is generated and proven sound against the SpecTec-derived concrete semantics, with no hand-written bound arithmetic."
+    links:
+      - type: satisfies
+        target: REQ-002
+      - type: references-paper
+        target: AC-005
+      - type: depends-on
+        target: FEAT-011
+
+  - id: FEAT-018
+    type: feature
+    title: "v1.6 — Component-Model handle-state / use-after-drop (deferred FEAT-002 slice)"
+    status: proposed
+    description: >
+      Land the handle-state analysis deferred from the FEAT-002 provenance
+      slice: a linear/affine resource-handle lattice (fresh / borrowed /
+      owned / dropped) over the Component Model, detecting use-after-drop
+      on owned handles and host-call effect sets, projected onto fused-
+      module locations via the existing component-provenance boundary. This
+      addresses the Component-Model soundness sub-goal (G-003) that has
+      stood undeveloped since v0.7, and is the capability that most
+      distinguishes scry from Core-Wasm-only analyzers (AC-009 names the
+      Component Model AI gap).
+    tags: [capability, component-model, handle-state, v1.6]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a composed component graph using owned/borrowed handles, When scry runs its component-mode analysis, Then every use-after-drop on owned handles is reported with a witnessing abstract counterexample."
+    links:
+      - type: satisfies
+        target: REQ-003
+      - type: references-paper
+        target: AC-009
+      - type: depends-on
+        target: FEAT-002
+
+  - id: FEAT-019
+    type: feature
+    title: "v1.7 — Differential precision corpus vs Wanilla / Wassail (falsify precision externally)"
+    status: proposed
+    description: >
+      Build the shared-benchmark differential harness deferred across
+      FEAT-009 (Wanilla taint corpus) and the call-graph milestone: run
+      scry against external sound/near-sound Wasm analyzers — Wanilla
+      (AC-007) for noninterference, Wassail (TE-003, AC-010) for
+      call-graph and information-flow — on a shared corpus, and report
+      where scry is equivalent, stricter, or less precise. This makes
+      scry's precision claims falsifiable against an external baseline
+      rather than self-asserted, the falsification discipline the
+      methodology demands before any "competitive precision" claim.
+    tags: [capability, benchmark, differential, precision, v1.7]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a shared benchmark corpus, When scry's results are compared to Wanilla's and Wassail's, Then scry is never unsound relative to ground truth and every precision delta (better/equal/worse) is reported per benchmark."
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: references-paper
+        target: AC-007
+      - type: references-paper
+        target: AC-010
+      - type: evaluates-tech
+        target: TE-003
+      - type: depends-on
+        target: FEAT-009
+
+  - id: FEAT-020
+    type: feature
+    title: "v2.0 — Tool-qualification dossier: match the commercial bar, differentiated by mechanized soundness"
+    status: proposed
+    description: >
+      Assemble the v2.0 capstone: a tool-qualification dossier analogous
+      to the Astrée (TE-001) / Polyspace (TE-009) Qualification Support Kit
+      + Qualification Software Life-Cycle Data model, positioning scry as a
+      qualifiable sound analyzer under DO-330 / DO-333, ISO 26262-8 §11,
+      and IEC 61508 — but whose central differentiator is the one no
+      incumbent offers (MF-005): soundness as a *mechanized theorem*
+      (REQ-002) against the official Wasm semantics, not a vendor design
+      claim. Bundles the qualification-support material, the operational-
+      verification harness, and the safety-manual analog, building on the
+      v1.0 six-domain credit dossier and closing the v2.0 qualifiability
+      goal (G-005). v2.0 = the dossier an assessor can act on.
+    tags: [capability, qualification, dossier, release, v2.0]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given the qualification dossier, When an assessor reviews it against the QSK/QSLCD model, Then every tool-qualification objective for the claimed credit level maps to a scry artifact (mechanized proof, witness MC/DC, host-test oracle, signed evidence bundle) with a sigil-signed digest."
+        - "Given the dossier's differentiator claim, When the soundness evidence is examined, Then scry's soundness is backed by a machine-checked Rocq proof against WasmCert-Coq (REQ-002), distinguishing it from the design-claim soundness of Astrée and Polyspace."
+    links:
+      - type: satisfies
+        target: REQ-005
+      - type: evaluates-tech
+        target: TE-001
+      - type: evaluates-tech
+        target: TE-009
+      - type: addresses-finding
+        target: MF-005
+      - type: depends-on
+        target: FEAT-011
+      - type: traces-to
+        target: G-005
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Safety goal for the v2.0 qualification milestone.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: G-005
+    type: safety-goal
+    title: scry is itself qualifiable to the commercial sound-analyzer bar, differentiated by mechanized soundness
+    status: draft
+    fields:
+      claim: >
+        scry can be qualified as a sound static-analysis tool to the bar
+        set by the commercial incumbents (Astrée, Polyspace) under
+        DO-330 / DO-333, ISO 26262-8 §11, and IEC 61508 — supplying the
+        qualification-support data (operational verification, life-cycle
+        data, safety manual) those standards require — while supplying
+        what the incumbents cannot: a machine-checked proof that the
+        analysis is sound against the official Wasm semantics. No
+        credit-bearing qualification objective for the claimed level is
+        left without a scry artifact.
+      goal-type: system-level
+      asil: D
+      undeveloped: true
+    links:
+      - type: traces-to
+        target: G-001
+      - type: traces-to
+        target: FEAT-020
