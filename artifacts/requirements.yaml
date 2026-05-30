@@ -758,23 +758,56 @@ artifacts:
   - id: FEAT-011
     type: feature
     title: "v1.0 — Six-domain credit dossier + SpecTec backend prototype"
-    status: proposed
+    status: draft
     description: >
-      Land the full mechanized soundness proof for the v0.1+v0.2+v0.3
-      domain stack (interval + region-memory + reachability +
-      call-graph) against WasmCert-Coq. Build a prototype SpecTec
-      backend that derives a sound interval-domain transfer function
-      directly from the SpecTec source — proof of concept for
-      soundness-by-construction. Assemble the six-domain credit
-      dossier (DO-178C/DO-333, ISO 26262-6, IEC 61508, IEC 62304,
-      EN 50128, ECSS).
+      The v1.0 capstone, in three legs, closing the top-level safety
+      goal G-001 (all three DO-333 technique classes staffed).
+
+      (1) Full-stack mechanized soundness (AC#1). Extend the v0.9
+      interval soundness (proofs/rocq/Soundness.v) to the shipped
+      v0.1–v0.4 domain stack: region-memory (proofs/rocq/Region.v —
+      region-offset and bounds-check-elision soundness), call-graph
+      resolution (proofs/rocq/CallGraph.v — the resolved target set
+      always contains the concrete target, reducing call-graph
+      soundness to interval-index soundness), and the reachability
+      lattice (proofs/rocq/Reachability.v — the abstract foundation).
+      Each is γ-based soundness discharged with no admits and no axioms
+      (`bazel test //proofs/rocq:...`). Honest scope: the interval add
+      models the no-wrap integer core (the shipped i32_add widens to ⊤
+      on possible 2^32 wrap, trivially sound); the WasmCert-Coq-backed
+      wrap-aware proof remains the named TE-004 future slice; and the
+      reachability domain is lattice-proven but not yet consumed by
+      analyzer code (deferred when the v0.4 call-graph slice shipped),
+      stated as such in the dossier rather than silently claimed.
+
+      (2) SpecTec backend prototype (AC#2) — DEFERRED to v1.1. The
+      soundness-by-construction proof of concept (derive a sound interval
+      transfer from the SpecTec source per AC-005) is the one
+      research-grade leg with real unknowns, so v1.0 ships the
+      mechanized stack (AC#1) and the dossier (AC#3) and defers AC#2 to
+      a v1.1 slice rather than risk it blocking the milestone.
+
+      (3) Six-domain credit dossier (AC#3). docs/credit-dossier-v1.md
+      (DOC-CREDIT-DOSSIER-V1) assembles the evidence-to-requirement
+      map (REQ-001..008 → mechanized / derived / runnable / contract /
+      paper evidence) and the per-standard credit cross-walk for the
+      abstract-interpretation technique class across DO-178C/DO-333,
+      ISO 26262-6, IEC 61508, IEC 62304, EN 50128, and ECSS. It ships
+      inside the cosign-signed release compliance bundle (REQ-005). The
+      safety case is closed accordingly: a new dossier evidence node
+      (Sn-005) supports the top-level goal G-001 and a mechanized-stack
+      evidence node (Sn-006) supports the AI-soundness sub-goal G-002,
+      so G-001 is discharged with all three DO-333 technique classes
+      staffed (abstract interpretation by the scry analyzer + the
+      FEAT-010/011 proofs, deductive proof by Verus/Rocq, model checking
+      by Kani).
     tags: [release, mechanization, dossier, v1.0]
     fields:
       phase: phase-2
       acceptance-criteria:
-        - "Given the full v0.1-v0.3 domain stack, When the Rocq mechanized soundness theorem is built, Then `make` succeeds with no admits or axioms."
-        - "Given the SpecTec backend prototype, When the SpecTec source for i32 arithmetic is provided, Then a sound interval transfer function is generated and proven sound against the SpecTec-derived concrete semantics."
-        - "Given the six-domain credit dossier, When an assessor reviews the per-standard evidence-to-requirement mapping, Then every requirement in REQ-001..008 traces to mechanized or paper-verified evidence with a sigil-signed digest."
+        - "Given the full v0.1-v0.3 domain stack, When the Rocq mechanized soundness theorem is built, Then it succeeds with no admits or axioms. (v1.0: Soundness.v + Region.v + CallGraph.v + Reachability.v all PASS via `bazel test //proofs/rocq:...`, 0 admits / 0 axioms. Reachability is lattice-proven, not yet code-consumed; the WasmCert-Coq wrap-aware bound is the deferred TE-004 slice.)"
+        - "Given the SpecTec backend prototype, When the SpecTec source for i32 arithmetic is provided, Then a sound interval transfer function is generated and proven sound against the SpecTec-derived concrete semantics. (DEFERRED to v1.1 — the soundness-by-construction leg is the one research-grade deliverable with real unknowns; v1.0 ships AC#1 + AC#3 and does not claim AC#2.)"
+        - "Given the six-domain credit dossier, When an assessor reviews the per-standard evidence-to-requirement mapping, Then every requirement in REQ-001..008 traces to mechanized or paper-verified evidence with a sigil-signed digest. (v1.0: docs/credit-dossier-v1.md, shipped in the cosign-signed compliance bundle.)"
     links:
       - type: satisfies
         target: REQ-002

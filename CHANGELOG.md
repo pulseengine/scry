@@ -7,6 +7,70 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-05-29
+
+Headline: **the safety goal closes**. v1.0 is the capstone: the mechanized
+soundness proof now covers the full shipped v0.1–v0.4 domain stack, and
+the six-domain credit dossier assembles the per-standard evidence map
+that closes the top-level safety goal [[G-001]] — all three DO-333
+technique classes (abstract interpretation, deductive proof, model
+checking) are staffed with runnable, version-pinned, and now
+mechanically-proven evidence. This is the "AI writes the code; here is
+the proof it's sound" thesis made concrete.
+
+### Added
+
+- **Full-stack mechanized soundness** ([[FEAT-011]] AC#1). The Rocq
+  proof extends from the v0.9 interval theorem to the whole shipped
+  stack, each with **no admits and no axioms** (verified by
+  `bazel test //proofs/rocq:...`):
+  - `proofs/rocq/Region.v` — region-offset soundness and bounds-check-
+    elision soundness (`in_bounds_sound`: a proven-in-bounds offset
+    interval means every concrete access is in range — the loom
+    REQ-004 use case), plus distinct-region non-aliasing.
+  - `proofs/rocq/CallGraph.v` — the resolved `call_indirect` target set
+    always contains the concrete target (`callgraph_resolution_sound`),
+    reducing call-graph soundness to interval-index soundness; constant
+    indices resolve precisely; disjoint indices are provably unreachable.
+  - `proofs/rocq/Reachability.v` — the reachability lattice algebra
+    (`Reachable` is the sound top; join over-approximates; partial
+    order). Honest scope: lattice-proven, not yet analyzer-consumed.
+- **Six-domain credit dossier** ([[FEAT-011]] AC#3) —
+  `docs/credit-dossier-v1.md` ([[DOC-CREDIT-DOSSIER-V1]]). A
+  REQ-001..008 → evidence map (mechanized / runnable / contract / paper)
+  and a per-standard credit cross-walk for the abstract-interpretation
+  technique class across DO-178C/DO-333, ISO 26262-6, IEC 61508,
+  IEC 62304, EN 50128, and ECSS. Ships inside the cosign-signed release
+  compliance bundle (REQ-005).
+- **Safety-case closure.** New evidence nodes `Sn-005` (dossier →
+  [[G-001]]) and `Sn-006` (mechanized stack → [[G-002]]); the G-002
+  soundness evidence is upgraded from asserted/placeholder to
+  mechanized. `SCRY_VERSION` → 1.0.0.
+
+### Known limitations (deferred to v1.1+)
+
+- **SpecTec→interval-transfer soundness-by-construction backend**
+  ([[FEAT-011]] AC#2) — the one research-grade leg with real unknowns —
+  is deferred to v1.1 rather than risk it blocking the milestone.
+- The mechanized **interval `add`** models the no-wrap integer core; the
+  shipped `i32_add` widens to ⊤ on possible 2³² wrap (trivially sound,
+  `γ(⊤)=ℤ`). The WasmCert-Coq-backed wrap-aware proof is the named
+  [[TE-004]] future slice.
+- **Reachability** is lattice-proven but not yet consumed by analyzer
+  code (deferred when the v0.4 call-graph slice shipped); the dossier
+  credits the lattice algebra, not a shipped reachability transfer.
+- Tool qualification (DO-330 / ISO 26262-8 §11) is out of scope.
+
+### Falsifiable kill-criterion
+
+The full v0.1–v0.4 domain-stack soundness proof builds with **no admits
+and no axioms** — `bazel test //proofs/rocq:soundness_test
+//proofs/rocq:region_test //proofs/rocq:callgraph_test
+//proofs/rocq:reachability_test` all PASS. If any γ-soundness theorem
+fails to close, the proof build goes red and v1.0's central claim — that
+the shipped abstract domains over-approximate the concrete Wasm
+semantics — is falsified.
+
 ## [0.9.0] — 2026-05-29
 
 Headline: **relational reasoning + the first mechanized soundness proof**.
@@ -754,7 +818,8 @@ falsifier.
 See git history for pre-v0.1 work (initial scope-out + DD-002 closure
 in PR #2).
 
-[Unreleased]: https://github.com/pulseengine/scry/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/pulseengine/scry/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/pulseengine/scry/releases/tag/v1.0.0
 [0.9.0]: https://github.com/pulseengine/scry/releases/tag/v0.9.0
 [0.8.0]: https://github.com/pulseengine/scry/releases/tag/v0.8.0
 [0.7.0]: https://github.com/pulseengine/scry/releases/tag/v0.7.0
