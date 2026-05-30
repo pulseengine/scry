@@ -1,0 +1,20 @@
+[package]
+name = "scry-interval"
+description = "Pure interval + region-memory abstract domain for scry (FEAT-001/FEAT-005; extracted for the self-contained analyzer, FEAT-013)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library, zero deps — mirrors scry-octagon / scry-taint /
+# scry-provenance. Compiles to wasm32-wasip2 (linked directly into the
+# self-contained scry-analyzer component, FEAT-013) AND natively (the
+# wasm-lattice component delegates its WIT `domain` exports to it, and
+# scry-host-tests falsifies it). The transfer functions are the same
+# ones whose soundness is mechanized in proofs/rocq/Soundness.v +
+# Region.v.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

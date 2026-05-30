@@ -26,6 +26,7 @@ members = [
     "crates/scry-provenance",
     "crates/scry-taint",
     "crates/scry-octagon",
+    "crates/scry-interval",
     "crates/scry-host-tests",
 ]
 
