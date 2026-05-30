@@ -52,8 +52,6 @@ artifacts:
         target: REQ-001
       - type: addresses-finding
         target: MF-005
-      - type: traces-to
-        target: FEAT-019
 
   - id: TE-009
     type: technology-evaluation
@@ -64,11 +62,11 @@ artifacts:
       the absence of run-time errors (overflow, divide-by-zero,
       out-of-bounds access) in C/C++ without executing the code, and
       carries ISO 26262 / IEC 61508 certification (TÜV SÜD) plus a DO-178
-      qualification kit. With Astrée (TE-001) it defines the commercial
-      bar scry's credit positioning and v2.0 qualification dossier
-      (FEAT-020) must meet. Like Astrée its soundness is a vendor design
-      claim, not mechanically proven against a formal language semantics —
-      the gap scry's Rocq-against-WasmCert-Coq proofs fill (MF-005).
+      qualification kit. With AbsInt's Astrée it defines the commercial
+      bar scry's credit positioning and v2.0 qualification dossier must
+      meet. Like Astrée its soundness is a vendor design claim, not
+      mechanically proven against a formal language semantics — the gap
+      scry's Rocq-against-WasmCert-Coq proofs fill (recorded in MF-005).
     fields:
       technology: "Polyspace Code Prover"
       category: framework
@@ -82,10 +80,6 @@ artifacts:
         target: REQ-001
       - type: addresses-finding
         target: MF-005
-      - type: traces-to
-        target: TE-001
-      - type: traces-to
-        target: FEAT-020
 
   - id: TE-010
     type: technology-evaluation
@@ -99,8 +93,8 @@ artifacts:
       soundness by continuous patching of a hand-audited implementation,
       precisely the maintenance burden that a mechanized soundness proof
       (REQ-002) discharges once-and-for-all. The closest open-source
-      reference point for scry's value-analysis core; a candidate
-      differential-corpus baseline (FEAT-019) on the C side.
+      reference point for scry's value-analysis core, and a candidate
+      differential-corpus baseline on the C side.
     fields:
       technology: "Frama-C / EVA"
       category: framework
@@ -114,8 +108,6 @@ artifacts:
         target: REQ-002
       - type: addresses-finding
         target: MF-005
-      - type: traces-to
-        target: FEAT-019
 
   - id: MF-005
     type: market-finding
@@ -124,18 +116,18 @@ artifacts:
     description: >
       Deep-research (2026-05-30) over primary vendor sources establishes
       the competitive shape of sound abstract interpretation in 2025–2026:
-      (1) AbsInt Astrée (TE-001) targets C/C++ only — no public Ada, Rust,
+      (1) AbsInt Astrée targets C/C++ only — no public Ada, Rust,
       Wasm, or ML roadmap — and its recent releases (25.04 / 25.10) refine
       existing domains (dynamic octagon packs, symbolic-domain and
       Boolean-pack precision) rather than adding new domain theory: a
-      maturity plateau. (2) Polyspace (TE-009) and Frama-C EVA (TE-010)
+      maturity plateau. (2) Polyspace and Frama-C EVA
       occupy the same sound-prover category; Infer/Pulse is deliberately
       UNSOUND (incorrectness logic) and is a methodological contrast, not
       a competitor. (3) Crucially, every commercial sound analyzer's
       soundness is a vendor *design claim* backed by audit and
       qualification kits (QSK/QSLCD), NOT a machine-checked theorem
       against a formal language semantics. (4) TrustInSoft adding Rust in
-      2025-11 (TE-008) shows sound AI is expanding to memory-safe /
+      2025-11 shows sound AI is expanding to memory-safe /
       emerging-target languages. scry's defensible niche is the
       intersection no incumbent occupies: a sound analyzer for Wasm whose
       soundness is *mechanically proven* in Rocq against WasmCert-Coq
@@ -155,14 +147,6 @@ artifacts:
         target: REQ-001
       - type: references-paper
         target: AC-003
-      - type: traces-to
-        target: TE-001
-      - type: traces-to
-        target: TE-008
-      - type: traces-to
-        target: TE-009
-      - type: traces-to
-        target: TE-010
       - type: traces-to
         target: FEAT-020
 
@@ -401,7 +385,6 @@ artifacts:
       phase: phase-2
       acceptance-criteria:
         - "Given a Wasm module where two locals are related by an octagon constraint inside a loop, When scry runs the interval+octagon product, Then the relational constraint is preserved across loop iterations without false widening."
-      acceptance-note: "the deferred half of FEAT-010 AC#1, now with a live analyzer to measure it on."
     links:
       - type: satisfies
         target: REQ-001
@@ -508,7 +491,7 @@ artifacts:
     status: proposed
     description: >
       Assemble the v2.0 capstone: a tool-qualification dossier analogous
-      to the Astrée (TE-001) / Polyspace (TE-009) Qualification Support Kit
+      to the Astrée / Polyspace Qualification Support Kit
       + Qualification Software Life-Cycle Data model, positioning scry as a
       qualifiable sound analyzer under DO-330 / DO-333, ISO 26262-8 §11,
       and IEC 61508 — but whose central differentiator is the one no
