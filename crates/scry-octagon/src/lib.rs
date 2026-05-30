@@ -293,7 +293,11 @@ mod tests {
         // v(2k) = x_k, v(2k+1) = -x_k.
         let v = |idx: usize| -> i64 {
             let k = idx / 2;
-            if idx.is_multiple_of(2) { vals[k] } else { -vals[k] }
+            if idx.is_multiple_of(2) {
+                vals[k]
+            } else {
+                -vals[k]
+            }
         };
         for i in 0..n {
             for j in 0..n {

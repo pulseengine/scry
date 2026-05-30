@@ -31,7 +31,11 @@ fn gamma(o: &Octagon, vals: &[i64]) -> bool {
     let n = 2 * dim;
     let v = |idx: usize| -> i64 {
         let k = idx / 2;
-        if idx % 2 == 0 { vals[k] } else { -vals[k] }
+        if idx.is_multiple_of(2) {
+            vals[k]
+        } else {
+            -vals[k]
+        }
     };
     for i in 0..n {
         for j in 0..n {
@@ -105,10 +109,7 @@ fn close_preserves_concretization() {
     }
     // The implied bound is now explicit.
     let n = 6;
-    assert!(
-        c.m[(2 * 2) * n + (2 * 0)] <= 5,
-        "closure derives x_0 - x_2 ≤ 5"
-    );
+    assert!(c.m[(2 * 2) * n] <= 5, "closure derives x_0 - x_2 ≤ 5");
 }
 
 #[test]
