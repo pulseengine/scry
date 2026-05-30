@@ -1828,7 +1828,10 @@ name = "scry-analyzer"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "scry-interval",
+ "scry-octagon",
  "scry-provenance",
+ "scry-taint",
  "sha2",
  "wasmparser 0.247.0",
 ]
@@ -1849,6 +1852,10 @@ dependencies = [
  "wasmtime-wasi",
  "wat",
 ]
+
+[[package]]
+name = "scry-interval"
+version = "0.1.0"
 
 [[package]]
 name = "scry-octagon"

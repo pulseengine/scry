@@ -212,8 +212,8 @@ pub fn join(a: &Octagon, b: &Octagon) -> Octagon {
     }
     let n = ca.n();
     let mut m = vec![INF; n * n];
-    for idx in 0..n * n {
-        m[idx] = ca.m[idx].max(cb.m[idx]);
+    for (slot, (&av, &bv)) in m.iter_mut().zip(ca.m.iter().zip(cb.m.iter())) {
+        *slot = av.max(bv);
     }
     Octagon { dim: a.dim, m }
 }
@@ -226,8 +226,8 @@ pub fn meet(a: &Octagon, b: &Octagon) -> Octagon {
     debug_assert_eq!(a.dim, b.dim);
     let n = a.n();
     let mut m = vec![INF; n * n];
-    for idx in 0..n * n {
-        m[idx] = a.m[idx].min(b.m[idx]);
+    for (slot, (&av, &bv)) in m.iter_mut().zip(a.m.iter().zip(b.m.iter())) {
+        *slot = av.min(bv);
     }
     Octagon { dim: a.dim, m }
 }
@@ -246,13 +246,9 @@ pub fn widen(a: &Octagon, b: &Octagon) -> Octagon {
     }
     let n = ca.n();
     let mut m = vec![INF; n * n];
-    for idx in 0..n * n {
-        // Keep the bound only if it did not relax; otherwise → INF.
-        m[idx] = if b.m[idx] <= ca.m[idx] {
-            ca.m[idx]
-        } else {
-            INF
-        };
+    // Keep the bound only if it did not relax; otherwise → INF.
+    for (slot, (&cav, &bv)) in m.iter_mut().zip(ca.m.iter().zip(b.m.iter())) {
+        *slot = if bv <= cav { cav } else { INF };
     }
     Octagon { dim: a.dim, m }
 }
@@ -276,6 +272,14 @@ pub fn add_bound(o: &Octagon, i: u32, j: u32, c: i64) -> Octagon {
 }
 
 #[cfg(test)]
+// These tests spell out DBM cell indices in their pedagogical form
+// `(2*i)*n + (2*j)` and octagonal bounds as `±2*c`, mirroring the
+// octagon variable encoding `v(2k)=x_k, v(2k+1)=-x_k`. For i=0 / c=0
+// that yields `*0` / identity terms, which clippy's identity_op and
+// erasing_op flag — but collapsing them to bare `0` would erase the
+// index/bound formula the assertions are meant to document. Allow both
+// in the test module only.
+#[allow(clippy::identity_op, clippy::erasing_op)]
 mod tests {
     use super::*;
 
@@ -289,7 +293,11 @@ mod tests {
         // v(2k) = x_k, v(2k+1) = -x_k.
         let v = |idx: usize| -> i64 {
             let k = idx / 2;
-            if idx % 2 == 0 { vals[k] } else { -vals[k] }
+            if idx.is_multiple_of(2) {
+                vals[k]
+            } else {
+                -vals[k]
+            }
         };
         for i in 0..n {
             for j in 0..n {

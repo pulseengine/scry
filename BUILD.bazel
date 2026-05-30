@@ -1,30 +1,42 @@
 """Top-level Bazel package for scry.
 
-The two component crates live under //crates/. The composed
-distributable artifact is `//:scry` (produced by wac_compose).
+v1.1 (FEAT-013 / DD-011): the distributable `//:scry` is the
+self-contained analyzer component itself, copied to the stable name
+`scry.wasm`. Through v1.0 this was a `wac_compose` of the analyzer +
+lattice components, but wac's `--import-dependencies` left the analyzer
+as a root-level component import — a hollow ~2.6 KB shell wasmtime 45
+rejects ("root-level component imports are not supported"), so the
+composed `analyze()` could never run (the v1.0.1 open finding). Now that
+the analyzer links the abstract-domain algebra as Rust crate deps
+(scry-interval / scry-taint / scry-octagon) it imports only WASI and
+runs standalone, so the distributable is simply that component — no wac
+composition needed.
 
-A meld_fuse-based dogfood variant lands at //:scry_fused in a
-later milestone — that target exercises meld on scry's own build
-artifacts, validating the meld fusion path on a real PulseEngine
-component graph. For v0.1, wac_compose is enough to produce a
-runnable component.
+The wasm-lattice component still builds and exports the `domain`
+interface (the DD-008 / DD-004 cross-component dogfood), but it is no
+longer part of the distributable or on the analyzer's execution path.
 """
-
-load("@rules_wasm_component//wac:defs.bzl", "wac_compose")
 
 package(default_visibility = ["//visibility:public"])
 
-# Compose the two scry components into a single distributable Wasm
-# component. wac auto-wires the `pulseengine:wasm-lattice/domain`
-# interface from the lattice component into the analyzer's matching
-# import. The composed component exports the analyzer's `analyzer`
-# interface as its main export.
-wac_compose(
+# The distributable: the self-contained analyzer component, copied to the
+# stable filename `scry.wasm` that release.yml and the host harness
+# (crates/scry-host-tests) read.
+#
+# `//crates/scry-analyzer:scry_analyzer_component` is the PUBLIC alias the
+# rust_wasm_component macro creates for the default (release) profile —
+# `native.alias(name = {name}, actual = :{name}_release, visibility = ...)`,
+# inheriting the analyzer package's public `default_visibility`. Its
+# DefaultInfo is exactly one file: the packaged wasip2 component (~2.5 MB,
+# analyzer embedded, WASI-only imports, validates). We copy that.
+#
+# (v1.1 history: an earlier revision pointed this at the private
+# `scry_analyzer_component_release` sub-target, which is visible only to
+# //crates/scry-analyzer:__pkg__ — a cross-package visibility error that
+# broke the build. The public alias resolves to the identical file.)
+genrule(
     name = "scry",
-    components = {
-        "//crates/wasm-lattice:wasm_lattice_component": "lattice",
-        "//crates/scry-analyzer:scry_analyzer_component": "analyzer",
-    },
-    composition_file = "composition.wac",
-    profile = "release",
+    srcs = ["//crates/scry-analyzer:scry_analyzer_component"],
+    outs = ["scry.wasm"],
+    cmd = "cp $(location //crates/scry-analyzer:scry_analyzer_component) $@",
 )
