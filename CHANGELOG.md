@@ -29,11 +29,19 @@ analyzer self-contained and executable.
   (scry-octagon) algebra as Rust crate deps via a thin local `domain`
   module, instead of importing `pulseengine:wasm-lattice/domain` over WIT.
   The `scry` world drops the cross-component import (the `interval` record
-  is declared locally), so the composed component imports only WASI and
-  runs standalone. `//:scry` is now ~2.4 MB (analyzer embedded), 0
-  root-level component imports, `wasm-tools validate` ok. The wasm-lattice
-  component still exports the same `domain` interface (DD-008 dogfood),
-  now off the analyzer's execution path. `SCRY_VERSION` → 1.1.0.
+  is declared locally), so the analyzer component imports only WASI and
+  runs standalone. The wasm-lattice component still exports the same
+  `domain` interface (DD-008 dogfood), now off the analyzer's execution
+  path. `SCRY_VERSION` → 1.1.0.
+- **`//:scry` is the analyzer component itself, not a `wac_compose`.** The
+  actual mechanism that closes the gap: `wac compose` (as the
+  `wac_compose` rule invokes it, with `--import-dependencies`) emits a
+  component that *imports* `pulseengine:scry` at the root rather than
+  embedding it — the hollow 2,669-byte shell wasmtime rejects. Since the
+  analyzer is now self-contained, `//:scry` is a `genrule` that copies the
+  `scry_analyzer_component` (2,510,923 bytes — analyzer embedded) to the
+  stable `scry.wasm` name release.yml and the host harness read. 0
+  non-WASI imports, `wasm-tools validate` ok.
 - **Live runnable gate (`feat013_live_analyze_gate`).** A no-skip host
   test that loads the shipped component and invokes the live `analyze()`
   on a real module — the process exits non-zero if it cannot run. Prior
