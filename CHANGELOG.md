@@ -39,14 +39,28 @@ analyzer self-contained and executable.
   component that *imports* `pulseengine:scry` at the root rather than
   embedding it — the hollow 2,669-byte shell wasmtime rejects. Since the
   analyzer is now self-contained, `//:scry` is a `genrule` that copies the
-  `scry_analyzer_component` (2,510,923 bytes — analyzer embedded) to the
-  stable `scry.wasm` name release.yml and the host harness read. 0
-  non-WASI imports, `wasm-tools validate` ok.
+  public `scry_analyzer_component` alias (a multi-megabyte component with
+  the analyzer embedded — ~3.17 MB on the verifying build, vs the prior
+  2,669-byte hollow shell) to the stable `scry.wasm` name release.yml and
+  the host harness read. 0 non-WASI imports, `wasm-tools validate` ok; the
+  authoritative artifact digest ships in the release's `SHA256SUMS`. The
+  genrule copies the macro's public `scry_analyzer_component` alias, not
+  the private `_release` sub-target (a cross-package reference to the
+  private target was the visibility error that broke an earlier cut).
 - **Live runnable gate (`feat013_live_analyze_gate`).** A no-skip host
   test that loads the shipped component and invokes the live `analyze()`
   on a real module — the process exits non-zero if it cannot run. Prior
   to v1.1 it would have failed on the wasmtime root-level-import
-  rejection; it now passes.
+  rejection; it now passes (6 program points on fixture-01).
+- **Host-test config marshalling fixed.** `run_analyzer`'s dynamic
+  `analysis-config` record sent only 2 fields; `analysis-config` has
+  carried 3 since v0.8 (FEAT-009's `taint-policy`), so wasmtime rejected
+  the call with "expected 3 fields, got 2". This was invisible until v1.1
+  because the component never instantiated, so the call path was always
+  skipped. With it fixed, the abstract-vs-concrete soundness oracle in
+  `fixture_02` runs for the first time and passes — every concrete input
+  lies in the reported abstract interval, with the unwritten param held
+  at top.
 
 ### Falsifiable kill-criterion
 
