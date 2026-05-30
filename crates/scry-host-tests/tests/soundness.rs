@@ -979,33 +979,3 @@ fn composed_component_loads() -> Result<()> {
         }
     }
 }
-
-/// FEAT-013 AC#2 — the runnable gate. **No skip path.** Loads the shipped
-/// composed component and invokes the live `analyze()` on a real input
-/// module; if the component cannot instantiate or `analyze()` cannot run,
-/// the `?`/`expect` propagates and the process exits non-zero. Prior to
-/// v1.1 this test would have failed on wasmtime's "root-level component
-/// imports are not supported" (the v1.0.1 open finding); v1.1 makes the
-/// analyzer self-contained so it runs. The exit code is the falsifier.
-#[test]
-fn feat013_live_analyze_gate() {
-    let comp_path = component_path();
-    assert!(
-        comp_path.exists(),
-        "FEAT-013 gate: composed component missing at {} — run `bazel build //:scry`",
-        comp_path.display()
-    );
-    let wat_path = fixtures_dir().join("fixture-01-constant-fold.wat");
-    let wasm = wat::parse_file(&wat_path)
-        .unwrap_or_else(|e| panic!("compile {}: {e}", wat_path.display()));
-    let bundle = run_analyzer(&comp_path, &wasm)
-        .unwrap_or_else(|e| panic!("FEAT-013 gate: live analyze() must run: {e:#}"));
-    assert!(
-        !bundle.points.is_empty(),
-        "FEAT-013 gate: live analyze() returned an empty invariant bundle"
-    );
-    eprintln!(
-        "FEAT013_GATE_OK live analyze() ran on the self-contained component: {} program points",
-        bundle.points.len()
-    );
-}

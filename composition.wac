@@ -1,19 +1,13 @@
-// WAC composition for scry.
-//
-// v1.1 (FEAT-013 / DD-011): the analyzer is self-contained — it links
-// the interval/region/taint/octagon algebra as Rust crate deps instead
-// of importing `pulseengine:wasm-lattice/domain` over WIT. So the
-// composition is now just the analyzer itself: no lattice instantiation,
-// no `domain` wiring. Its only imports are WASI, which flow through to
-// the outer composed component's import list, so wasmtime can
-// instantiate and run it (closing the v1.0.1 root-level-import finding).
-//
-// The wasm-lattice component still builds and exports `domain` (the
-// DD-008 / DD-004 cross-component dogfood), but it is no longer on the
-// analyzer's execution path, so it is not part of this composition.
+// WAC composition for scry v0.1.
+// Wires the lattice component's `domain` interface to the analyzer
+// component's `domain` import; exports the analyzer's `analyzer`
+// interface as the composed component's main export. Other imports
+// (WASI; auto-injected by wit-bindgen's runtime) flow through to
+// the outer composed component's import list.
 
 package pulseengine:scry-composed@0.1.0;
 
-let analyzer = new pulseengine:scry { ... };
+let lattice = new pulseengine:wasm-lattice { ... };
+let analyzer = new pulseengine:scry { domain: lattice.domain, ... };
 
 export analyzer as main;

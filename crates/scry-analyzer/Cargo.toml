@@ -31,11 +31,3 @@ sha2 = { workspace = true }
 # //crates/scry-provenance:scry_provenance rust_library target; this
 # path entry keeps the cargo metadata coherent.
 scry-provenance = { path = "../scry-provenance" }
-
-# FEAT-013 (DD-011): abstract-domain algebra as crate deps, replacing the
-# WIT `pulseengine:wasm-lattice/domain` import so the analyzer is
-# self-contained and executable in wasmtime. Bazel wires the matching
-# //crates/* rust_library targets; these path entries keep cargo coherent.
-scry-interval = { path = "../scry-interval" }
-scry-taint = { path = "../scry-taint" }
-scry-octagon = { path = "../scry-octagon" }

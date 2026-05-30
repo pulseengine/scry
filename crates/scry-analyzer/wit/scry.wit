@@ -1,34 +1,17 @@
 // scry — sound abstract interpretation for WebAssembly.
 //
-// v1.1 WIT world (FEAT-013 / DD-011). Hand-derived from spar/scry.aadl
-// (see DD-010). Through v1.0 this world IMPORTED the `domain` interface
-// from `pulseengine:wasm-lattice`; wac's `--import-dependencies` left
-// that as a root-level component import, which wasmtime 45 rejects, so
-// the composed `analyze()` could never run (the v1.0.1 open finding).
-//
-// v1.1 makes the analyzer self-contained: the interval/region algebra is
-// now a Rust crate dependency (`scry-interval`), not a WIT import, so the
-// `interval` type is declared locally here and the `scry` world imports
-// only WASI — the component runs standalone in wasmtime. The wasm-lattice
-// component still exports the same `domain` interface (delegating to the
-// same pure crates), preserving the DD-008 / DD-004 cross-component
-// dogfood as a demonstration, just no longer on the analyzer's execution
-// path.
+// v0.1 WIT world. Hand-derived from spar/scry.aadl (see DD-010).
+// The `scry` world imports the `domain` interface from the
+// `pulseengine:wasm-lattice` component (see DD-004 for the
+// reusability rationale and DD-008 for the dogfood rationale of
+// cross-component WIT). meld will fuse `wasm-lattice` and the
+// `scry-analyzer` component into a single distributable artifact;
+// callers see a single component exporting the `analyzer` interface.
 
 package pulseengine:scry@0.1.0;
 
 interface analyzer {
-    /// Closed interval over signed 64-bit integers (abstracts i32/i64
-    /// Wasm values). Declared locally as of v1.1 (FEAT-013): structurally
-    /// identical to the interval the `scry-interval` crate and the
-    /// `pulseengine:wasm-lattice/domain` interface use; the analyzer
-    /// converts at the crate-call boundary. Bottom is encoded `{lo:1,
-    /// hi:0}`; consumers should test emptiness semantically, not by the
-    /// encoding.
-    record interval {
-        lo: s64,
-        hi: s64,
-    }
+    use pulseengine:wasm-lattice/domain@0.1.0.{interval};
 
     /// Region-pointer carried as part of an `abstract-value`.
     /// Structurally equivalent to the wasm-lattice's `region`
@@ -37,9 +20,10 @@ interface analyzer {
     /// through the WAC composition (which the v0.1.0 wac compose
     /// path does not yet handle cleanly for the new variant —
     /// see commit message for the validation issue).
-    /// Conversion to/from `scry-interval`'s `Region` is trivial
-    /// (same field shape) and is performed inside the analyzer
-    /// implementation when it dispatches to the `region-*` transfer ops.
+    /// Conversion to/from `pulseengine:wasm-lattice/domain.region`
+    /// is trivial (same field shape) and is performed inside the
+    /// analyzer implementation when it dispatches to the
+    /// `region-*` transfer ops.
     record region-pointer-payload {
         region-id: u32,
         offset: interval,
@@ -391,10 +375,6 @@ interface analyzer {
 }
 
 world scry {
-    // v1.1 (FEAT-013): no cross-component import — the analyzer is
-    // self-contained (interval/region/taint/octagon algebra are Rust
-    // crate deps), so the only imports are WASI, injected by wit-bindgen.
-    // This is what lets wasmtime 45 instantiate the composed artifact and
-    // run analyze() (the v1.0.1 open finding, closed).
+    import pulseengine:wasm-lattice/domain@0.1.0;
     export analyzer;
 }
