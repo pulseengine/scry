@@ -1838,13 +1838,7 @@ dependencies = [
 name = "scry-analyzer"
 version = "0.1.0"
 dependencies = [
- "bitflags",
- "scry-interval",
- "scry-octagon",
- "scry-provenance",
- "scry-taint",
- "sha2",
- "wasmparser 0.247.0",
+ "scry-analyze-core",
 ]
 
 [[package]]
