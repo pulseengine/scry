@@ -216,6 +216,57 @@ artifacts:
       - type: traces-to
         target: FEAT-013
 
+  - id: DD-012
+    type: design-decision
+    title: "MC/DC strategy — extract a pure analyzer-core crate to make the real decisions instrumentable"
+    status: accepted
+    description: >
+      Structural (MC/DC) coverage of the analyzer (REQ-010, FEAT-014) must
+      be measured on the analyzer's REAL decision logic, driven by the real
+      corpus, not on a proxy. A v1.2 feasibility spike established the
+      constraints: (1) witness instruments core Wasm MODULES only and
+      rejects wasip2 components; (2) the shipped analyzer is a component
+      whose analyze() is reachable only via the canonical ABI; (3) the
+      analyzer's decision logic is welded to wit-bindgen (types from
+      scry_analyzer_component_bindings, entry is a `Guest` impl), so it does
+      not compile to a plain core module as-is; (4) at opt-level>=1 the
+      wasm32-unknown-unknown linker drops DWARF line rows for inlined
+      functions, which defeats witness's decision reconstruction. A
+      throwaway harness instrumenting the pure scry-interval crate with
+      synthetic inputs was built and rejected as measuring domain arithmetic
+      in isolation rather than the analyzer over the corpus.
+    fields:
+      decision: >
+        Extract the analyzer's wasmparser + fixpoint + transfer logic into a
+        pure, bindgen-free `scry-analyze-core` crate (the same pure-crate
+        pattern DD-011 used for scry-interval), leaving the component as a
+        thin canonical-ABI wrapper over it. Build the core to wasm32-wasip1
+        with debug=2 and #[inline(never)] on measured decisions so DWARF
+        line rows survive, then drive its analyze() over the corpus fixtures
+        via `witness run --invoke-with-args`.
+      rationale: >
+        Same lever as DD-011: a pure no_std core crate is both the shipped
+        execution path (the component wraps it) and the verifiable artifact
+        (witness instruments it, host tests falsify it). It makes the MC/DC
+        evidence land on shipped code, not a copy, and keeps the component a
+        thin marshalling shell.
+      alternatives: >
+        (a) instrument the pure domain crates with synthetic inputs
+            (prototyped, rejected — not the analyzer, not the corpus);
+        (b) teach witness to instrument components / unbundle then drive
+            analyze() through a bespoke canonical-ABI wasmtime harness
+            (high wiring cost, measures marshalling noise alongside logic);
+        (c) extract analyzer-core (chosen) — the honest, reusable shape.
+    links:
+      - type: satisfies
+        target: REQ-010
+      - type: traces-to
+        target: REQ-009
+      - type: traces-to
+        target: DD-011
+      - type: traces-to
+        target: FEAT-014
+
   # ──────────────────────────────────────────────────────────────────────
   # Requirements added for the 2.0 line.
   # ──────────────────────────────────────────────────────────────────────
@@ -280,7 +331,7 @@ artifacts:
   - id: FEAT-013
     type: feature
     title: "v1.1 — Composition-gap fix: shipped artifact embeds and runs the analyzer"
-    status: proposed
+    status: implemented
     description: >
       Resolve DD-011: make the distributable scry artifact contain the
       analyzer and execute end-to-end. Audit why wac_compose //:scry does
@@ -314,27 +365,49 @@ artifacts:
     status: proposed
     description: >
       With the analyzer executable (FEAT-013), measure modified-condition/
-      decision coverage on it with witness: instrument the analyzer Wasm,
-      drive it with the existing scry-host-tests fixtures as a
-      witness harness (witness's --harness subprocess mode, or its
-      embedded wasmtime runner), and emit the MC/DC truth-table report +
-      a signed coverage predicate consumed by rivet. This finally
-      discharges the structural-coverage requirement (REQ-010) and closes
-      the witness step of the original feature loop that has been blocked
-      since v0.1 by the composition gap. Gap rows in the truth table drive
-      new analyzer unit tests until the safety-relevant transfer-function
-      decisions are proved.
+      decision coverage on its real decision logic with witness, driven by
+      the existing scry-host-tests corpus fixtures, and emit the MC/DC
+      truth-table report + a signed coverage predicate consumed by rivet.
+      This discharges the structural-coverage requirement (REQ-010) and
+      closes the witness step of the original feature loop, blocked since
+      v0.1 by the composition gap. Gap rows in the truth table drive new
+      analyzer test inputs until the safety-relevant transfer-function and
+      fixpoint decisions are proved (or each residual gap is named with its
+      closing row vector).
+
+      SCOPE NOTE (2026-05-30, from a v1.2 feasibility spike — see DD-012):
+      a naive route fails. witness instruments CORE modules only, but the
+      analyzer ships as a wasip2 COMPONENT whose analyze() is reachable only
+      through the canonical ABI; and the analyzer's decision logic is welded
+      to the wit-bindgen layer (its types come from
+      scry_analyzer_component_bindings; the entry is a `Guest` impl). A
+      one-off harness that instruments the pure scry-interval crate with
+      synthetic inputs was prototyped and DISCARDED: it measures the domain
+      arithmetic in isolation, not "the analyzer over the corpus", so it
+      does not honestly satisfy this AC. The faithful route (DD-012) is to
+      extract the analyzer's wasmparser+fixpoint+transfer logic into a pure,
+      bindgen-free `scry-analyze-core` crate (the same pure-crate pattern as
+      FEAT-013's scry-interval), make the component a thin canonical-ABI
+      wrapper over it, build that core to wasm32-wasip1 with debug=2 and
+      #[inline(never)] on measured decisions (so DWARF line rows survive for
+      witness's decision reconstruction — the unknown-unknown linker drops
+      them under inlining), and drive its analyze() over the corpus fixtures
+      via `witness run --invoke-with-args`. Until that extraction lands,
+      REQ-010 is NOT satisfied; this feature is the extraction + the
+      corpus-driven MC/DC run together.
     tags: [reality, structural-coverage, mcdc, witness, v1.2]
     fields:
       phase: phase-2
       acceptance-criteria:
-        - "Given the executable analyzer Wasm and the host-test fixtures as a harness, When witness runs, Then it emits an MC/DC truth table over the analyzer's decisions with zero unresolved gap rows on the safety-relevant transfer functions (or each remaining gap is named with its closing row vector)."
+        - "Given the analyzer's decision logic extracted into a pure core crate built as an instrumentable core module, and the host-test corpus fixtures as inputs, When witness runs, Then it emits an MC/DC truth table over the analyzer's real decisions with zero unresolved gap rows on the safety-relevant transfer functions (or each remaining gap is named with its closing row vector)."
         - "Given the witness run, When it completes, Then a signed coverage predicate is produced and validated by rivet as requirement-to-test evidence for REQ-010."
     links:
       - type: satisfies
         target: REQ-010
       - type: depends-on
         target: FEAT-013
+      - type: depends-on
+        target: DD-012
 
   - id: FEAT-015
     type: feature

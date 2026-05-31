@@ -177,7 +177,7 @@ artifacts:
   - id: FEAT-001
     type: feature
     title: Sound abstract-interpretation pass for the Wasm Core Model (v0.1 — Wasm component dogfood)
-    status: draft
+    status: implemented
     description: >
       The scry analyzer, shipping as a wasm32-wasip2 Component Model
       component (per DD-008). Exports the `analyzer.analyze` function
@@ -240,7 +240,7 @@ artifacts:
   - id: FEAT-002
     type: feature
     title: Component-Model AI extension — handles, capability flow, host effects
-    status: draft
+    status: implemented
     description: >
       A second-phase extension lifting the AI to the Wasm Component
       Model. Per DD-002, the analysis runs on the original component
@@ -301,7 +301,7 @@ artifacts:
   - id: FEAT-003
     type: feature
     title: Reusable wasm-lattice crate
-    status: draft
+    status: implemented
     description: >
       A standalone Rust crate providing the abstract domain library
       (interval, octagon, region-memory, reachability, taint, capability,
@@ -347,7 +347,7 @@ artifacts:
   - id: FEAT-012
     type: feature
     title: "v0.2 — Wire rules_verus + rules_rocq_rust into the Bazel build"
-    status: proposed
+    status: implemented
     description: >
       Add the PulseEngine-canonical proof toolchains to scry's Bazel
       workspace alongside `rules_wasm_component`. Mirrors the
@@ -385,7 +385,7 @@ artifacts:
   - id: FEAT-005
     type: feature
     title: "v0.3 — Region-based linear-memory model (CRAB-style)"
-    status: draft
+    status: implemented
     description: >
       Add a region-based memory abstraction to the wasm-lattice
       component and use it from scry-analyzer. Wasm linear memory is
@@ -439,7 +439,7 @@ artifacts:
   - id: FEAT-006
     type: feature
     title: "v0.4 — Sound call_indirect resolution (value-domain call graph)"
-    status: draft
+    status: implemented
     description: >
       Implement the Paccamiccio et al. 2024 technique (AC-008): track
       the operand stack with the interval domain (collapsing to a
@@ -495,7 +495,7 @@ artifacts:
   - id: FEAT-007
     type: feature
     title: "v0.5 — Compositional summary-based interprocedural AI"
-    status: draft
+    status: implemented
     description: >
       Implement per-function abstract summaries in the Stiévenart-De
       Roover 2020 style (AC-010): each function gets a summary
@@ -557,7 +557,7 @@ artifacts:
   - id: FEAT-008
     type: feature
     title: "v0.6 — loom contract: published invariant JSON schema (v1)"
-    status: draft
+    status: implemented
     description: >
       Publish a stable, versioned JSON schema (v1) for scry's per-
       instruction and per-function abstract invariants so the loom
@@ -612,7 +612,7 @@ artifacts:
   - id: FEAT-009
     type: feature
     title: "v0.8 — Taint / noninterference domain (Wanilla-class)"
-    status: draft
+    status: implemented
     description: >
       Add a security-label lattice (Low ⊑ High) lifted pointwise over
       values and memory; lift to a relational analysis sufficient for
@@ -676,7 +676,7 @@ artifacts:
   - id: FEAT-010
     type: feature
     title: "v0.9 — Octagon domain + mechanized soundness for interval domain"
-    status: draft
+    status: implemented
     description: >
       Add the octagon abstract domain (Miné HOSC 2006, AC-011) for
       relational reasoning over Wasm memory offsets and call-table
@@ -758,7 +758,7 @@ artifacts:
   - id: FEAT-011
     type: feature
     title: "v1.0 — Six-domain credit dossier + SpecTec backend prototype"
-    status: draft
+    status: implemented
     description: >
       The v1.0 capstone, in three legs, closing the top-level safety
       goal G-001 (all three DO-333 technique classes staffed).
