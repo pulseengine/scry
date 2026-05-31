@@ -1828,6 +1828,10 @@ name = "scry-analyze-core"
 version = "0.1.0"
 dependencies = [
  "scry-interval",
+ "scry-provenance",
+ "scry-taint",
+ "sha2",
+ "wasmparser 0.247.0",
 ]
 
 [[package]]

@@ -28,3 +28,16 @@ path = "src/lib.rs"
 # `region-pointer-payload`, so the core reuses the pure types directly
 # (the analyzer's region transfer ops then need no conversion).
 scry-interval = { path = "../scry-interval" }
+
+# Step 2 (DD-012): the analyze body + helpers moved here. wasmparser parses
+# the input Wasm Core Model module; sha2 digests the module bytes for
+# `invariant-bundle.module-sha256`. Both `default-features = false` (set in
+# the workspace dep table) so the crate stays `#![no_std]` and compiles to
+# wasm32-unknown-unknown / wasm32-wasip2.
+wasmparser = { workspace = true }
+sha2 = { workspace = true }
+
+# Security-label (taint) lattice for the noninterference analysis (FEAT-009)
+# and the pure meld<->scry provenance boundary crate (FEAT-002 / DD-002).
+scry-taint = { path = "../scry-taint" }
+scry-provenance = { path = "../scry-provenance" }
