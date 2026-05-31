@@ -37,7 +37,7 @@
 // the decisions we measure live in the `#![no_std]` scry-analyze-core
 // (`lib.rs`), not in the harness shell.
 
-use scry_analyze_core::{analyze, AbstractValue, AnalysisConfig, AnalysisResult, TaintPolicy};
+use scry_analyze_core::{AbstractValue, AnalysisConfig, AnalysisResult, TaintPolicy, analyze};
 
 // ── The corpus, baked in as assembled core-Wasm bytes ───────────────────
 const FIXTURE_CONST_FOLD: &[u8] = include_bytes!("../fixtures/fixture-01-constant-fold.wasm");
@@ -45,6 +45,10 @@ const FIXTURE_WITH_PARAM: &[u8] = include_bytes!("../fixtures/fixture-02-with-pa
 const FIXTURE_REGION: &[u8] = include_bytes!("../fixtures/fixture-03-region-bounds.wasm");
 const FIXTURE_CALL_INDIRECT: &[u8] = include_bytes!("../fixtures/fixture-04-call-indirect.wasm");
 const FIXTURE_INTERPROC: &[u8] = include_bytes!("../fixtures/fixture-05-interproc.wasm");
+/// Overflow/underflow inputs that flip the transfer functions' straddle→TOP
+/// guard to TRUE (the small-constant corpus only ever gives the FALSE
+/// polarity), so witness can form the MC/DC independence pair.
+const FIXTURE_OVERFLOW: &[u8] = include_bytes!("../fixtures/fixture-06-overflow.wasm");
 
 // ── Config variants — each flips a different family of analyze decisions ─
 
@@ -117,7 +121,9 @@ fn observe(r: &AnalysisResult) -> i32 {
         .wrapping_mul(31)
         .wrapping_add(r.invariants.points.len() as i64);
     for p in &r.invariants.points {
-        acc = acc.wrapping_add(p.func_index as i64).wrapping_add(p.pc as i64);
+        acc = acc
+            .wrapping_add(p.func_index as i64)
+            .wrapping_add(p.pc as i64);
         for l in &p.locals {
             acc = acc.wrapping_add(l.local_index as i64);
             fold_value(&l.value, &mut acc);
@@ -189,20 +195,40 @@ run_export!(run_const_fold_no_diag, FIXTURE_CONST_FOLD, cfg_no_diag());
 
 run_export!(run_with_param_default, FIXTURE_WITH_PARAM, cfg_default());
 run_export!(run_with_param_taint, FIXTURE_WITH_PARAM, cfg_taint());
-run_export!(run_with_param_taint_no_diag, FIXTURE_WITH_PARAM, cfg_taint_no_diag());
+run_export!(
+    run_with_param_taint_no_diag,
+    FIXTURE_WITH_PARAM,
+    cfg_taint_no_diag()
+);
 
 run_export!(run_region_default, FIXTURE_REGION, cfg_default());
 run_export!(run_region_no_diag, FIXTURE_REGION, cfg_no_diag());
 run_export!(run_region_widen1, FIXTURE_REGION, cfg_widen1());
 
-run_export!(run_call_indirect_default, FIXTURE_CALL_INDIRECT, cfg_default());
-run_export!(run_call_indirect_no_diag, FIXTURE_CALL_INDIRECT, cfg_no_diag());
+run_export!(
+    run_call_indirect_default,
+    FIXTURE_CALL_INDIRECT,
+    cfg_default()
+);
+run_export!(
+    run_call_indirect_no_diag,
+    FIXTURE_CALL_INDIRECT,
+    cfg_no_diag()
+);
 run_export!(run_call_indirect_taint, FIXTURE_CALL_INDIRECT, cfg_taint());
 
 run_export!(run_interproc_default, FIXTURE_INTERPROC, cfg_default());
 run_export!(run_interproc_widen1, FIXTURE_INTERPROC, cfg_widen1());
 run_export!(run_interproc_taint, FIXTURE_INTERPROC, cfg_taint());
-run_export!(run_interproc_taint_no_diag, FIXTURE_INTERPROC, cfg_taint_no_diag());
+run_export!(
+    run_interproc_taint_no_diag,
+    FIXTURE_INTERPROC,
+    cfg_taint_no_diag()
+);
+
+// Straddle→TOP closure: these flip the transfer-fn overflow conditions TRUE.
+run_export!(run_overflow_default, FIXTURE_OVERFLOW, cfg_default());
+run_export!(run_overflow_widen1, FIXTURE_OVERFLOW, cfg_widen1());
 
 #[cfg(test)]
 mod tests {
@@ -220,6 +246,7 @@ mod tests {
             (FIXTURE_REGION, cfg_default()),
             (FIXTURE_CALL_INDIRECT, cfg_default()),
             (FIXTURE_INTERPROC, cfg_taint()),
+            (FIXTURE_OVERFLOW, cfg_default()),
         ];
         for (bytes, cfg) in pairs {
             let _ = drive(bytes, cfg.clone());

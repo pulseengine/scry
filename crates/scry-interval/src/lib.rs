@@ -142,6 +142,14 @@ pub fn constant_i64(c: i64) -> Interval {
     Interval { lo: c, hi: c }
 }
 
+// `#[inline(never)]` on the interval transfer functions (FEAT-014 / DD-012):
+// keep each one a standalone DWARF cluster so witness reconstructs its
+// `is_bot` guard and straddle→TOP decision under MC/DC, instead of folding
+// them into the cross-crate `i32_binop` call site (where the inlined copies'
+// line rows are dropped and the decisions report `dead`). The cost is
+// negligible — each body is a handful of branches — and these are the
+// soundness-critical decisions the MC/DC evidence is meant to cover.
+#[inline(never)]
 pub fn i32_add(a: Interval, b: Interval) -> Interval {
     if is_bot(a) || is_bot(b) {
         return BOTTOM;
@@ -155,6 +163,7 @@ pub fn i32_add(a: Interval, b: Interval) -> Interval {
     }
 }
 
+#[inline(never)]
 pub fn i32_sub(a: Interval, b: Interval) -> Interval {
     if is_bot(a) || is_bot(b) {
         return BOTTOM;
@@ -168,6 +177,7 @@ pub fn i32_sub(a: Interval, b: Interval) -> Interval {
     }
 }
 
+#[inline(never)]
 pub fn i32_mul(a: Interval, b: Interval) -> Interval {
     if is_bot(a) || is_bot(b) {
         return BOTTOM;
@@ -196,6 +206,7 @@ pub fn region_create(region_id: u32) -> Region {
     }
 }
 
+#[inline(never)]
 pub fn region_offset(r: Region, delta: Interval) -> Region {
     if is_bot(r.offset) || is_bot(delta) {
         return Region {

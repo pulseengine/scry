@@ -48,39 +48,50 @@ the authoritative gap rows — not the human stdout.
 ## Result (witness-mcdc/v3, witness 0.28.x; evidence/report.json)
 
 The pipeline runs end-to-end over the **real** analyzer core and the **real**
-corpus. witness reconstructs **660 source-level decisions** and proves
-**114 conditions under MC/DC** (3 decisions at full MC/DC) — including
-conditions inside the soundness-critical interval transfer functions. For
-example the `i32_mul` straddle→TOP decision (scry-interval `lib.rs:171`-ff)
-is reported `partial` with proved condition pairs.
+corpus. witness reconstructs **662 source-level decisions** and proves
+**119 conditions under MC/DC** (4 decisions at full MC/DC) — including
+conditions inside the soundness-critical interval transfer functions.
 
 This is the headline change from the v1.2 spike: instrumentation +
 DWARF attribution + decision reconstruction + MC/DC proving all function
 over the shipped logic, where the synthetic-domain prototype proved zero.
 `trace_health.rows = 0` is harmless here (witness reconstructs from the
-per-branch globals counters, not the trace buffer — 114 proved conditions
+per-branch globals counters, not the trace buffer — 119 proved conditions
 confirm it).
+
+### Gap-closure applied (the v1.2 cycle)
+
+Two closure levers were applied and are baked into this crate / scry-interval:
+
+1. **`#[inline(never)]` on the scry-interval transfer functions** (DD-012):
+   `i32_add` / `i32_sub` / `i32_mul` / `region_offset` keep standalone DWARF
+   clusters rather than being folded into the core's `i32_binop` call site.
+
+2. **`fixture-06-overflow`** drives the transfer functions' straddle→TOP
+   guard `lo < i32::MIN || hi > i32::MAX` to its TRUE polarity (large-
+   magnitude add/sub/mul that over/underflow i32). The rest of the corpus
+   only ever evaluates that OR `(F,F)`; adding the `(T,F)`/`(F,T)` vectors is
+   what MC/DC needs for the independent-effect pair. This raised proved
+   conditions 114 → 119 and full-MC/DC decisions 3 → 4.
 
 ### Honest scope — residual gaps (FEAT-014 AC#1 escape hatch)
 
-Not every safety-relevant condition is yet at full MC/DC. Two named causes,
-both with a known closing approach:
+Not every safety-relevant condition is yet at full MC/DC. Named residuals:
 
-1. **Corpus does not flip every condition.** Many transfer-function and
-   fixpoint conditions show `gap` because the 5 fixtures don't drive both
-   polarities (e.g. an interval that straddles `i32::MIN` *and* one that does
-   not on the same decision). Closing vector: add corpus fixtures whose
-   operands realize the missing condition vectors (witness prints the
-   `gap_closure` target per gap row in `report.json`).
+1. **Some transfer-fn straddle decisions remain `no_witness`/`gap`.** A given
+   source line (e.g. the `i32_mul` straddle, scry-interval `lib.rs:184`-ff)
+   maps to several instrumented decision instances; the overflow fixture now
+   executes the TRUE branch, but witness does not yet pair every instance.
+   Closing approach: drive each instance with `--invoke-with-args` realizing
+   the exact `gap_closure` vector witness prints per gap row in
+   `report.json`, or split the straddle into two single-condition guards so
+   each is a one-instance decision.
 
-2. **Cross-crate inlining collapses some transfer-fn DWARF.** Several
-   `i32_add` / `i32_sub` decisions report `dead`/`unreached` even though
-   fixture-01 exercises `i32.add`, because `scry_interval::i32_*` is inlined
-   into the core's `i32_binop` and its line rows are attributed to the call
-   site. Closing approach (per DD-012): `#[inline(never)]` on the measured
-   scry-interval transfer fns so each keeps a standalone decision cluster.
+2. **A few `i32_add`/`i32_sub` straddle clusters still show `unreached`.**
+   The corpus reaches the functions but not those specific instance copies.
+   Same closing approach as (1).
 
-The `dead` (2786) / `unreached` (437) bulk is std / wasi-libc / wasmparser
+The `dead` (~2791) / `unreached` (~437) bulk is std / wasi-libc / wasmparser
 internal code linked into the harness module — outside the analyzer's
 decision surface and not safety-relevant.
 
