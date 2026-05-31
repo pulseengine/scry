@@ -11,31 +11,12 @@ authors.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-bitflags = { workspace = true }
-
-# v0.2 (FEAT-001 AC#1): the real interval-domain fixpoint.
-# wasmparser parses the input Wasm Core Model module; sha2 digests
-# the module bytes for `invariant-bundle.module-sha256`. Both are
-# `default-features = false` so the crate stays `#![no_std]` and
-# compiles cleanly to wasm32-wasip2.
-#
-# The macro-generated bindings crate
-# (scry_analyzer_component_bindings) is injected by
-# rules_wasm_component.
-wasmparser = { workspace = true }
-sha2 = { workspace = true }
-
-# FEAT-002 (DD-002): the pure meld<->scry provenance boundary crate.
-# Same source compiles into this wasm32-wasip2 component and natively
-# into scry-host-tests. The Bazel build wires it via the
-# //crates/scry-provenance:scry_provenance rust_library target; this
-# path entry keeps the cargo metadata coherent.
-scry-provenance = { path = "../scry-provenance" }
-
-# FEAT-013 (DD-011): abstract-domain algebra as crate deps, replacing the
-# WIT `pulseengine:wasm-lattice/domain` import so the analyzer is
-# self-contained and executable in wasmtime. Bazel wires the matching
-# //crates/* rust_library targets; these path entries keep cargo coherent.
-scry-interval = { path = "../scry-interval" }
-scry-taint = { path = "../scry-taint" }
-scry-octagon = { path = "../scry-octagon" }
+# DD-012 (FEAT-014): the analyze logic now lives in the pure, bindgen-free
+# scry-analyze-core crate; this component is a thin wrapper that converts
+# between the wit-bindgen types and the core's plain-Rust mirrors. The core
+# pulls in wasmparser / sha2 / scry-interval / scry-taint / scry-provenance
+# transitively, so the wrapper depends only on it (plus the
+# rules_wasm_component-injected scry_analyzer_component_bindings crate).
+# Bazel wires the matching //crates/scry-analyze-core rust_library target;
+# this path entry keeps the cargo metadata coherent.
+scry-analyze-core = { path = "../scry-analyze-core" }
