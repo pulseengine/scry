@@ -4,10 +4,10 @@
 //!
 //! Through v1.1 the analyzer's decision logic (wasmparser parse + fixpoint
 //! + transfer functions) lived in `crates/scry-analyzer/src/lib.rs`, welded
-//! to the wit-bindgen-generated types and the `Guest` trait. That made it
-//! impossible to (a) instrument the *real* decisions for witness MC/DC
-//! (witness wants a core module; the analyzer is a wasip2 component) and
-//! (b) reuse the analyzer outside the component ABI.
+//! to the wit-bindgen-generated types and the `Guest` trait. That made two
+//! things impossible: instrumenting the *real* decisions for witness MC/DC
+//! (witness wants a core module, but the analyzer is a wasip2 component),
+//! and reusing the analyzer outside the component ABI.
 //!
 //! DD-012 extracts that logic into this pure crate. Its result types are
 //! plain Rust mirrors of the analyzer's WIT (`crates/scry-analyzer/wit/
