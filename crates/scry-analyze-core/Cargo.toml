@@ -1,0 +1,30 @@
+[package]
+name = "scry-analyze-core"
+description = "Pure, bindgen-free analyzer core for scry (FEAT-014 / DD-012): the wasmparser + fixpoint + transfer logic and its plain-Rust result types, extracted from scry-analyzer so the analyzer's real decisions can be instrumented for witness MC/DC and the component becomes a thin canonical-ABI wrapper."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library — same dual-compile pattern as scry-interval / scry-taint /
+# scry-octagon / scry-provenance: `#![no_std]` + `extern crate alloc`, no
+# wit-bindgen. It compiles natively (scry-host-tests + the witness MC/DC
+# harness drive it) AND to wasm32-unknown-unknown (a core module witness
+# instruments) AND, once the component wrapper lands, into the shipped
+# wasm32-wasip2 analyzer component. DD-012: this is the lever that makes
+# MC/DC land on the real shipped analyzer decisions, not a copy.
+#
+# Step 1 (this commit) defines the plain-Rust result-type surface mirroring
+# the analyzer's WIT (`crates/scry-analyzer/wit/scry.wit`). Later steps move
+# the analyze body + helpers here (adding wasmparser / sha2 / scry-taint /
+# scry-octagon / scry-provenance deps) and rewire the component as a thin
+# Guest wrapper that converts between these types and the WIT bindings.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Interval + Region are field-identical to the WIT `interval` /
+# `region-pointer-payload`, so the core reuses the pure types directly
+# (the analyzer's region transfer ops then need no conversion).
+scry-interval = { path = "../scry-interval" }
