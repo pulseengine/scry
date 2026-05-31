@@ -331,7 +331,7 @@ artifacts:
   - id: FEAT-013
     type: feature
     title: "v1.1 — Composition-gap fix: shipped artifact embeds and runs the analyzer"
-    status: proposed
+    status: implemented
     description: >
       Resolve DD-011: make the distributable scry artifact contain the
       analyzer and execute end-to-end. Audit why wac_compose //:scry does
