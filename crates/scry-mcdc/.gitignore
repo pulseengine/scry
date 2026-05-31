@@ -1,0 +1,9 @@
+# Regenerable witness pipeline intermediates (rebuild via build-and-measure.sh).
+# The committed evidence is evidence/report.json (canonical MC/DC truth table)
+# + evidence/mcdc-predicate.json (signable in-toto Statement). The instrumented
+# module, its manifest, and the raw run counters are large and reproducible.
+/target
+evidence/run.json
+evidence/mcdc-predicate.json
+evidence/scry-mcdc.instrumented.wasm
+evidence/scry-mcdc.instrumented.wasm.witness.json

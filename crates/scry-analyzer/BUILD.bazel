@@ -27,36 +27,21 @@ wit_library(
 )
 
 # The Wasm component. The `_bindings` crate produced by the macro is
-# `scry_analyzer_component_bindings`; it carries both the exported
-# `analyzer` interface and the imported `domain` namespace.
+# `scry_analyzer_component_bindings`; it carries the exported `analyzer`
+# interface.
 #
-# v0.2 (FEAT-001 AC#1) wires in the real interval-domain fixpoint:
-# `wasmparser` parses the input module, `sha2` hashes the bytes for
-# the invariant bundle's `module_sha256`. Both come from the workspace
-# `[workspace.dependencies]` via `crate_universe` — the apparent repo
-# name is `@scry_crates` (configured in MODULE.bazel) so the @crates
-# label that rules_wasm_component exposes for its own internal deps
-# doesn't shadow our workspace deps.
+# DD-012 (FEAT-014): the analyze logic moved into the pure
+# scry-analyze-core crate, so this component is a thin wrapper that converts
+# between the wit-bindgen types and the core's plain-Rust mirrors. The core
+# carries the wasmparser / sha2 / scry-interval / scry-taint /
+# scry-provenance deps transitively (it is itself cross-compiled to
+# wasm32-wasip2), so the component depends only on it.
 rust_wasm_component_bindgen(
     name = "scry_analyzer_component",
     srcs = ["src/lib.rs"],
     profiles = ["release"],
     wit = ":scry_analyzer_wit",
     deps = [
-        "@scry_crates//:wasmparser",
-        "@scry_crates//:sha2",
-        # FEAT-002 (DD-002): the pure meld<->scry boundary crate. A
-        # first-party rust_library (no external deps) cross-compiled to
-        # wasm32-wasip2 alongside this component; provides the
-        # `component-provenance` section decode + projection lookup.
-        "//crates/scry-provenance:scry_provenance",
-        # FEAT-013 (DD-011): the abstract-domain algebra as crate deps,
-        # replacing the WIT `pulseengine:wasm-lattice/domain` import so the
-        # analyzer is self-contained and executable. scry-interval is the
-        # interval+region domain (extracted from wasm-lattice); scry-taint
-        # the security-label domain; scry-octagon the relational domain.
-        "//crates/scry-interval:scry_interval",
-        "//crates/scry-taint:scry_taint",
-        "//crates/scry-octagon:scry_octagon",
+        "//crates/scry-analyze-core:scry_analyze_core",
     ],
 )

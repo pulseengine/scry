@@ -7,6 +7,69 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-31
+
+Headline: **the analyzer's real decisions now carry MC/DC coverage
+evidence.** v1.2 closes the witness step of the original feature loop,
+blocked since v0.1 by the composition gap (v1.1 made `analyze()` runnable;
+v1.2 makes it *instrumentable*). Per DD-012, the analyzer's decision logic
+is extracted into a pure, bindgen-free core so witness can reconstruct an
+MC/DC truth table over the **real** transfer functions driven by the
+**real** corpus — not a synthetic proxy.
+
+### Added / Changed
+
+- **`crates/scry-analyze-core` (FEAT-014 / DD-012).** The analyzer's full
+  pipeline — wasmparser parse, the interval + region-memory fixpoint, the
+  call-graph / SCC / summary machinery, and the taint (noninterference)
+  walk, with ~40 helpers — moves out of `scry-analyzer` into a pure
+  `#![no_std]` crate with plain-Rust result types mirroring the WIT. Same
+  dual-compile pattern as scry-interval: it builds natively, to
+  `wasm32-unknown-unknown` (witness instruments it), and into the shipped
+  `wasm32-wasip2` component. The soundness-critical transfer functions now
+  run on pure types with no per-op WIT marshalling.
+- **`scry-analyzer` is now a thin canonical-ABI wrapper.** It keeps only
+  `struct Component`, the `Guest` impl, the field-by-field WIT⇄core
+  conversions (pure boilerplate, no analysis), and the `export!` macro;
+  `analyze()` delegates to `scry_analyze_core::analyze`. Its deps slim to
+  `scry-analyze-core`. `bazel build //:scry` and the host-test soundness
+  oracles stay green — the move is behaviour-identical.
+- **`crates/scry-mcdc` — witness MC/DC over the real analyzer.** A harness
+  whose 16 no-arg `run_*` exports drive `analyze()` over the corpus
+  fixtures (5 fixtures × config variants: taint on/off, diagnostics on/off,
+  widening 1 vs 3, plus an overflow fixture). `witness run --invoke-all`
+  accumulates per-branch counters across all executions so MC/DC
+  independence pairs exist. witness reconstructs **662 source-level
+  decisions** and proves **119 conditions under MC/DC** (4 full-MC/DC),
+  including conditions in the soundness-critical interval transfer
+  functions — versus **0** proved by the discarded synthetic-domain spike.
+- **`#[inline(never)]` on the scry-interval transfer functions** (per
+  DD-012) so each keeps a standalone DWARF decision cluster for witness's
+  reconstruction. The MC/DC predicate body (`witness-mcdc/v3`) is produced
+  by `witness predicate --kind mcdc` for sigil to sign at release; the
+  canonical truth table ships at `crates/scry-mcdc/evidence/report.json`.
+
+### Known limitations
+
+- MC/DC coverage is **partial-with-named-gaps**, not zero-gap. Some
+  transfer-fn straddle→TOP decisions remain `no_witness`/`gap` (a witness
+  multi-instance-attribution effect); each residual gap is named with its
+  closing approach in `crates/scry-mcdc/README.md` (FEAT-014 AC#1's
+  name-the-gap escape hatch). REQ-010 thus has initial structural-coverage
+  evidence; full closure is tracked for v1.2.x.
+
+### Falsification statement
+
+What v1.2 claims, made falsifiable: **the witness MC/DC pipeline runs over
+the analyzer's real decision logic and proves conditions inside the shipped
+soundness-critical transfer functions.** Falsifier: rebuild
+`crates/scry-mcdc` to `wasm32-wasip1` and run `witness instrument → run
+--invoke-all → report --format mcdc-json`; if `report.json` does not show
+proved (`full_mcdc`) conditions attributed to the interval transfer
+functions' source lines, the claim is false. What v1.2 does **not** claim:
+zero unresolved gap rows — the residual safety-relevant gaps are named, not
+proved closed.
+
 ## [1.1.0] — 2026-05-30
 
 Headline: **the shipped artifact is finally the real one.** v1.1 closes

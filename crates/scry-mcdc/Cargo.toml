@@ -1,0 +1,36 @@
+# scry-mcdc — witness MC/DC harness over the REAL analyzer core (FEAT-014 /
+# DD-012). Standalone `[workspace]` (NOT a root member) so it carries its
+# own witness-tuned release profile and never disturbs the root workspace /
+# Bazel crate set. It path-depends on scry-analyze-core, so `witness
+# instrument` lands on the analyzer's real decisions — the same `analyze`
+# body the shipped component runs — driven over the in-repo corpus fixtures.
+#
+# Pipeline (see build-and-measure.sh):
+#   cargo build --release --target wasm32-wasip1
+#   witness instrument  -> witness run --invoke-all -> witness report mcdc
+#
+# wasm32-wasip1 (not -unknown-unknown): the wasi-sdk linker preserves the
+# DWARF `.debug_line` rows witness clusters into source-level Decisions; the
+# unknown-unknown linker drops them at -O. debug=2 + opt-level=1 keep the
+# decision structure legible without folding the branches away.
+[package]
+name = "scry-mcdc"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+scry-analyze-core = { path = "../scry-analyze-core" }
+
+[profile.release]
+opt-level = 1
+debug = 2
+strip = false
+lto = false
+codegen-units = 1
+panic = "abort"
+
+[workspace]

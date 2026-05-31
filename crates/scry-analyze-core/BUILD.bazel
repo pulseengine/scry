@@ -1,0 +1,36 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# scry-analyze-core — the pure, bindgen-free analyzer core (FEAT-014 /
+# DD-012): the wasmparser parse + interval/region fixpoint + call-graph /
+# SCC / summary machinery + taint walk, plus the plain-Rust result types
+# mirroring the analyzer's WIT. Extracted from scry-analyzer so the real
+# analyzer decisions can be instrumented for witness MC/DC (witness wants a
+# core module) and so the component becomes a thin canonical-ABI wrapper.
+#
+# Same dual-compile pattern as scry-interval / scry-taint / scry-provenance:
+# cross-compiled to wasm32-wasip2 (linked into the scry-analyzer component
+# so analyze() runs standalone) AND native (scry-host-tests + the witness
+# MC/DC harness drive it). Unlike those leaf crates it has deps, so they are
+# wired here; the component then depends only on this target.
+rust_library(
+    name = "scry_analyze_core",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_analyze_core",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    tags = ["feat-014"],
+    deps = [
+        "@scry_crates//:sha2",
+        "@scry_crates//:wasmparser",
+        "//crates/scry-interval:scry_interval",
+        "//crates/scry-provenance:scry_provenance",
+        "//crates/scry-taint:scry_taint",
+    ],
+)
+
+rust_test(
+    name = "scry_analyze_core_test",
+    crate = ":scry_analyze_core",
+    edition = "2024",
+    tags = ["feat-014"],
+)

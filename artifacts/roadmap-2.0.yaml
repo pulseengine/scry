@@ -362,7 +362,7 @@ artifacts:
   - id: FEAT-014
     type: feature
     title: "v1.2 — witness MC/DC on the analyzer (closes the long-standing structural-coverage gap)"
-    status: proposed
+    status: implemented
     description: >
       With the analyzer executable (FEAT-013), measure modified-condition/
       decision coverage on its real decision logic with witness, driven by
@@ -395,6 +395,24 @@ artifacts:
       via `witness run --invoke-with-args`. Until that extraction lands,
       REQ-010 is NOT satisfied; this feature is the extraction + the
       corpus-driven MC/DC run together.
+
+      EVIDENCE (v1.2.0, implemented): the DD-012 extraction landed —
+      crates/scry-analyze-core is the pure bindgen-free core, scry-analyzer
+      is a thin canonical-ABI wrapper, and `bazel build //:scry` + the
+      host-test soundness oracles stay green (behaviour-identical move).
+      crates/scry-mcdc drives the REAL analyze() over the corpus fixtures
+      (16 no-arg run_* exports = fixture×config pairs; `witness run
+      --invoke-all` rather than --invoke-with-args, which sidesteps the
+      canonical-ABI list<u8> marshalling problem). witness reconstructs 662
+      source-level decisions and proves 119 conditions under MC/DC (4 full),
+      including conditions in the soundness-critical interval transfer
+      functions — the decisive break from the spike's 0-proved. AC#1 is met
+      via its name-the-gap escape hatch: residual transfer-fn straddle gaps
+      are NAMED in crates/scry-mcdc/README.md with their closing approach
+      (per-instance vectors / OR-guard split). AC#2: the signable in-toto
+      MC/DC predicate body (witness-mcdc/v3) is produced by `witness
+      predicate --kind mcdc`; sigil wraps+signs it at release time. The
+      canonical truth table ships at crates/scry-mcdc/evidence/report.json.
     tags: [reality, structural-coverage, mcdc, witness, v1.2]
     fields:
       phase: phase-2
