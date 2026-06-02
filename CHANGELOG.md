@@ -7,6 +7,48 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-06-02
+
+Headline: **the abstract-vs-concrete soundness oracle is now live, with no
+skip.** Through v1.2 `scry-host-tests/tests/soundness.rs` ran the analyzer
+behind a `skip_if_wac_limitation` fallback — the composed `//:scry` couldn't
+load in wasmtime (the wac/wasmtime-45 root-import limitation), so the
+abstract side silently degraded to a concrete-only check that could not
+catch an unsound analyzer. FEAT-013 (v1.1) made the analyzer self-contained;
+v1.3 removes the skip and makes the oracle total and non-vacuous.
+
+### Changed
+
+- **No skip (FEAT-015 / reviewer finding #3).** Deleted the dead
+  `skip_if_wac_limitation` / `is_wac_import_dependencies_limitation` helpers.
+  `fixture_01/02/05` now call `run_analyzer(...)?` and `composed_component_-
+  loads` calls `Component::from_file(...)?` — every test **hard-fails** on an
+  analyzer error. The abstract-vs-concrete soundness assertion runs on every
+  CI invocation; there is no path that quietly downgrades to concrete-only.
+
+### Added
+
+- **`fixture-07-bounded-local` — a non-vacuous soundness oracle (FEAT-015 /
+  reviewer finding #4).** `fixture-02`'s only checkable local is a parameter
+  initialised to `⊤`, so "concrete ∈ ⊤" is trivially true and can never
+  falsify an unsound analyzer. The new fixture sets a declared local to a
+  constant, so the analyzer infers a **bounded** interval (`[100, 100]`,
+  confirmed live). The harness asserts the interval is **not `⊤`** *and*
+  contains the concrete return value (`100`), so a buggy analyzer (dropped
+  `local.set`, or a wrong bound) would be caught.
+
+### Falsification statement
+
+What v1.3 claims, made falsifiable: **the shipped analyzer is run live on
+every fixture and every observed concrete value lies inside the analyzer's
+abstract result — including a bounded (non-`⊤`) interval.** Falsifier: run
+`cargo test -p scry-host-tests --test soundness` against the shipped
+component (`SCRY_COMPONENT_PATH` or `bazel build //:scry`); if any fixture's
+abstract side is skipped, or `fixture-07`'s local 0 is `⊤`, or any concrete
+value falls outside its abstract interval, the claim is false. The oracle no
+longer has a skip path, so "green" now means "ran and held," not "didn't
+run."
+
 ## [1.2.0] — 2026-05-31
 
 Headline: **the analyzer's real decisions now carry MC/DC coverage

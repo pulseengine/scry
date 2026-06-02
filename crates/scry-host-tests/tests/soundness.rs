@@ -23,54 +23,38 @@
 //! Step (2) is the soundness oracle. Step (1) is the scaffold that
 //! makes (2) possible.
 //!
+//! ## FEAT-015 (v1.3): the oracle is now LIVE — no skip
+//!
+//! Through v1.2 the abstract side (step 1) was guarded by a
+//! `skip_if_wac_limitation` fallback: the composed `//:scry` was a
+//! `wac --import-dependencies` artifact carrying root-level component
+//! imports that wasmtime 45 could not load, so `Component::from_file`
+//! errored and the fixture tests degraded to the concrete side only. That
+//! masked the analyzer entirely — a broken analyzer would have passed.
+//!
+//! FEAT-013 (v1.1) made the analyzer self-contained (`//:scry` is now the
+//! analyzer component itself, 0 non-WASI imports), so `run_analyzer`
+//! succeeds. FEAT-015 removes the skip: every fixture test now calls
+//! `run_analyzer(...)?` and HARD-FAILS on any error (reviewer finding #3 —
+//! delete the dead skip helpers). The abstract-vs-concrete soundness
+//! assertion runs on every CI run; there is no path that quietly downgrades
+//! to concrete-only.
+//!
+//! It also adds `fixture-07-bounded-local`, whose checkable local carries a
+//! BOUNDED abstract interval rather than ⊤ (reviewer finding #4 —
+//! `fixture-02`'s param-at-⊤ check is vacuous because "concrete ∈ ⊤" can
+//! never fail). With a bounded interval the `contains` assertion can
+//! actually falsify an unsound analyzer.
+//!
 //! Why dynamic `Val` marshalling instead of `wasmtime::component::
-//! bindgen!`: the canonical scry world (`crates/scry-analyzer/wit/
-//! scry.wit`) carries a cross-package `import pulseengine:wasm-
-//! lattice/domain@0.1.0` clause. On the cargo path there's no
-//! mechanism to lay out the dep WITs in the layout bindgen expects
-//! without forking the WIT files (and a fork drifts). The dynamic
-//! API takes the canonical WIT shape as given by the composed
-//! component's exports and matches against them at call time, so we
-//! never need a host-side static copy of the WIT graph.
-//!
-//! ## Known limitation: composed-component import shape
-//!
-//! `rules_wasm_component`'s `wac_compose` rule passes the
-//! `--import-dependencies` flag to `wac` (see
-//! `rules_wasm_component/wac/private/wac_compose.bzl` near line
-//! 178). That flag tells wac to encode each dependent package as a
-//! root-level component import on the composed component rather
-//! than inlining the package definition. wasmtime 45's component
-//! model implementation rejects root-level component imports with
-//!
-//!     root-level component imports are not supported
-//!
-//! (see `wasmtime/crates/environ/src/component/translate/inline.
-//! rs` around line 1889). `bazel-bin/scry.wasm` is therefore
-//! structurally valid (`wasm-tools validate` accepts it; the
-//! Bazel-build CI job is green) but cannot be loaded by
-//! `Component::from_file` in the wasmtime embedding API.
-//!
-//! When the harness detects that specific error chain it falls back
-//! to a structural skip with a `::notice::` line: CI stays green,
-//! the test reports the skip reason in plain text, and the
-//! concrete-side oracle that runs over the WAT fixtures as core
-//! modules still runs to give us at least one mechanical end-to-
-//! end check against the fixtures. The abstract-side `run_analyzer`
-//! path is fully wired and will start producing real soundness
-//! assertions the moment any one of these lands:
-//!
-//! 1. wasmtime adds support for root-level component imports, or
-//! 2. `rules_wasm_component`'s `wac_compose` stops passing
-//!    `--import-dependencies` (so wac inlines the dependent
-//!    packages as definitions), or
-//! 3. the scry repo adds a host-side re-compose step that runs
-//!    `wac compose` (without `--import-dependencies`) on the
-//!    intermediate component artifacts before `cargo test`.
-//!
-//! No change to the harness is needed for that uplift — the
-//! existing `run_analyzer` path already handles the full happy-
-//! path lookup, WASI plumbing, and `Val`-based result decode.
+//! bindgen!`: it takes the canonical WIT shape as given by the shipped
+//! component's exports and matches against them at call time, so the
+//! harness needs no host-side static copy of the WIT graph (which would
+//! drift from `crates/scry-analyzer/wit/scry.wit`). This was originally
+//! also forced by a cross-package `import pulseengine:wasm-lattice/domain`
+//! clause; v1.1 (FEAT-013) dropped that import (the analyzer is
+//! self-contained, `interval` is declared locally), but dynamic `Val`
+//! remains the simplest no-drift binding.
 //!
 //! Graceful skip: if `bazel-bin/scry.wasm` is missing (e.g. dev
 //! checkout without a Bazel build) the test prints a notice and
@@ -190,46 +174,6 @@ fn component_missing_skip(path: &Path) -> bool {
         true
     } else {
         false
-    }
-}
-
-/// Returns true if `err`'s display rendering contains the wasmtime
-/// `root-level component imports are not supported` string anywhere
-/// in its chain. See the module-level doc for context on why this
-/// error is currently expected against the as-built composed
-/// component.
-fn is_wac_import_dependencies_limitation(err: &anyhow::Error) -> bool {
-    let needle = "root-level component imports are not supported";
-    if format!("{err:#}").contains(needle) {
-        return true;
-    }
-    for cause in err.chain() {
-        if cause.to_string().contains(needle) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Handle the known wasmtime/wac-compose interaction by treating it
-/// as a skip with a clear notice. Returns `Ok(())` if the error was
-/// the known limitation (caller should `return Ok(())`); returns
-/// `Err(err)` otherwise so the test fails normally on any unrelated
-/// failure.
-fn skip_if_wac_limitation(
-    err: anyhow::Error,
-    test_label: &str,
-) -> std::result::Result<(), anyhow::Error> {
-    if is_wac_import_dependencies_limitation(&err) {
-        eprintln!(
-            "::notice title=scry-host-tests::[{test_label}] abstract-side analyzer call skipped — \
-             composed bazel-bin/scry.wasm uses wac --import-dependencies (root-level component \
-             imports), which wasmtime 45 cannot load. See module-level doc for the three uplift \
-             paths. Concrete-side oracle still runs."
-        );
-        Ok(())
-    } else {
-        Err(err)
     }
 }
 
@@ -710,47 +654,26 @@ fn fixture_01_constant_fold() -> Result<()> {
     let module_bytes = wat::parse_file(&wat_path)
         .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
 
-    // ── Abstract side ────────────────────────────────────────────────
-    // Try to invoke the scry analyzer via the composed component. If
-    // the wasmtime/wac-compose interaction (see module-level doc)
-    // blocks loading, fall through to the concrete-side oracle so we
-    // still produce at least one mechanical check per fixture.
-    let abstract_ran = match run_analyzer(&comp_path, &module_bytes) {
-        Ok(bundle) => {
-            assert_bundle_well_formed(&bundle, "fixture-01");
-            // fixture-01 has no locals; every point should carry an empty list.
-            for (i, p) in bundle.points.iter().enumerate() {
-                assert!(
-                    p.locals.is_empty(),
-                    "[fixture-01] point #{i} (pc={}) unexpectedly carries {} locals",
-                    p.pc,
-                    p.locals.len()
-                );
-            }
-            true
-        }
-        Err(err) => {
-            skip_if_wac_limitation(err, "fixture-01")?;
-            false
-        }
-    };
+    // ── Abstract side (FEAT-015: always runs, hard-fail on error) ────
+    let bundle = run_analyzer(&comp_path, &module_bytes)
+        .context("[fixture-01] live analyze() must run (FEAT-015: no skip)")?;
+    assert_bundle_well_formed(&bundle, "fixture-01");
+    // fixture-01 has no locals; every point should carry an empty list.
+    for (i, p) in bundle.points.iter().enumerate() {
+        assert!(
+            p.locals.is_empty(),
+            "[fixture-01] point #{i} (pc={}) unexpectedly carries {} locals",
+            p.pc,
+            p.locals.len()
+        );
+    }
 
-    // ── Concrete side (always runs) ──────────────────────────────────
+    // ── Concrete side ────────────────────────────────────────────────
     // The fixture executes deterministically in core wasmtime: the
-    // function actually computes 84. This is the mechanical sanity
-    // check that exercises end-to-end at least once per CI run even
-    // when the abstract side is skipped on the wac-compose limitation.
+    // function actually computes 84.
     let concrete = run_concrete_i32(&module_bytes, "compute", &[])?;
     assert_eq!(concrete, 84, "concrete fixture-01 must compute 84");
-    eprintln!(
-        "scry-host-tests: fixture-01 concrete compute() = {concrete} \
-         (abstract side {})",
-        if abstract_ran {
-            "ran"
-        } else {
-            "skipped — see notice above"
-        }
-    );
+    eprintln!("scry-host-tests: fixture-01 concrete compute() = {concrete} (abstract side ran)");
 
     Ok(())
 }
@@ -778,45 +701,36 @@ fn fixture_02_param_plus_const() -> Result<()> {
     let module_bytes = wat::parse_file(&wat_path)
         .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
 
-    // ── Abstract side ────────────────────────────────────────────────
-    // Try to invoke the scry analyzer via the composed component. If
-    // the wasmtime/wac-compose interaction (see module-level doc)
-    // blocks loading, capture None and fall through; the concrete-
-    // side oracle still runs (its soundness assertion will be
-    // unconditional rather than param-0-vs-abstract for that path).
-    let abstract_param_iv = match run_analyzer(&comp_path, &module_bytes) {
-        Ok(bundle) => {
-            assert_bundle_well_formed(&bundle, "fixture-02");
-            let final_point = bundle
-                .points
-                .last()
-                .expect("points non-empty by previous assert");
-            assert!(
-                !final_point.locals.is_empty(),
-                "[fixture-02] final point should carry one local (the i32 param)"
-            );
-            let local0 = final_point
-                .locals
-                .iter()
-                .find(|l| l.local_index == 0)
-                .ok_or_else(|| anyhow!("[fixture-02] no local-invariant for index 0"))?;
-            let iv = match local0.value {
-                AbstractValue::I32Interval(iv) => iv,
-                other => bail!("[fixture-02] local 0 should be I32Interval, got {other:?}"),
-            };
-            assert!(
-                iv.is_top(),
-                "[fixture-02] local 0 (param) should be top, got [{}, {}]",
-                iv.lo,
-                iv.hi
-            );
-            Some(iv)
-        }
-        Err(err) => {
-            skip_if_wac_limitation(err, "fixture-02")?;
-            None
-        }
+    // ── Abstract side (FEAT-015: always runs, hard-fail on error) ────
+    let bundle = run_analyzer(&comp_path, &module_bytes)
+        .context("[fixture-02] live analyze() must run (FEAT-015: no skip)")?;
+    assert_bundle_well_formed(&bundle, "fixture-02");
+    let final_point = bundle
+        .points
+        .last()
+        .expect("points non-empty by previous assert");
+    assert!(
+        !final_point.locals.is_empty(),
+        "[fixture-02] final point should carry one local (the i32 param)"
+    );
+    let local0 = final_point
+        .locals
+        .iter()
+        .find(|l| l.local_index == 0)
+        .ok_or_else(|| anyhow!("[fixture-02] no local-invariant for index 0"))?;
+    let abstract_param_iv = match local0.value {
+        AbstractValue::I32Interval(iv) => iv,
+        other => bail!("[fixture-02] local 0 should be I32Interval, got {other:?}"),
     };
+    // NOTE: the param is ⊤, so the `contains` check below is VACUOUS (any
+    // input is in ⊤). fixture-07 carries a BOUNDED local so the soundness
+    // oracle is non-vacuous (reviewer finding #4 / FEAT-015).
+    assert!(
+        abstract_param_iv.is_top(),
+        "[fixture-02] local 0 (param) should be top, got [{}, {}]",
+        abstract_param_iv.lo,
+        abstract_param_iv.hi
+    );
 
     // ── Concrete-side oracle (always runs) ───────────────────────────
     // For each hand-picked concrete input, run the fixture as a core
@@ -835,28 +749,21 @@ fn fixture_02_param_plus_const() -> Result<()> {
             input.wrapping_add(5),
             "[fixture-02] doit({input}) should equal {input}+5, got {concrete}",
         );
-        if let Some(param_iv) = abstract_param_iv {
-            // Soundness: param 0 is `input`, abstract is `param_iv`,
-            // assert input ∈ param_iv.
-            assert!(
-                param_iv.contains(input as i64),
-                "[fixture-02] soundness violated: doit({input}) param-0 concrete value not in \
-                 abstract interval [{}, {}]",
-                param_iv.lo,
-                param_iv.hi
-            );
-            eprintln!(
-                "scry-host-tests: fixture-02 input={input} concrete doit={concrete} \
-                 abstract local0=[{lo}, {hi}] — input ∈ abstract: OK",
-                lo = param_iv.lo,
-                hi = param_iv.hi,
-            );
-        } else {
-            eprintln!(
-                "scry-host-tests: fixture-02 input={input} concrete doit={concrete} \
-                 (abstract side skipped — see notice above)"
-            );
-        }
+        // Soundness: param 0 is `input`, assert input ∈ abstract_param_iv.
+        // (Vacuous while the param is ⊤ — see fixture-07 for the real check.)
+        assert!(
+            abstract_param_iv.contains(input as i64),
+            "[fixture-02] soundness violated: doit({input}) param-0 concrete value not in \
+             abstract interval [{}, {}]",
+            abstract_param_iv.lo,
+            abstract_param_iv.hi
+        );
+        eprintln!(
+            "scry-host-tests: fixture-02 input={input} concrete doit={concrete} \
+             abstract local0=[{lo}, {hi}] — input ∈ abstract: OK",
+            lo = abstract_param_iv.lo,
+            hi = abstract_param_iv.hi,
+        );
     }
 
     Ok(())
@@ -886,46 +793,98 @@ fn fixture_05_interproc_summary() -> Result<()> {
     let module_bytes = wat::parse_file(&wat_path)
         .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
 
-    // ── Abstract side (skipped on the known wac-compose limitation) ──
-    let abstract_ran = match run_analyzer(&comp_path, &module_bytes) {
-        Ok(bundle) => {
-            assert_bundle_well_formed(&bundle, "fixture-05");
-            // The structural assertion the abstract side can make
-            // without the operand-stack in the WIT: the bundle decoded
-            // and is well-formed. (Once the operand stack is surfaced
-            // in the WIT — FEAT-008 — this tightens to assert the
-            // `main` call-site result interval is exactly {42,42}.)
-            eprintln!(
-                "scry-host-tests: fixture-05 abstract bundle decoded \
-                 ({} program points)",
-                bundle.points.len()
-            );
-            true
-        }
-        Err(err) => {
-            skip_if_wac_limitation(err, "fixture-05")?;
-            false
-        }
-    };
+    // ── Abstract side (FEAT-015: always runs, hard-fail on error) ────
+    let bundle = run_analyzer(&comp_path, &module_bytes)
+        .context("[fixture-05] live analyze() must run (FEAT-015: no skip)")?;
+    assert_bundle_well_formed(&bundle, "fixture-05");
+    // The structural assertion the abstract side can make without the
+    // operand-stack in the WIT: the bundle decoded and is well-formed.
+    // (Once the operand stack is surfaced in the WIT — FEAT-008 — this
+    // tightens to assert the `main` call-site result interval is {42,42}.)
+    eprintln!(
+        "scry-host-tests: fixture-05 abstract bundle decoded ({} program points)",
+        bundle.points.len()
+    );
 
-    // ── Concrete-side oracle (always runs) ───────────────────────────
-    // `main()` deterministically computes add_one(41) = 42. This is
-    // the interprocedural precision target: scry infers {42,42} for
-    // the same call site (verified by eye against fixture-05.md until
-    // the operand stack is in the WIT).
+    // ── Concrete-side oracle ─────────────────────────────────────────
+    // `main()` deterministically computes add_one(41) = 42.
     let concrete = run_concrete_i32(&module_bytes, "main", &[])?;
     assert_eq!(
         concrete, 42,
         "[fixture-05] main() must compute add_one(41) = 42, got {concrete}"
     );
+    eprintln!("scry-host-tests: fixture-05 concrete main() = {concrete} (abstract side ran)");
+
+    Ok(())
+}
+
+/// fixture-07: the NON-VACUOUS soundness oracle (FEAT-015, reviewer
+/// finding #4). A declared local is set to a constant (100) and returned,
+/// so the analyzer infers a BOUNDED interval for it rather than ⊤. The
+/// concrete return value (100) must lie inside that bounded interval — an
+/// assertion a buggy analyzer (wrong bound, or dropping the `local.set`)
+/// would fail, unlike fixture-02's vacuous ⊤ check.
+#[test]
+fn fixture_07_bounded_local() -> Result<()> {
+    let comp_path = component_path();
+    if component_missing_skip(&comp_path) {
+        return Ok(());
+    }
+
+    let wat_path = fixtures_dir().join("fixture-07-bounded-local.wat");
+    let module_bytes = wat::parse_file(&wat_path)
+        .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
+
+    // ── Abstract side (FEAT-015: always runs, hard-fail on error) ────
+    let bundle = run_analyzer(&comp_path, &module_bytes)
+        .context("[fixture-07] live analyze() must run (FEAT-015: no skip)")?;
+    assert_bundle_well_formed(&bundle, "fixture-07");
+
+    // The analyzer should infer a BOUNDED interval for local 0 by the final
+    // program point (zero-init [0,0], then local.set of const 100).
+    let final_point = bundle
+        .points
+        .last()
+        .expect("points non-empty by previous assert");
+    let local0 = final_point
+        .locals
+        .iter()
+        .find(|l| l.local_index == 0)
+        .ok_or_else(|| anyhow!("[fixture-07] no local-invariant for index 0 at final point"))?;
+    let iv = match local0.value {
+        AbstractValue::I32Interval(iv) => iv,
+        other => bail!("[fixture-07] local 0 should be I32Interval, got {other:?}"),
+    };
+    // NON-VACUITY: the whole point of this fixture — local 0 must be a
+    // bounded interval, not ⊤. Without this the `contains` below could
+    // never falsify (fixture-02's weakness).
+    assert!(
+        !iv.is_top(),
+        "[fixture-07] local 0 must be a BOUNDED interval (the soundness oracle is \
+         vacuous otherwise), got ⊤ = [{}, {}]",
+        iv.lo,
+        iv.hi
+    );
+
+    // ── Concrete side + soundness oracle ─────────────────────────────
+    // `bounded()` returns local 0 = 100; the concrete value must lie inside
+    // the analyzer's bounded abstract interval for local 0.
+    let concrete = run_concrete_i32(&module_bytes, "bounded", &[])?;
+    assert_eq!(
+        concrete, 100,
+        "[fixture-07] bounded() must return 100, got {concrete}"
+    );
+    assert!(
+        iv.contains(concrete as i64),
+        "[fixture-07] soundness violated: bounded() returns {concrete} (= local 0) but the \
+         analyzer's bounded abstract interval for local 0 is [{}, {}]",
+        iv.lo,
+        iv.hi
+    );
     eprintln!(
-        "scry-host-tests: fixture-05 concrete main() = {concrete} \
-         (abstract side {})",
-        if abstract_ran {
-            "ran"
-        } else {
-            "skipped — see notice above"
-        }
+        "scry-host-tests: fixture-07 concrete bounded() = {concrete}, abstract local0 = \
+         [{}, {}] (bounded, non-vacuous) — {concrete} ∈ abstract: OK",
+        iv.lo, iv.hi
     );
 
     Ok(())
@@ -945,48 +904,17 @@ fn composed_component_loads() -> Result<()> {
         return Ok(());
     }
     let engine = component_engine()?;
-    let load_result = Component::from_file(&engine, &comp_path)
+    // FEAT-015: no skip — the self-contained component MUST load in
+    // wasmtime. (Pre-v1.1 this degraded to a magic-bytes check on the
+    // wac --import-dependencies limitation; that limitation is gone.)
+    let _component = Component::from_file(&engine, &comp_path)
         .anyhow()
-        .with_context(|| format!("loading composed component {}", comp_path.display()));
-    match load_result {
-        Ok(_component) => {
-            eprintln!(
-                "scry-host-tests: composed component loaded OK from {}",
-                comp_path.display()
-            );
-            Ok(())
-        }
-        Err(err) => {
-            skip_if_wac_limitation(err, "composed_component_loads")?;
-            // If we get here the failure was the known wac limitation;
-            // do a weaker but still mechanical check — the file exists
-            // and is non-trivially sized — so the test catches the
-            // "bazel forgot to build it" failure mode separately from
-            // the "wasmtime can't load it" failure mode.
-            let bytes = std::fs::read(&comp_path)
-                .with_context(|| format!("reading {}", comp_path.display()))?;
-            assert!(
-                bytes.len() > 8,
-                "composed component file at {} is suspiciously small ({} bytes)",
-                comp_path.display(),
-                bytes.len()
-            );
-            // Wasm magic bytes: 0x00 0x61 0x73 0x6d (\0asm).
-            assert_eq!(
-                &bytes[..4],
-                &[0x00, 0x61, 0x73, 0x6d],
-                "composed component at {} does not start with the Wasm magic bytes",
-                comp_path.display()
-            );
-            eprintln!(
-                "scry-host-tests: composed component at {} parses as Wasm \
-                 (well-formed magic + non-trivial size {} bytes)",
-                comp_path.display(),
-                bytes.len()
-            );
-            Ok(())
-        }
-    }
+        .with_context(|| format!("loading composed component {}", comp_path.display()))?;
+    eprintln!(
+        "scry-host-tests: composed component loaded OK from {}",
+        comp_path.display()
+    );
+    Ok(())
 }
 
 /// FEAT-013 AC#2 — the runnable gate. **No skip path.** Loads the shipped
