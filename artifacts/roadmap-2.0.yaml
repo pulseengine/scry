@@ -430,7 +430,7 @@ artifacts:
   - id: FEAT-015
     type: feature
     title: "v1.3 — Live end-to-end soundness oracle (un-skip the abstract-vs-concrete harness)"
-    status: proposed
+    status: implemented
     description: >
       With analyze() executable (FEAT-013), un-skip the abstract-vs-
       concrete soundness oracle that scry-host-tests/tests/soundness.rs
@@ -441,6 +441,20 @@ artifacts:
       criterion total (live), not concrete-side-only. This upgrades the
       G-002 evidence from native-crate-only to a live whole-artifact
       oracle and completes FEAT-001 AC#3 as originally specified.
+
+      EVIDENCE (v1.3.0, implemented): scry-host-tests/tests/soundness.rs no
+      longer skips. The dead `skip_if_wac_limitation` /
+      `is_wac_import_dependencies_limitation` helpers (reviewer finding #3)
+      are deleted; fixture_01/02/05 and composed_component_loads call
+      `run_analyzer(...)?` / `Component::from_file(...)?` and HARD-FAIL on
+      any error — the abstract-vs-concrete oracle runs on every CI run with
+      no downgrade path. fixture-07-bounded-local (reviewer finding #4) adds
+      a declared local set to a constant, so the analyzer infers a BOUNDED
+      interval (verified [100,100], not ⊤); the harness asserts the interval
+      is non-⊤ AND contains the concrete return value (100), making the
+      soundness assertion falsifiable rather than vacuous. Verified locally
+      against the released v1.2.0 component via SCRY_COMPONENT_PATH (6/6
+      soundness tests pass) and in CI's bazel-built Test job.
     tags: [reality, soundness-oracle, v1.3]
     fields:
       phase: phase-2
