@@ -267,6 +267,53 @@ artifacts:
       - type: traces-to
         target: FEAT-014
 
+  - id: DD-013
+    type: design-decision
+    title: "MC/DC runs in CI as a live gate, with a published static truth-table visualisation"
+    status: accepted
+    description: >
+      FEAT-014 landed the witness MC/DC measurement over the real analyzer
+      core (crates/scry-mcdc) but ran it as a release-time evidence step. To
+      make REQ-010 a live oracle rather than a one-shot artifact, the
+      measurement must run on every change and regress the build if structural
+      coverage drops; and the truth-table evidence should be inspectable, not
+      just a JSON blob.
+    fields:
+      decision: >
+        Add a CI job (.github/workflows/ci.yml `mcdc`) that provisions witness
+        + witness-viz (pinned to a witness commit for reproducibility), builds
+        the scry-mcdc harness to wasm32-wasip1, runs witness instrument / run
+        --invoke-all / report over the real analyzer decisions, and FAILS if
+        conditions_proved or decisions_full_mcdc fall below a floor
+        (crates/scry-mcdc/mcdc-gate.sh; v1.x floor = 110 proved / 4 full,
+        measured 119 / 4). The same job runs `witness-viz export` to emit a
+        static HTML truth-table site (index + per-decision + per-gap pages)
+        uploaded as a CI artifact and publishable to GitHub Pages.
+      rationale: >
+        Same "live oracle, not a one-shot" principle as the soundness gate
+        (FEAT-015): a coverage number in a committed file rots; a gate that
+        re-measures on every change cannot. Pinning the witness rev keeps the
+        floor meaningful (a witness upgrade cannot silently move the
+        goalposts). The static viz makes the gap rows assessor-inspectable —
+        the witness philosophy is "the truth table is the artifact, not the
+        percentage".
+      alternatives: >
+        (a) keep MC/DC as a release-only step (rejected — REQ-010 stays a
+            one-shot, regressions land silently);
+        (b) a bazel rule via rules_wasm_component's witness toolchain (no
+            high-level MC/DC rule exists yet; revisit when it does);
+        (c) live HTMX serve mode only (not a CI artifact; static export is
+            GitHub-Pages-deployable and diffable).
+    links:
+      - type: satisfies
+        target: REQ-010
+      - type: traces-to
+        target: FEAT-014
+      - type: traces-to
+        target: DD-012
+      - type: traces-to
+        target: FEAT-015
+
   # ──────────────────────────────────────────────────────────────────────
   # Requirements added for the 2.0 line.
   # ──────────────────────────────────────────────────────────────────────

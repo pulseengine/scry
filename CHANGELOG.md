@@ -7,6 +7,42 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-06-03
+
+Headline: **MC/DC is now a live CI gate with a published truth-table
+visualisation.** v1.2 landed the witness MC/DC measurement over the real
+analyzer core but ran it as a release-time evidence step; v1.3.1 rolls it
+into the test suite (DD-013) so it runs on every change and a coverage
+regression turns the build red — REQ-010 becomes a live oracle, not a
+one-shot artifact. The shipped analyzer artifact is behaviour-identical
+(this is CI/tooling/evidence only; `SCRY_VERSION` → 1.3.1 to track the tag).
+
+### Added
+
+- **`crates/scry-mcdc/mcdc-gate.sh` + the `mcdc` CI job.** Builds the harness
+  to `wasm32-wasip1`, runs `witness instrument / run --invoke-all / report`
+  over the real analyzer decisions, and **fails the build** if
+  `conditions_proved` (< 110) or `decisions_full_mcdc` (< 4) regress — read
+  from `report.json`, not stdout. CI provisions `witness` + `witness-viz`
+  pinned to a witness commit (so the floor stays meaningful across witness
+  upgrades) and caches the built binaries.
+- **Static truth-table visualisation (`witness-viz export`).** The same job
+  turns the report into a static HTML site — an overview page plus one page
+  per decision and per gap row, each rendering the truth table — uploaded as
+  the `scry-mcdc-viz` CI artifact and GitHub-Pages-deployable. The witness
+  philosophy ("the truth table is the artifact, not the percentage") made
+  inspectable. Aggregate counts are committed as `evidence/viz-summary.json`.
+
+### Falsification statement
+
+What v1.3.1 claims, made falsifiable: **the MC/DC measurement is a gate, not
+a snapshot — a code change that drops a proved condition fails CI.**
+Falsifier: on a branch, weaken the analyzer so a transfer-function condition
+no longer proves, push, and observe the `mcdc` job stay green; if it does,
+the gate is not live. What it does **not** claim: that the residual gaps
+(v1.2) are closed — the floor (110/4) sits below the full condition count by
+design, gating against *regression* while the named gaps remain open.
+
 ## [1.3.0] — 2026-06-02
 
 Headline: **the abstract-vs-concrete soundness oracle is now live, with no
