@@ -255,3 +255,49 @@ jobs:
         run: cargo install --locked cargo-deny
       - name: cargo deny check
         run: cargo deny check --hide-inclusion-graph
+
+  mcdc:
+    name: MC/DC (witness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # FEAT-014 rollout: the witness MC/DC pipeline runs on every change over
+    # the REAL analyzer core (crates/scry-analyze-core, driven by
+    # crates/scry-mcdc), so a code change that drops a proved condition turns
+    # the build red — REQ-010 is a live oracle, not a one-shot release
+    # artifact. The job also publishes the static truth-table visualisation.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+      # witness lives in a sibling repo (pulseengine/witness); pin the rev so
+      # the coverage numbers are reproducible and the gate is deterministic.
+      # Cache the two built binaries keyed by that rev so we don't rebuild
+      # witness (~several min) on every run.
+      - name: Cache witness binaries
+        id: witness-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/witness
+            ~/.cargo/bin/witness-viz
+          key: witness-bins-${{ runner.os }}-6ff96e75a1b495aa165f1ee91abda3049fffe628
+      - name: Install witness + witness-viz (pinned rev)
+        if: steps.witness-cache.outputs.cache-hit != 'true'
+        run: |
+          REV=6ff96e75a1b495aa165f1ee91abda3049fffe628
+          URL=https://github.com/pulseengine/witness.git
+          cargo install --git "$URL" --rev "$REV" witness-mcdc
+          cargo install --git "$URL" --rev "$REV" witness-mcdc-viz
+      - name: Run MC/DC gate (witness pipeline + baseline assertion + viz)
+        run: ./crates/scry-mcdc/mcdc-gate.sh
+        env:
+          MCDC_SITE_DIR: ${{ github.workspace }}/mcdc-viz-site
+      - name: Upload MC/DC truth-table visualisation
+        uses: actions/upload-artifact@v4
+        with:
+          name: scry-mcdc-viz
+          path: ${{ github.workspace }}/mcdc-viz-site
+          if-no-files-found: error
+          retention-days: 14

@@ -95,10 +95,42 @@ The `dead` (~2791) / `unreached` (~437) bulk is std / wasi-libc / wasmparser
 internal code linked into the harness module — outside the analyzer's
 decision surface and not safety-relevant.
 
+## CI gate — MC/DC is a live oracle, not a one-shot (DD-013)
+
+`mcdc-gate.sh` is the rollout: it builds the harness, runs `witness instrument
+/ run --invoke-all / report`, and **fails the build** if `conditions_proved`
+or `decisions_full_mcdc` (read from `evidence/report.json`) drop below a floor
+(default 110 proved / 4 full; v1.2 measured 119 / 4). The
+`.github/workflows/ci.yml` `mcdc` job runs it on every change — provisioning
+`witness` + `witness-viz` pinned to a witness commit (so the floor stays
+meaningful) — so a code change that silently drops a proved condition turns
+the build red. Run it locally with:
+
+```sh
+WITNESS_BIN=… WITNESS_VIZ_BIN=… ./mcdc-gate.sh
+```
+
+## Visualisation — static truth-table site
+
+The gate also runs `witness-viz export`, turning the report into a **static
+HTML site** (one overview page + one page per decision + one per gap row, with
+the truth table rendered per decision). It's browseable from `file://` and
+deployable to GitHub Pages; CI uploads it as the `scry-mcdc-viz` artifact. The
+witness philosophy — *the truth table is the artifact, not the percentage* —
+made inspectable. The aggregate counts witness-viz emits are committed as
+`evidence/viz-summary.json` (a small, diffable snapshot). To browse the live
+HTMX version instead: `witness viz --reports-dir <dir-of-report+manifest>`.
+
+(`--source-root` is passed so Decision/Gap pages *can* show ±5-line source
+snippets, but witness attributes decisions by basename — many crates share
+`lib.rs` — so the snippet lookup currently no-ops; the truth tables render
+regardless.)
+
 ## Evidence artifacts (`evidence/`)
 
 | file | what |
 |------|------|
 | `report.json` | canonical MC/DC truth table (`witness-mcdc/v3`) — committed |
+| `viz-summary.json` | witness-viz aggregate counts (proved / full-MC/DC / gap / dead + pages) — committed, small, diffable |
 | `mcdc-predicate.json` | unwrapped in-toto Statement (`witness-mcdc/v3`) carrying the truth tables + a sha256 binding to the report — the FEAT-014 AC#2 coverage-predicate body, which sigil wraps + signs at release time. Regenerate with `witness predicate --run evidence/run.json --module evidence/scry-mcdc.instrumented.wasm --kind mcdc` (gitignored — large + regenerable) |
 | `run.json`, `*.instrumented.wasm`, `*.witness.json` | regenerable intermediates (gitignored) |
