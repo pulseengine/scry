@@ -1400,12 +1400,356 @@ fn region_write_set(ops: &[Operator<'_>], start: usize, end: usize) -> Vec<u32> 
     written
 }
 
+/// FEAT-016 slice-2a: max fixpoint iterations at a loop header before we
+/// widen (then a hard cap before widening straight to ⊤ for termination).
+/// Matches the analysis-config `widening-threshold` default (3).
+const LOOP_WIDEN_THRESHOLD: u32 = 3;
+const LOOP_ITER_CAP: u32 = 64;
+
+/// Per-local widening (FEAT-016 slice-2a). `widen(a, b)` over the interval
+/// domain (scry-interval, terminating ascending-chain); region/unknown keep
+/// their value only if unchanged, else degrade to ⊤ (`Unknown`).
+fn widen_abstract(a: &AbstractValue, b: &AbstractValue) -> AbstractValue {
+    match (a, b) {
+        (AbstractValue::I32Interval(x), AbstractValue::I32Interval(y)) => {
+            AbstractValue::I32Interval(scry_interval::widen(*x, *y))
+        }
+        (AbstractValue::I64Interval(x), AbstractValue::I64Interval(y)) => {
+            AbstractValue::I64Interval(scry_interval::widen(*x, *y))
+        }
+        _ if a == b => clone_value(a),
+        _ => AbstractValue::Unknown,
+    }
+}
+
+/// `a ⊑ b` in the abstract-value lattice (FEAT-016 slice-2a).
+fn leq_abstract(a: &AbstractValue, b: &AbstractValue) -> bool {
+    match (a, b) {
+        (AbstractValue::I32Interval(x), AbstractValue::I32Interval(y)) => {
+            scry_interval::leq(*x, *y)
+        }
+        (AbstractValue::I64Interval(x), AbstractValue::I64Interval(y)) => {
+            scry_interval::leq(*x, *y)
+        }
+        // `Unknown` is the variant-lattice top: everything is below it.
+        (_, AbstractValue::Unknown) => true,
+        _ => a == b,
+    }
+}
+
+fn join_locals(a: &[AbstractValue], b: &[AbstractValue]) -> Vec<AbstractValue> {
+    a.iter().zip(b).map(|(x, y)| join_abstract(x, y)).collect()
+}
+
+fn widen_locals(a: &[AbstractValue], b: &[AbstractValue]) -> Vec<AbstractValue> {
+    a.iter().zip(b).map(|(x, y)| widen_abstract(x, y)).collect()
+}
+
+/// `a ⊑ b` pointwise over the locals vector.
+fn locals_leq(a: &[AbstractValue], b: &[AbstractValue]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| leq_abstract(x, y))
+}
+
+/// Did a straight-line sequence fall through to its end, or did control
+/// leave it (a `br`/`return`)? FEAT-016 slice-2a structured dataflow.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flow {
+    Fall,
+    Diverged,
+}
+
+/// A structured label (an enclosing `block` or `loop`) and the joined locals
+/// of every branch that targets it. For a `block` the branch target is the
+/// state AFTER the block; for a `loop` it is the loop header (the back-edge).
+struct Label {
+    breaks: Option<Vec<AbstractValue>>,
+}
+
+impl Label {
+    fn record(&mut self, locals: &[AbstractValue]) {
+        self.breaks = Some(match self.breaks.take() {
+            Some(acc) => join_locals(&acc, locals),
+            None => locals.to_vec(),
+        });
+    }
+}
+
+/// FEAT-016 slice-2a: a structured-CFG abstract interpreter over the interval
+/// (+ region/taint via interpret_op) domain. Replaces slice-1's write-set
+/// havoc with a real iterate-then-widen fixpoint, so loop-carried locals keep
+/// the precise value they converge to instead of being widened to ⊤. Carries
+/// the per-pass mutable analysis outputs + the structured `block`/`loop`
+/// dataflow.
+struct Interp<'a, 'b> {
+    ops: &'a [Operator<'b>],
+    end_at: &'a [Option<usize>],
+    func_index: u32,
+    module_ctx: &'a ModuleCtx<'b>,
+    emit_diagnostics: bool,
+    depth: u32,
+    diagnostics: &'a mut Vec<Diagnostic>,
+    call_graph: &'a mut Vec<CallEdge>,
+    points: Vec<ProgramPoint>,
+}
+
+impl Interp<'_, '_> {
+    /// Interpret `ops[start..end)` over `ctx`, mutating its locals/stack and
+    /// recording branches into `labels` (innermost last). `emit` gates
+    /// program-point emission — suppressed during a loop's pre-convergence
+    /// fixpoint passes, enabled on the final pass. Returns whether control
+    /// fell through or diverged.
+    fn seq(
+        &mut self,
+        start: usize,
+        end: usize,
+        ctx: &mut FuncCtx,
+        labels: &mut Vec<Label>,
+        emit: bool,
+    ) -> Result<Flow, AnalyzeError> {
+        let mut pc = start;
+        while pc < end {
+            // ── Structured region: block / loop (precise) ───────────
+            if let Some(rend) = self.end_at[pc] {
+                let empty = matches!(
+                    self.ops[pc],
+                    Operator::Block {
+                        blockty: wasmparser::BlockType::Empty
+                    } | Operator::Loop {
+                        blockty: wasmparser::BlockType::Empty
+                    }
+                );
+                if empty && !ctx.degraded && matches!(self.ops[pc], Operator::Block { .. }) {
+                    let flow = self.block(pc + 1, rend, ctx, labels, emit)?;
+                    if flow == Flow::Diverged && ctx.degraded {
+                        // unreachable fall-through; keep going (dead code).
+                    }
+                    pc = rend + 1;
+                    continue;
+                } else if empty && !ctx.degraded && matches!(self.ops[pc], Operator::Loop { .. }) {
+                    self.loop_region(pc + 1, rend, ctx, labels, emit)?;
+                    pc = rend + 1;
+                    continue;
+                } else {
+                    // `if`, non-empty block type, or already degraded: the
+                    // sound v0.2 fallback (write-set havoc of the region).
+                    self.havoc_region(pc, rend, ctx, emit);
+                    pc = rend + 1;
+                    continue;
+                }
+            }
+
+            // ── Branches: contribute to the targeted label ──────────
+            match &self.ops[pc] {
+                Operator::Br { relative_depth } => {
+                    self.target(labels, *relative_depth).record(&ctx.locals);
+                    return Ok(Flow::Diverged);
+                }
+                Operator::BrIf { relative_depth } => {
+                    // br_if pops its i32 condition; on the taken edge the
+                    // locals reach the target, on the not-taken edge we fall
+                    // through (both modelled — sound).
+                    let _ = ctx.operand_stack.pop();
+                    self.target(labels, *relative_depth).record(&ctx.locals);
+                    pc += 1;
+                    continue;
+                }
+                Operator::Return => {
+                    return Ok(Flow::Diverged);
+                }
+                Operator::BrTable { .. } => {
+                    // Unmodelled multi-target branch: sound fallback.
+                    ctx.scrub_to_top();
+                    return Ok(Flow::Diverged);
+                }
+                _ => {}
+            }
+
+            // ── Straight-line operator (interpret_op) ───────────────
+            let stop = matches!(
+                interpret_op(
+                    &self.ops[pc],
+                    ctx,
+                    self.func_index,
+                    pc as u32,
+                    self.emit_diagnostics,
+                    self.diagnostics,
+                    self.module_ctx,
+                    self.call_graph,
+                    self.depth,
+                )?,
+                StepOutcome::Stop
+            );
+            if emit && !ctx.degraded {
+                self.points.push(ProgramPoint {
+                    func_index: self.func_index,
+                    pc: pc as u32,
+                    locals: snapshot_locals(&ctx.locals),
+                });
+            }
+            if stop {
+                return Ok(Flow::Diverged);
+            }
+            pc += 1;
+        }
+        Ok(Flow::Fall)
+    }
+
+    /// The label a `br relative_depth` targets (innermost = depth 0).
+    fn target<'l>(&self, labels: &'l mut [Label], relative_depth: u32) -> &'l mut Label {
+        let n = labels.len();
+        let idx = n.saturating_sub(1 + relative_depth as usize);
+        &mut labels[idx]
+    }
+
+    /// `block`: branches to it land AFTER the block, so the post-block state
+    /// is the fall-through (if reachable) joined with the break states.
+    fn block(
+        &mut self,
+        start: usize,
+        end: usize,
+        ctx: &mut FuncCtx,
+        labels: &mut Vec<Label>,
+        emit: bool,
+    ) -> Result<Flow, AnalyzeError> {
+        let saved_stack = ctx.operand_stack.clone();
+        labels.push(Label { breaks: None });
+        let body_flow = self.seq(start, end, ctx, labels, emit)?;
+        let label = labels.pop().expect("pushed above");
+        // []→[] region: the operand stack is balanced back to pre-region.
+        ctx.operand_stack = saved_stack;
+        match (body_flow, label.breaks) {
+            (Flow::Fall, Some(b)) => ctx.locals = join_locals(&ctx.locals, &b),
+            (Flow::Fall, None) => {}
+            (Flow::Diverged, Some(b)) => ctx.locals = b,
+            (Flow::Diverged, None) => {
+                // Post-block unreachable (body always branched elsewhere).
+                // Dead code follows; leave locals as a sound over-approx.
+            }
+        }
+        Ok(Flow::Fall)
+    }
+
+    /// `loop`: branches to it return to the header (back-edge). Iterate
+    /// `header_{k+1} = entry ⊔ back-edges`, widening after the threshold,
+    /// until the header is stable (a post-fixpoint). The post-loop state is
+    /// the join of the body's fall-through-to-loop-end states (the loop is
+    /// usually exited via a `br` to an outer block, handled by that block's
+    /// accumulator).
+    fn loop_region(
+        &mut self,
+        start: usize,
+        end: usize,
+        ctx: &mut FuncCtx,
+        labels: &mut Vec<Label>,
+        emit: bool,
+    ) -> Result<(), AnalyzeError> {
+        let entry = ctx.locals.clone();
+        let saved_stack = ctx.operand_stack.clone();
+        let mut header = entry.clone();
+        let mut exit: Option<Vec<AbstractValue>> = None;
+        let mut iter = 0u32;
+        loop {
+            ctx.locals = header.clone();
+            ctx.operand_stack = saved_stack.clone();
+            labels.push(Label { breaks: None });
+            // Suppress point emission until the header has converged; the
+            // final pass below emits the fixpoint state.
+            let body_flow = self.seq(start, end, ctx, labels, false)?;
+            let label = labels.pop().expect("pushed above");
+            if body_flow == Flow::Fall {
+                exit = Some(match exit.take() {
+                    Some(e) => join_locals(&e, &ctx.locals),
+                    None => ctx.locals.clone(),
+                });
+            }
+            let mut next = match &label.breaks {
+                Some(b) => join_locals(&entry, b),
+                None => entry.clone(),
+            };
+            if iter >= LOOP_WIDEN_THRESHOLD {
+                next = widen_locals(&header, &next);
+            }
+            if locals_leq(&next, &header) {
+                break;
+            }
+            header = next;
+            iter += 1;
+            if iter > LOOP_ITER_CAP {
+                // Termination safety net: widen every local to ⊤.
+                header = header
+                    .iter()
+                    .map(|_| AbstractValue::I32Interval(domain::top()))
+                    .collect();
+                break;
+            }
+        }
+        // Final pass over the converged header WITH emission, to record the
+        // fixpoint program points inside the loop body.
+        ctx.locals = header.clone();
+        ctx.operand_stack = saved_stack.clone();
+        labels.push(Label { breaks: None });
+        let final_flow = self.seq(start, end, ctx, labels, emit)?;
+        let final_label = labels.pop().expect("pushed above");
+        if final_flow == Flow::Fall {
+            exit = Some(match exit.take() {
+                Some(e) => join_locals(&e, &ctx.locals),
+                None => ctx.locals.clone(),
+            });
+        }
+        // Propagate the converged back-edge breaks to the enclosing labels?
+        // No — back-edges target this loop only; they shaped `header`. Any
+        // br to an OUTER label was recorded into that outer label during the
+        // passes above. Drop this loop's own breaks.
+        let _ = final_label;
+        // Post-loop state: fall-through-exit if any, else the fixpoint header
+        // (sound: covers the otherwise-unreachable fall-through).
+        ctx.locals = exit.unwrap_or(header);
+        ctx.operand_stack = saved_stack;
+        Ok(())
+    }
+
+    /// Sound fallback for a region we do not model precisely (`if`, non-empty
+    /// block type, `br_table`-heavy bodies): slice-1 write-set havoc — widen
+    /// exactly the written locals to ⊤, preserve the rest.
+    fn havoc_region(&mut self, opener: usize, end: usize, ctx: &mut FuncCtx, emit: bool) {
+        if matches!(self.ops[opener], Operator::If { .. }) {
+            let _ = ctx.operand_stack.pop();
+        }
+        let written = region_write_set(self.ops, opener + 1, end);
+        for idx in &written {
+            if let Some(slot) = ctx.locals.get_mut(*idx as usize) {
+                *slot = AbstractValue::I32Interval(domain::top());
+            }
+        }
+        if self.emit_diagnostics {
+            self.diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Info,
+                func_index: self.func_index,
+                pc: opener as u32,
+                message: format!(
+                    "{} modelled by write-set havoc (FEAT-016 fallback): {} local(s) widened \
+                     to top, rest preserved",
+                    op_name(&self.ops[opener]),
+                    written.len()
+                ),
+            });
+        }
+        if emit {
+            self.points.push(ProgramPoint {
+                func_index: self.func_index,
+                pc: end as u32,
+                locals: snapshot_locals(&ctx.locals),
+            });
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_function_body(
     func: &DefinedFunc<'_>,
     init_locals: Vec<AbstractValue>,
     module_ctx: &ModuleCtx<'_>,
-    mut emit_points: Option<&mut Vec<ProgramPoint>>,
+    emit_points: Option<&mut Vec<ProgramPoint>>,
     diagnostics: &mut Vec<Diagnostic>,
     call_graph: &mut Vec<CallEdge>,
     emit_diagnostics: bool,
@@ -1413,115 +1757,23 @@ fn run_function_body(
 ) -> Result<Vec<AbstractValue>, AnalyzeError> {
     let mut ctx = FuncCtx::new(init_locals);
     let ops = &func.ops;
-    // FEAT-016 slice-1: structured-control regions are modelled by write-set
-    // havoc rather than the v0.2 scrub-everything fallback. Pre-pass to pair
-    // each block/loop/if opener with its `end`.
     let end_at = build_end_map(ops);
-    let mut pc: usize = 0;
-    while pc < ops.len() {
-        // ── Structured-control region (block / loop / if) ────────────
-        if let Some(end_pc) = end_at[pc] {
-            let empty_blockty = matches!(
-                ops[pc],
-                Operator::Block {
-                    blockty: wasmparser::BlockType::Empty
-                } | Operator::Loop {
-                    blockty: wasmparser::BlockType::Empty
-                } | Operator::If {
-                    blockty: wasmparser::BlockType::Empty
-                }
-            );
-            let is_if = matches!(ops[pc], Operator::If { .. });
-
-            if empty_blockty && !ctx.degraded {
-                // `if` consumes its condition operand even for a []→[] block;
-                // `block` / `loop` consume nothing at entry. The []→[] body is
-                // stack-balanced (Wasm validation), so after the region the
-                // operand stack equals its pre-region state — nothing to do.
-                if is_if {
-                    let _ = ctx.operand_stack.pop();
-                }
-                // Havoc exactly the locals the region can write; keep the rest.
-                let written = region_write_set(ops, pc + 1, end_pc);
-                for idx in &written {
-                    if let Some(slot) = ctx.locals.get_mut(*idx as usize) {
-                        *slot = AbstractValue::I32Interval(domain::top());
-                    }
-                }
-                if emit_diagnostics {
-                    diagnostics.push(Diagnostic {
-                        severity: DiagnosticSeverity::Info,
-                        func_index: func.abs_index,
-                        pc: pc as u32,
-                        message: format!(
-                            "{} modelled by write-set havoc (FEAT-016): {} local(s) widened \
-                             to top, all others preserved across the region",
-                            op_name(&ops[pc]),
-                            written.len()
-                        ),
-                    });
-                }
-                if let Some(points) = emit_points.as_deref_mut() {
-                    points.push(ProgramPoint {
-                        func_index: func.abs_index,
-                        pc: end_pc as u32,
-                        locals: snapshot_locals(&ctx.locals),
-                    });
-                }
-                pc = end_pc + 1;
-                continue;
-            } else {
-                // Non-empty block type (params/results on the region) or
-                // already degraded: fall back to the sound v0.2 scrub.
-                if emit_diagnostics && !ctx.degraded {
-                    diagnostics.push(Diagnostic {
-                        severity: DiagnosticSeverity::UnsoundnessFallback,
-                        func_index: func.abs_index,
-                        pc: pc as u32,
-                        message: format!(
-                            "{} with a non-empty block type is not modelled — locals degraded \
-                             to top",
-                            op_name(&ops[pc])
-                        ),
-                    });
-                }
-                ctx.scrub_to_top();
-                pc = end_pc + 1;
-                continue;
-            }
-        }
-
-        // ── Straight-line operator ───────────────────────────────────
-        let mut stop = false;
-        match interpret_op(
-            &ops[pc],
-            &mut ctx,
-            func.abs_index,
-            pc as u32,
-            emit_diagnostics,
-            diagnostics,
-            module_ctx,
-            call_graph,
-            depth,
-        )? {
-            StepOutcome::Continue => {}
-            StepOutcome::Stop => stop = true,
-        }
-
-        if let Some(points) = emit_points.as_deref_mut()
-            && !ctx.degraded
-        {
-            points.push(ProgramPoint {
-                func_index: func.abs_index,
-                pc: pc as u32,
-                locals: snapshot_locals(&ctx.locals),
-            });
-        }
-
-        if stop {
-            break;
-        }
-        pc += 1;
+    let want_points = emit_points.is_some();
+    let mut interp = Interp {
+        ops,
+        end_at: &end_at,
+        func_index: func.abs_index,
+        module_ctx,
+        emit_diagnostics,
+        depth,
+        diagnostics,
+        call_graph,
+        points: Vec::new(),
+    };
+    let mut labels: Vec<Label> = Vec::new();
+    interp.seq(0, ops.len(), &mut ctx, &mut labels, want_points)?;
+    if let Some(out) = emit_points {
+        out.extend(interp.points);
     }
     Ok(ctx.operand_stack)
 }
@@ -1848,6 +2100,32 @@ fn interpret_op(
         }
         Operator::Return => {
             return Ok(StepOutcome::Stop);
+        }
+        // ── i32 comparison family (FEAT-016 slice-2a) ────────────────
+        // A comparison/test pushes a boolean i32 in {0, 1}; soundly the
+        // bounded interval [0, 1]. Crucially these do NOT write locals, so
+        // (unlike the v0.2 catch-all) they must NOT scrub — loop exit tests
+        // (`local.get i; i32.eqz; br_if`) need to interpret without
+        // degrading, or the loop fixpoint never runs.
+        Operator::I32Eqz => {
+            let _ = ctx.operand_stack.pop();
+            ctx.operand_stack
+                .push(AbstractValue::I32Interval(Interval { lo: 0, hi: 1 }));
+        }
+        Operator::I32Eq
+        | Operator::I32Ne
+        | Operator::I32LtS
+        | Operator::I32LtU
+        | Operator::I32GtS
+        | Operator::I32GtU
+        | Operator::I32LeS
+        | Operator::I32LeU
+        | Operator::I32GeS
+        | Operator::I32GeU => {
+            let _ = ctx.operand_stack.pop();
+            let _ = ctx.operand_stack.pop();
+            ctx.operand_stack
+                .push(AbstractValue::I32Interval(Interval { lo: 0, hi: 1 }));
         }
         // ── v0.3 region-aware memory ops (FEAT-005) ──────────────
         Operator::I32Load { memarg } => {
@@ -3232,6 +3510,57 @@ mod tests {
             "loop-written i must widen to top, got [{}, {}]",
             i.lo,
             i.hi
+        );
+    }
+
+    /// FEAT-016 slice-2a oracle (real loop fixpoint vs slice-1 havoc).
+    /// fixture-09 writes local 1 (`m`) to the constant 7 on every loop
+    /// iteration. Slice-1 havoc would widen `m` to ⊤; the iterate-then-widen
+    /// fixpoint converges it to the BOUNDED `[0, 7]` (zero-init `[0,0]` ⊔
+    /// body `[7,7]`). Asserts `m` is bounded (not ⊤) and contains the
+    /// concrete results {0, 7} — the precision win, soundly.
+    #[test]
+    fn feat016_loop_written_local_converges() {
+        let wat_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../scry-analyzer/test-fixtures/fixture-09-loop-converge.wat"
+        );
+        let bytes = wat::parse_file(wat_path).expect("assemble fixture-09");
+        let config = AnalysisConfig {
+            widening_threshold: Some(3),
+            emit_diagnostics: true,
+            taint_policy: None,
+        };
+        let result = analyze(bytes, config).expect("analyze fixture-09 must succeed");
+        let last = result
+            .invariants
+            .points
+            .last()
+            .expect("fixture-09 must emit points past the loop");
+        let m = last
+            .locals
+            .iter()
+            .find(|l| l.local_index == 1)
+            .and_then(|l| match l.value {
+                AbstractValue::I32Interval(iv) => Some(iv),
+                _ => None,
+            })
+            .expect("local m (index 1) i32-interval at final point");
+        // The slice-2a win: m is BOUNDED (not ⊤), where slice-1 havoc gave ⊤.
+        assert!(
+            !(m.lo == i64::MIN && m.hi == i64::MAX),
+            "loop-written m widened to ⊤ — the loop fixpoint did not converge it (slice-1 \
+             havoc behaviour); got [{}, {}]",
+            m.lo,
+            m.hi
+        );
+        // Soundness: m's concrete values {0 (loop skipped), 7 (loop ran)} lie
+        // in the abstract interval.
+        assert!(
+            m.lo <= 0 && m.hi >= 7,
+            "m must contain the concrete results {{0, 7}}, got [{}, {}]",
+            m.lo,
+            m.hi
         );
     }
 }
