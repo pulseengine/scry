@@ -7,6 +7,56 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-06-04
+
+Headline: **a real loop fixpoint — loop-carried values now converge instead
+of being discarded.** v1.4 made loops sound by write-set havoc (widen every
+written local to ⊤). v1.5 (FEAT-016 slice-2a, DD-015) replaces that with a
+sound iterate-then-widen abstract interpreter, so a local written in a loop
+keeps the precise interval it converges to.
+
+### Added / Changed
+
+- **Structured-CFG interval fixpoint (FEAT-016 slice-2a).** `run_function_body`
+  becomes a recursive interpreter with **break-state accumulation** — the
+  correct Wasm structured dataflow: `br`/`br_if` record the current locals
+  into the targeted label; a `block`'s exit is the fall-through joined with
+  its break states; a `loop` iterates `header = entry ⊔ back-edges`, widening
+  after the threshold to a post-fixpoint (terminating via scry-interval's
+  ascending-chain `widen`). `if` / `br_table` / non-empty block types keep
+  the sound v1.4 havoc/scrub fallback. A loop-written local now converges
+  (e.g. `[0,7]`) where v1.4 gave ⊤.
+- **i32 comparison family lifted** (`eqz`/`eq`/`ne`/`lt`/`gt`/`le`/`ge` →
+  the bounded `[0,1]`, no local scrub). Loop exit tests use these; under the
+  v0.2 catch-all they scrubbed every local, which silently degraded loops
+  (so v1.4's loop precision was partly masked — now genuinely exercised).
+- **Mechanized soundness, in-slice** (`proofs/rocq/LoopFixpoint.v`,
+  `loop_postfixpoint_sound`): a post-fixpoint of a sound transfer, covering
+  the entry, over-approximates every concrete loop iterate. No admits/axioms;
+  verified by the `rocq-proofs` CI job.
+- **MC/DC rose 131 → 155** (full-MC/DC 5) with the new `fixture-09-loop-converge`
+  in the live gate; floor raised to 148/5. New native oracles for fixture-08
+  (loop-invariant survives, now via the real fixpoint) and fixture-09
+  (loop-written local converges to a bounded interval). `SCRY_VERSION` → 1.5.0.
+
+### Known limitations
+
+- **Interval-only** (slice-2a of FEAT-016). A loop *counter* like `i` (bounded
+  only by the relation `i < n`) still widens to ⊤ — the **octagon relational
+  product** that preserves such constraints across iterations is slice-2b
+  (DD-015), with Miné closure as slice-3. FEAT-016 remains `proposed`.
+
+### Falsification statement
+
+What v1.5 claims, made falsifiable: **a local written to a constant inside a
+loop converges to a bounded interval, soundly.** Falsifier:
+`fixture-09-loop-converge` writes `m=7` each iteration; if the analyzer
+reports `m` as ⊤ after the loop (the v1.4 havoc behaviour), or if the
+concrete result (`0` or `7`) falls outside `m`'s interval, the claim is false
+(the native + host soundness oracles check exactly this). What v1.5 does
+**not** claim: precision on relationally-bounded loop counters — those still
+widen until slice-2b.
+
 ## [1.4.0] — 2026-06-04
 
 Headline: **the analyzer models loops.** Through v1.3 the interval pass

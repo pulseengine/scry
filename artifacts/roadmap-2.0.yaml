@@ -382,7 +382,7 @@ artifacts:
   - id: DD-015
     type: design-decision
     title: "FEAT-016 slice-2 — octagon relational product over a true loop-body fixpoint"
-    status: proposed
+    status: approved
     description: >
       Slice-1 (v1.4.0, DD-014) made the interval pass loop-aware by WRITE-SET
       HAVOC: it skips a region's body and widens the written locals to ⊤.
@@ -683,6 +683,19 @@ artifacts:
       fixpoint (the AC's "constraint preserved across iterations"); slice-3 —
       Miné closure (AC-011). Loop-WRITTEN locals have no loop-carried
       precision until slice-2.
+
+      EVIDENCE (v1.5.0 — slice-2a per DD-015, feature STILL proposed): the
+      write-set havoc is replaced by a REAL iterate-then-widen interval
+      fixpoint — run_function_body is a recursive structured interpreter with
+      break-state accumulation (br/br_if record locals to the target label;
+      block exit = fall-through ⊔ breaks; loop header = entry ⊔ back-edges,
+      widened to a post-fixpoint). Loop-WRITTEN locals now CONVERGE (fixture-09:
+      m → bounded [0,7], not ⊤). The i32 comparison family is lifted (no scrub
+      on loop exit tests). Soundness mechanized admit-free in
+      proofs/rocq/LoopFixpoint.v (loop_postfixpoint_sound). MC/DC proved
+      131→155, full 5; gate floor 148/5. STILL OPEN: slice-2b — the octagon
+      product so a loop COUNTER bounded by a relation (i < n) stays bounded
+      (interval-alone it still widens to ⊤); slice-3 — Miné closure.
     tags: [capability, relational, octagon, precision, v1.4]
     fields:
       phase: phase-2
@@ -699,6 +712,8 @@ artifacts:
         target: FEAT-013
       - type: traces-to
         target: DD-014
+      - type: traces-to
+        target: DD-015
 
   - id: FEAT-017
     type: feature
