@@ -49,6 +49,10 @@ const FIXTURE_INTERPROC: &[u8] = include_bytes!("../fixtures/fixture-05-interpro
 /// guard to TRUE (the small-constant corpus only ever gives the FALSE
 /// polarity), so witness can form the MC/DC independence pair.
 const FIXTURE_OVERFLOW: &[u8] = include_bytes!("../fixtures/fixture-06-overflow.wasm");
+/// Counted loop (block + loop + br_if, empty block type) with a loop-invariant
+/// local — drives the FEAT-016 structured-control / write-set-havoc path in
+/// run_function_body so those decisions are MC/DC-covered by the live gate.
+const FIXTURE_COUNTED_LOOP: &[u8] = include_bytes!("../fixtures/fixture-08-counted-loop.wasm");
 
 // ── Config variants — each flips a different family of analyze decisions ─
 
@@ -230,6 +234,18 @@ run_export!(
 run_export!(run_overflow_default, FIXTURE_OVERFLOW, cfg_default());
 run_export!(run_overflow_widen1, FIXTURE_OVERFLOW, cfg_widen1());
 
+// FEAT-016: exercise the structured-control / write-set-havoc decisions.
+run_export!(
+    run_counted_loop_default,
+    FIXTURE_COUNTED_LOOP,
+    cfg_default()
+);
+run_export!(
+    run_counted_loop_no_diag,
+    FIXTURE_COUNTED_LOOP,
+    cfg_no_diag()
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +263,7 @@ mod tests {
             (FIXTURE_CALL_INDIRECT, cfg_default()),
             (FIXTURE_INTERPROC, cfg_taint()),
             (FIXTURE_OVERFLOW, cfg_default()),
+            (FIXTURE_COUNTED_LOOP, cfg_default()),
         ];
         for (bytes, cfg) in pairs {
             let _ = drive(bytes, cfg.clone());

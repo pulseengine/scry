@@ -890,6 +890,71 @@ fn fixture_07_bounded_local() -> Result<()> {
     Ok(())
 }
 
+/// fixture-08: FEAT-016 slice-1 — the interval loop fixpoint (write-set
+/// havoc), end-to-end against the shipped component. `counted(n)` runs a
+/// counted loop with a loop-invariant local `k = 42` (never written inside
+/// the loop) and a decremented param `i`. Before FEAT-016 the `block`/`loop`
+/// scrubbed every local to ⊤; with write-set havoc, k survives the region
+/// precisely. Soundness oracle: the concrete return (42, the value of k) must
+/// lie in k's abstract interval — and that interval must be the bounded
+/// `[42, 42]`, not ⊤ (non-vacuous; fails if the loop dropped the invariant).
+#[test]
+fn fixture_08_loop_invariant_survives() -> Result<()> {
+    let comp_path = component_path();
+    if component_missing_skip(&comp_path) {
+        return Ok(());
+    }
+
+    let wat_path = fixtures_dir().join("fixture-08-counted-loop.wat");
+    let module_bytes = wat::parse_file(&wat_path)
+        .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
+
+    // ── Abstract side (FEAT-015: always runs, hard-fail on error) ────
+    let bundle = run_analyzer(&comp_path, &module_bytes)
+        .context("[fixture-08] live analyze() must run (FEAT-015: no skip)")?;
+    assert_bundle_well_formed(&bundle, "fixture-08");
+
+    // The loop-invariant local 1 (k) must appear with the bounded interval
+    // [42,42] — pre-FEAT-016 the loop would have scrubbed it to ⊤ (and stopped
+    // emitting points entirely). Search all points; k must never be ⊤ and must
+    // be recorded as [42,42] at least once (after `k = 42`, across the loop).
+    let mut saw_k_bounded = false;
+    for p in &bundle.points {
+        for l in &p.locals {
+            if l.local_index == 1
+                && let AbstractValue::I32Interval(iv) = l.value
+            {
+                assert!(
+                    !iv.is_top(),
+                    "[fixture-08] loop-invariant local k scrubbed to ⊤ at pc {} — the loop \
+                     fixpoint (write-set havoc) failed to preserve it",
+                    p.pc
+                );
+                if iv.lo == 42 && iv.hi == 42 {
+                    saw_k_bounded = true;
+                }
+            }
+        }
+    }
+    assert!(
+        saw_k_bounded,
+        "[fixture-08] expected the loop-invariant local k = [42,42] in the bundle (the FEAT-016 \
+         precision win); none found — did the loop degrade it?"
+    );
+
+    // ── Concrete side + soundness oracle ─────────────────────────────
+    for &n in &[0_i32, 1, 3, 100] {
+        let concrete = run_concrete_i32(&module_bytes, "counted", &[n])?;
+        assert_eq!(
+            concrete, 42,
+            "[fixture-08] counted({n}) must return the loop-invariant 42, got {concrete}"
+        );
+    }
+    eprintln!("scry-host-tests: fixture-08 counted(_) = 42, loop-invariant k = [42,42] survived");
+
+    Ok(())
+}
+
 /// Global structural test: just instantiate the composed component
 /// and assert wasmtime can load it. Useful as a fast triage signal
 /// — if this fails, the fixture tests above will also fail and the

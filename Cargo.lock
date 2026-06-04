@@ -1832,6 +1832,7 @@ dependencies = [
  "scry-taint",
  "sha2",
  "wasmparser 0.247.0",
+ "wat",
 ]
 
 [[package]]

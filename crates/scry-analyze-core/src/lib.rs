@@ -298,7 +298,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "1.3.1";
+const SCRY_VERSION: &str = "1.4.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -1356,6 +1356,50 @@ fn top_for(ty: wasmparser::ValType) -> AbstractValue {
 /// Returns the operand-stack state at the point the body finished
 /// (fall-through `end` or `return`), from which the caller extracts
 /// the result abstract values.
+/// FEAT-016 slice-1: pair each structured-control opener (`block` / `loop`
+/// / `if`) with its matching `end`. `end_at[pc] = Some(end_pc)` when the op
+/// at `pc` opens a region closing at `end_pc`; `None` otherwise. The
+/// trailing function-level `end` has no open region on the stack, so it maps
+/// to nothing (it is interpreted normally as a no-op).
+fn build_end_map(ops: &[Operator<'_>]) -> Vec<Option<usize>> {
+    let mut end_at: Vec<Option<usize>> = alloc::vec![None; ops.len()];
+    let mut open: Vec<usize> = Vec::new();
+    for (pc, op) in ops.iter().enumerate() {
+        match op {
+            Operator::Block { .. } | Operator::Loop { .. } | Operator::If { .. } => {
+                open.push(pc);
+            }
+            Operator::End => {
+                if let Some(opener) = open.pop() {
+                    end_at[opener] = Some(pc);
+                }
+            }
+            _ => {}
+        }
+    }
+    end_at
+}
+
+/// The set of local indices written (`local.set` / `local.tee`) anywhere in
+/// `ops[start..end]`, nested regions included. FEAT-016 slice-1 "write-set
+/// havoc": `local.set` / `local.tee` are the ONLY operators that write a
+/// Wasm local, so this scan is complete — a structured region can change
+/// exactly these locals and no others. Widening just them to ⊤ on region
+/// exit is therefore sound, while every local outside the set keeps its
+/// precise pre-region value (the FEAT-016 precision win over the v0.2
+/// scrub-everything fallback).
+fn region_write_set(ops: &[Operator<'_>], start: usize, end: usize) -> Vec<u32> {
+    let mut written: Vec<u32> = Vec::new();
+    for op in &ops[start..end] {
+        if let Operator::LocalSet { local_index } | Operator::LocalTee { local_index } = op
+            && !written.contains(local_index)
+        {
+            written.push(*local_index);
+        }
+    }
+    written
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_function_body(
     func: &DefinedFunc<'_>,
@@ -1368,14 +1412,92 @@ fn run_function_body(
     depth: u32,
 ) -> Result<Vec<AbstractValue>, AnalyzeError> {
     let mut ctx = FuncCtx::new(init_locals);
-    let mut pc: u32 = 0;
-    for op in &func.ops {
+    let ops = &func.ops;
+    // FEAT-016 slice-1: structured-control regions are modelled by write-set
+    // havoc rather than the v0.2 scrub-everything fallback. Pre-pass to pair
+    // each block/loop/if opener with its `end`.
+    let end_at = build_end_map(ops);
+    let mut pc: usize = 0;
+    while pc < ops.len() {
+        // ── Structured-control region (block / loop / if) ────────────
+        if let Some(end_pc) = end_at[pc] {
+            let empty_blockty = matches!(
+                ops[pc],
+                Operator::Block {
+                    blockty: wasmparser::BlockType::Empty
+                } | Operator::Loop {
+                    blockty: wasmparser::BlockType::Empty
+                } | Operator::If {
+                    blockty: wasmparser::BlockType::Empty
+                }
+            );
+            let is_if = matches!(ops[pc], Operator::If { .. });
+
+            if empty_blockty && !ctx.degraded {
+                // `if` consumes its condition operand even for a []→[] block;
+                // `block` / `loop` consume nothing at entry. The []→[] body is
+                // stack-balanced (Wasm validation), so after the region the
+                // operand stack equals its pre-region state — nothing to do.
+                if is_if {
+                    let _ = ctx.operand_stack.pop();
+                }
+                // Havoc exactly the locals the region can write; keep the rest.
+                let written = region_write_set(ops, pc + 1, end_pc);
+                for idx in &written {
+                    if let Some(slot) = ctx.locals.get_mut(*idx as usize) {
+                        *slot = AbstractValue::I32Interval(domain::top());
+                    }
+                }
+                if emit_diagnostics {
+                    diagnostics.push(Diagnostic {
+                        severity: DiagnosticSeverity::Info,
+                        func_index: func.abs_index,
+                        pc: pc as u32,
+                        message: format!(
+                            "{} modelled by write-set havoc (FEAT-016): {} local(s) widened \
+                             to top, all others preserved across the region",
+                            op_name(&ops[pc]),
+                            written.len()
+                        ),
+                    });
+                }
+                if let Some(points) = emit_points.as_deref_mut() {
+                    points.push(ProgramPoint {
+                        func_index: func.abs_index,
+                        pc: end_pc as u32,
+                        locals: snapshot_locals(&ctx.locals),
+                    });
+                }
+                pc = end_pc + 1;
+                continue;
+            } else {
+                // Non-empty block type (params/results on the region) or
+                // already degraded: fall back to the sound v0.2 scrub.
+                if emit_diagnostics && !ctx.degraded {
+                    diagnostics.push(Diagnostic {
+                        severity: DiagnosticSeverity::UnsoundnessFallback,
+                        func_index: func.abs_index,
+                        pc: pc as u32,
+                        message: format!(
+                            "{} with a non-empty block type is not modelled — locals degraded \
+                             to top",
+                            op_name(&ops[pc])
+                        ),
+                    });
+                }
+                ctx.scrub_to_top();
+                pc = end_pc + 1;
+                continue;
+            }
+        }
+
+        // ── Straight-line operator ───────────────────────────────────
         let mut stop = false;
         match interpret_op(
-            op,
+            &ops[pc],
             &mut ctx,
             func.abs_index,
-            pc,
+            pc as u32,
             emit_diagnostics,
             diagnostics,
             module_ctx,
@@ -1391,15 +1513,15 @@ fn run_function_body(
         {
             points.push(ProgramPoint {
                 func_index: func.abs_index,
-                pc,
+                pc: pc as u32,
                 locals: snapshot_locals(&ctx.locals),
             });
         }
 
-        pc = pc.saturating_add(1);
         if stop {
             break;
         }
+        pc += 1;
     }
     Ok(ctx.operand_stack)
 }
@@ -3035,6 +3157,81 @@ mod tests {
         assert_eq!(
             AnalyzeError::InvalidConfig(String::from("x")),
             AnalyzeError::InvalidConfig(String::from("x"))
+        );
+    }
+
+    /// FEAT-016 slice-1 oracle (write-set havoc). fixture-08 is a counted
+    /// loop whose local 1 (`k`) is set to 42 *before* the loop and never
+    /// written inside it; local 0 (`i`) is decremented inside the loop.
+    /// Before FEAT-016 the `block`/`loop` scrubbed *every* local to ⊤ and
+    /// stopped emitting points. With write-set havoc the loop is modelled:
+    /// `i` (in the write-set) widens to ⊤, but `k` (not in the write-set)
+    /// keeps its precise `[42, 42]` across the region — and analysis
+    /// continues past the loop. Driven natively against `analyze()` (no
+    /// component / Bazel needed).
+    #[test]
+    fn feat016_loop_invariant_local_survives() {
+        let wat_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../scry-analyzer/test-fixtures/fixture-08-counted-loop.wat"
+        );
+        let bytes = wat::parse_file(wat_path).expect("assemble fixture-08");
+        let config = AnalysisConfig {
+            widening_threshold: Some(3),
+            emit_diagnostics: true,
+            taint_policy: None,
+        };
+        let result = analyze(bytes, config).expect("analyze fixture-08 must succeed");
+
+        // SOUNDNESS + the FEAT-016 win: `k` (local 1) is never scrubbed to ⊤
+        // anywhere — pre-FEAT-016 the loop would have degraded it.
+        for p in &result.invariants.points {
+            for l in &p.locals {
+                if l.local_index == 1
+                    && let AbstractValue::I32Interval(iv) = &l.value
+                {
+                    assert!(
+                        !(iv.lo == i64::MIN && iv.hi == i64::MAX),
+                        "loop-invariant local k scrubbed to top at pc {} — write-set havoc \
+                         failed",
+                        p.pc
+                    );
+                }
+            }
+        }
+
+        // Analysis continued PAST the loop (pre-FEAT-016 it degraded and
+        // stopped emitting). The final program point must show `k = [42,42]`
+        // (survived precisely) and `i = ⊤` (written in the loop → havocked).
+        let last = result
+            .invariants
+            .points
+            .last()
+            .expect("fixture-08 must emit program points past the loop");
+        let find = |idx: u32| -> Interval {
+            for l in &last.locals {
+                if l.local_index == idx
+                    && let AbstractValue::I32Interval(iv) = &l.value
+                {
+                    return *iv;
+                }
+            }
+            panic!("local {idx} missing / not an i32 interval at the final point");
+        };
+        let k = find(1);
+        assert_eq!(
+            (k.lo, k.hi),
+            (42, 42),
+            "loop-invariant k must be [42,42] after the loop, got [{}, {}]",
+            k.lo,
+            k.hi
+        );
+        let i = find(0);
+        assert!(
+            i.lo == i64::MIN && i.hi == i64::MAX,
+            "loop-written i must widen to top, got [{}, {}]",
+            i.lo,
+            i.hi
         );
     }
 }

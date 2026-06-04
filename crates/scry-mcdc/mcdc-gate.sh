@@ -10,8 +10,8 @@
 # Env:
 #   WITNESS_BIN        witness binary           (default: `witness` on PATH)
 #   WITNESS_VIZ_BIN    witness-viz binary       (default: `witness-viz` on PATH)
-#   MCDC_PROVED_FLOOR  min conditions_proved    (default: 110; v1.2 measured 119)
-#   MCDC_FULL_FLOOR    min full-MC/DC decisions (default: 4;   v1.2 measured 4)
+#   MCDC_PROVED_FLOOR  min conditions_proved    (default: 125; v1.4 measured 131)
+#   MCDC_FULL_FLOOR    min full-MC/DC decisions (default: 5;   v1.4 measured 5)
 #   MCDC_SITE_DIR      static viz output dir    (default: ./viz-site)
 #
 # Reads the authoritative numbers from evidence/report.json (NOT stdout).
@@ -22,8 +22,8 @@ cd "$HERE"
 
 W="${WITNESS_BIN:-witness}"
 VIZ="${WITNESS_VIZ_BIN:-witness-viz}"
-FLOOR="${MCDC_PROVED_FLOOR:-110}"
-FULL_FLOOR="${MCDC_FULL_FLOOR:-4}"
+FLOOR="${MCDC_PROVED_FLOOR:-125}"
+FULL_FLOOR="${MCDC_FULL_FLOOR:-5}"
 SITE="${MCDC_SITE_DIR:-$HERE/viz-site}"
 
 command -v "$W"   >/dev/null 2>&1 || { echo "witness binary not found: $W" >&2; exit 127; }

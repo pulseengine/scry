@@ -597,6 +597,19 @@ artifacts:
       strong/tight closure (AC-011) is the precision refinement to add
       here. Depends on the analyzer being executable (FEAT-013) so the
       precision win is measurable on the shipped artifact.
+
+      EVIDENCE (v1.4.0 — slice-1 of 3 per DD-014, feature NOT yet complete):
+      the prerequisite interval loop fixpoint landed. run_function_body models
+      block/loop/if (empty block type) by WRITE-SET HAVOC — widening only the
+      locals the region writes, preserving the rest — so loops stop scrubbing
+      and loop-invariant locals survive (fixture-08; native + host soundness
+      oracles). Soundness mechanized admit-free in
+      proofs/rocq/WriteSetHavoc.v (havoc_sound). MC/DC proved 119→131,
+      full 4→5; the live gate floor raised to 125/5. STILL OPEN (this feature
+      stays proposed): slice-2 — the octagon relational product over the
+      fixpoint (the AC's "constraint preserved across iterations"); slice-3 —
+      Miné closure (AC-011). Loop-WRITTEN locals have no loop-carried
+      precision until slice-2.
     tags: [capability, relational, octagon, precision, v1.4]
     fields:
       phase: phase-2
@@ -611,6 +624,8 @@ artifacts:
         target: FEAT-010
       - type: depends-on
         target: FEAT-013
+      - type: traces-to
+        target: DD-014
 
   - id: FEAT-017
     type: feature

@@ -82,3 +82,20 @@ rocq_proof_test(
     deps = [":reachability"],
     tags = ["rocq", "verification", "feat-011"],
 )
+
+# FEAT-016 slice-1 (v1.4): mechanized soundness of WRITE-SET HAVOC — the
+# structured-control (block/loop/if) abstraction that replaced scrub-to-top
+# in the interval pass. The havocked abstract post-state over-approximates
+# every concrete post-state that writes only the region's write set. No
+# admits, no axioms (the proof-in-slice gate, DD-014).
+rocq_library(
+    name = "writesethavoc",
+    srcs = ["WriteSetHavoc.v"],
+    tags = ["rocq", "verification", "feat-016"],
+)
+
+rocq_proof_test(
+    name = "writesethavoc_test",
+    deps = [":writesethavoc"],
+    tags = ["rocq", "verification", "feat-016"],
+)

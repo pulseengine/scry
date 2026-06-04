@@ -41,3 +41,10 @@ sha2 = { workspace = true }
 # and the pure meld<->scry provenance boundary crate (FEAT-002 / DD-002).
 scry-taint = { path = "../scry-taint" }
 scry-provenance = { path = "../scry-provenance" }
+
+[dev-dependencies]
+# Test-only (the crate is otherwise dep-light + no_std): assemble the .wat
+# corpus fixtures to Wasm bytes so the FEAT-016 loop-fixpoint tests can drive
+# analyze() natively, without a composed component or Bazel. Not pulled into
+# the wasm32 build of the crate.
+wat = { workspace = true }
