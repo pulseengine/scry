@@ -34,8 +34,11 @@ keeps the precise interval it converges to.
   `loop_postfixpoint_sound`): a post-fixpoint of a sound transfer, covering
   the entry, over-approximates every concrete loop iterate. No admits/axioms;
   verified by the `rocq-proofs` CI job.
-- **MC/DC rose 131 → 155** (full-MC/DC 5) with the new `fixture-09-loop-converge`
-  in the live gate; floor raised to 148/5. New native oracles for fixture-08
+- **MC/DC proved rose 131 → 155** with the new `fixture-09-loop-converge` in
+  the live gate (full-MC/DC = 4 on the canonical x86_64-linux CI build; it is
+  5 on macOS — that metric is platform-sensitive, so the gate floors `proved`
+  primarily). Floor calibrated to CI at 148 proved / 3 full. New native
+  oracles for fixture-08
   (loop-invariant survives, now via the real fixpoint) and fixture-09
   (loop-written local converges to a bounded interval). `SCRY_VERSION` → 1.5.0.
 
