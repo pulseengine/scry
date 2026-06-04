@@ -53,6 +53,9 @@ const FIXTURE_OVERFLOW: &[u8] = include_bytes!("../fixtures/fixture-06-overflow.
 /// local — drives the FEAT-016 structured-control / write-set-havoc path in
 /// run_function_body so those decisions are MC/DC-covered by the live gate.
 const FIXTURE_COUNTED_LOOP: &[u8] = include_bytes!("../fixtures/fixture-08-counted-loop.wasm");
+/// Loop writing a local to a constant each iteration — drives the FEAT-016
+/// slice-2a iterate-then-widen loop fixpoint (the converging-local path).
+const FIXTURE_LOOP_CONVERGE: &[u8] = include_bytes!("../fixtures/fixture-09-loop-converge.wasm");
 
 // ── Config variants — each flips a different family of analyze decisions ─
 
@@ -245,6 +248,16 @@ run_export!(
     FIXTURE_COUNTED_LOOP,
     cfg_no_diag()
 );
+run_export!(
+    run_loop_converge_default,
+    FIXTURE_LOOP_CONVERGE,
+    cfg_default()
+);
+run_export!(
+    run_loop_converge_widen1,
+    FIXTURE_LOOP_CONVERGE,
+    cfg_widen1()
+);
 
 #[cfg(test)]
 mod tests {
@@ -264,6 +277,7 @@ mod tests {
             (FIXTURE_INTERPROC, cfg_taint()),
             (FIXTURE_OVERFLOW, cfg_default()),
             (FIXTURE_COUNTED_LOOP, cfg_default()),
+            (FIXTURE_LOOP_CONVERGE, cfg_default()),
         ];
         for (bytes, cfg) in pairs {
             let _ = drive(bytes, cfg.clone());

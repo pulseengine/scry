@@ -99,3 +99,19 @@ rocq_proof_test(
     deps = [":writesethavoc"],
     tags = ["rocq", "verification", "feat-016"],
 )
+
+# FEAT-016 slice-2a (v1.5): mechanized soundness of the LOOP FIXPOINT — a
+# post-fixpoint of a sound abstract body transfer, covering the loop entry,
+# over-approximates every concrete iterate of the loop body. No admits, no
+# axioms (the proof-in-slice gate, DD-015).
+rocq_library(
+    name = "loopfixpoint",
+    srcs = ["LoopFixpoint.v"],
+    tags = ["rocq", "verification", "feat-016"],
+)
+
+rocq_proof_test(
+    name = "loopfixpoint_test",
+    deps = [":loopfixpoint"],
+    tags = ["rocq", "verification", "feat-016"],
+)
