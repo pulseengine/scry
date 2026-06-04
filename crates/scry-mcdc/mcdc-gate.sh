@@ -10,8 +10,8 @@
 # Env:
 #   WITNESS_BIN        witness binary           (default: `witness` on PATH)
 #   WITNESS_VIZ_BIN    witness-viz binary       (default: `witness-viz` on PATH)
-#   MCDC_PROVED_FLOOR  min conditions_proved    (default: 125; v1.4 measured 131)
-#   MCDC_FULL_FLOOR    min full-MC/DC decisions (default: 5;   v1.4 measured 5)
+#   MCDC_PROVED_FLOOR  min conditions_proved    (default: 148; v1.5 measured 155)
+#   MCDC_FULL_FLOOR    min full-MC/DC decisions (default: 5;   v1.5 measured 5)
 #   MCDC_SITE_DIR      static viz output dir    (default: ./viz-site)
 #
 # Reads the authoritative numbers from evidence/report.json (NOT stdout).
