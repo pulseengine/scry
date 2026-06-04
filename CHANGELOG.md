@@ -7,6 +7,56 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-06-04
+
+Headline: **the analyzer models loops.** Through v1.3 the interval pass
+scrubbed every local to ⊤ on any control flow (`block` / `loop` / `if` hit
+the v0.2 `UnsoundnessFallback`). v1.4 lands the first slice of FEAT-016
+(DD-014): a sound structured-control model by **write-set havoc** — the
+beginning of the 2.0 capability track and the prerequisite for the octagon
+relational product (FEAT-016 slice-2).
+
+### Added / Changed
+
+- **Structured-control interval fixpoint via write-set havoc (FEAT-016
+  slice-1).** `run_function_body` now intercepts `block` / `loop` / `if`
+  regions (empty block type): it widens to ⊤ exactly the locals the region
+  writes (`local.set` / `local.tee` — the only operators that write a Wasm
+  local, so the static `region_write_set` scan is complete) and **preserves
+  every other local's precise pre-region interval**, then continues analysis
+  past the region. Non-empty block types and already-degraded state keep the
+  sound v0.2 scrub fallback; `if` pops its condition operand. Loop-invariant
+  locals now survive loops instead of being lost.
+- **Mechanized soundness, in-slice (`proofs/rocq/WriteSetHavoc.v`).**
+  `havoc_sound`: the havocked abstract post-state over-approximates every
+  concrete post-state that writes only the region's write set (so: any number
+  of loop iterations). No admits, no axioms; verified by the `rocq-proofs`
+  CI job.
+- **MC/DC coverage rose** (the new control-flow decisions, exercised by the
+  new `fixture-08-counted-loop` in the live gate): proved conditions
+  **119 → 131**, full-MC/DC decisions **4 → 5**. The `mcdc` gate floor is
+  raised to 125 / 5 to lock in the gain (DD-013).
+- New oracles: native `feat016_loop_invariant_local_survives` (drives
+  `analyze()` directly) and the end-to-end host test
+  `fixture_08_loop_invariant_survives`. `SCRY_VERSION` → 1.4.0.
+
+### Known limitations
+
+- This is slice-1 of FEAT-016: loop-**written** locals widen to ⊤ (no
+  loop-carried precision yet); the relational octagon product that keeps
+  `i < len` / `base+off` constraints across iterations is slice-2 (tracked in
+  DD-014). FEAT-016 is therefore not yet complete.
+
+### Falsification statement
+
+What v1.4 claims, made falsifiable: **a loop-invariant local survives a loop
+with its precise interval, soundly.** Falsifier: `fixture-08-counted-loop`'s
+`k` is set to 42 before the loop and never written inside it; if the
+analyzer reports `k` as ⊤ (or omits it) after the loop, or if the concrete
+`counted(n) = 42` ever falls outside `k`'s abstract interval, the claim is
+false (the native + host soundness tests check exactly this). What v1.4 does
+**not** claim: precision on loop-**written** locals — those soundly widen.
+
 ## [1.3.1] — 2026-06-03
 
 Headline: **MC/DC is now a live CI gate with a published truth-table
