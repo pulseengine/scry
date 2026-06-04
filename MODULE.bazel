@@ -94,9 +94,23 @@ bazel_dep(name = "rules_verus", version = "0.0.0")
 git_override(
     module_name = "rules_verus",
     remote = "https://github.com/pulseengine/rules_verus.git",
-    commit = "a49f72ef",
+    # Bumped a49f72ef → fc7b636 to repair the Verus toolchain's sysroot.
+    # a49f72ef predates the rules_verus sysroot fixes, so `rust_verify` could
+    # not load `librustc_driver-*.so`; rules_verus main (5bc96f39) fixes that
+    # but its sysroot still lacks rust-std for the host target ("can't find
+    # crate for `std`"). The complete fix chain — f84a0a5 (tar-extract
+    # rust-std), 2a6907b (absolute sysroot path), b0ab39d (sysroot assembly
+    # verification), fc7b636 (rules_rust ≥ 0.58 for current Bazel) — currently
+    # lives on the rules_verus branch fix/sysroot-diagnostics-and-verification
+    # (HEAD fc7b636), NOT yet merged to its main. Pin to that branch HEAD
+    # until it merges upstream, then re-point to the merged commit.
+    commit = "fc7b63692b1d2d91511f04507b814187932cd733",
 )
 verus = use_extension("@rules_verus//verus:extensions.bzl", "verus")
+# Required by the newer rules_verus API: select the Verus release, which
+# pins the matching stable Rust sysroot (1.93.0) auto-downloaded for
+# `librustc_driver`. 0.2026.02.15 is the extension's known/default version.
+verus.toolchain(version = "0.2026.02.15")
 use_repo(verus, "verus_toolchains")
 register_toolchains("@verus_toolchains//:all")
 
