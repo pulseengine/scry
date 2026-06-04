@@ -76,6 +76,7 @@ than working around it here.
 | `fixture-05-interproc.md`         | expected summaries + context-sensitive re-eval + recursion |
 | `fixture-07-bounded-local.wat`    | v1.3 (FEAT-015) non-vacuous oracle: local set to const 100 ⇒ bounded `[100,100]` |
 | `fixture-08-counted-loop.wat`     | v1.4 (FEAT-016 slice-1) loop fixpoint: loop-invariant local `k=42` must survive the loop (today scrubbed) |
+| `fixture-09-loop-converge.wat`    | v1.5 (FEAT-016 slice-2a) real loop fixpoint: loop-written `m` converges to bounded `[0,7]` (vs slice-1 havoc ⊤) |
 
 ## Adding fixtures
 
