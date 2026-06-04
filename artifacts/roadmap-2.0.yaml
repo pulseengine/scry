@@ -219,7 +219,7 @@ artifacts:
   - id: DD-012
     type: design-decision
     title: "MC/DC strategy — extract a pure analyzer-core crate to make the real decisions instrumentable"
-    status: accepted
+    status: approved
     description: >
       Structural (MC/DC) coverage of the analyzer (REQ-010, FEAT-014) must
       be measured on the analyzer's REAL decision logic, driven by the real
@@ -270,7 +270,7 @@ artifacts:
   - id: DD-013
     type: design-decision
     title: "MC/DC runs in CI as a live gate, with a published static truth-table visualisation"
-    status: accepted
+    status: approved
     description: >
       FEAT-014 landed the witness MC/DC measurement over the real analyzer
       core (crates/scry-mcdc) but ran it as a release-time evidence step. To
@@ -313,6 +313,71 @@ artifacts:
         target: DD-012
       - type: traces-to
         target: FEAT-015
+
+  - id: DD-014
+    type: design-decision
+    title: "FEAT-016 approach — make the interval domain loop-aware first, then add the octagon product"
+    status: proposed
+    description: >
+      FEAT-016 ("use the octagon, not just ship it") assumes the analyzer
+      maintains a relational domain across loop iterations. But the v1.1–v1.3
+      interval pass does NOT model control flow at all: Loop / Block / If /
+      Br* hit the v0.2 fallback (emit UnsoundnessFallback, scrub locals to
+      top). So the octagon cannot "survive loop iterations" until the
+      analyzer has an intraprocedural structured-control-flow fixpoint in the
+      first place. FEAT-016 is therefore three soundness-critical pieces, not
+      one, and each carries a Rocq proof obligation (the current
+      Soundness.v / Region.v cover only the straight-line transfer fns).
+    fields:
+      decision: >
+        Stage FEAT-016 as three oracle-gated slices, smallest-sound-first:
+        (1) v1.4.0 — a structured-control-flow INTERVAL fixpoint: model
+        block/loop/if/else/end/br/br_if with a join at merge points and
+        bounded iterate-then-widen at loop headers (reuse the existing
+        analysis-config widening-threshold, currently only wired for the
+        FEAT-007 summary phase). Loops stop scrubbing; a loop counter's
+        interval stays sound and, where bounded, precise. Soundness: the
+        fixpoint is a standard ascending-chain-with-widening, terminating
+        and over-approximating; add the Rocq termination+soundness lemma.
+        (2) v1.4.x — the OCTAGON PRODUCT: carry a scry-octagon Octagon over
+        local/offset pairs alongside the interval state through that
+        fixpoint, joined/widened in lockstep, so relational constraints
+        (i < len, base+off) survive loops — the FEAT-016 AC proper.
+        (3) v1.4.x — Miné strong/tight CLOSURE (AC-011) as the octagon
+        precision refinement. Each slice ships behind the MC/DC gate
+        (DD-013); new branches must keep conditions_proved above the floor.
+      rationale: >
+        The roadmap states the octagon AC directly, but the honest
+        dependency is loops-first: a relational domain over a domain that
+        scrubs on loops has nothing to relate across iterations. Splitting
+        keeps each change small enough to prove sound and MC/DC-cover, and
+        slice (1) is itself the larger precision leap (loops no longer
+        degrade). Smallest-sound-first matches how the interval (FEAT-001)
+        and summary (FEAT-007) fixpoints were landed.
+      alternatives: >
+        (a) octagon product in one shot over a new loop fixpoint (rejected —
+            two soundness rewrites + two proof obligations entangled in one
+            unverifiable step);
+        (b) straight-line-only octagon first, loops later (rejected — does
+            not move the FEAT-016 AC, which is entirely about loops);
+        (c) model loops only in the taint pass, which already interprets
+            structured control (rejected — taint control != value fixpoint;
+            the AC is about interval/octagon precision).
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: traces-to
+        target: FEAT-016
+      - type: traces-to
+        target: FEAT-010
+      - type: references-paper
+        target: AC-011
+      - type: traces-to
+        target: FEAT-001
+      - type: traces-to
+        target: FEAT-007
+      - type: traces-to
+        target: DD-013
 
   # ──────────────────────────────────────────────────────────────────────
   # Requirements added for the 2.0 line.
