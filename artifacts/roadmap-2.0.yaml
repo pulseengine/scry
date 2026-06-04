@@ -379,6 +379,79 @@ artifacts:
       - type: traces-to
         target: DD-013
 
+  - id: DD-015
+    type: design-decision
+    title: "FEAT-016 slice-2 — octagon relational product over a true loop-body fixpoint"
+    status: proposed
+    description: >
+      Slice-1 (v1.4.0, DD-014) made the interval pass loop-aware by WRITE-SET
+      HAVOC: it skips a region's body and widens the written locals to ⊤.
+      That is sound but deliberately throws away loop-carried precision — and
+      a relational constraint like `i < len` only exists BECAUSE of the
+      loop's exit test and body transfers, so havoc-and-skip can never
+      preserve it. Slice-2 (the FEAT-016 AC proper) therefore needs two
+      things slice-1 omitted: (1) actually INTERPRET the loop body and
+      iterate-then-widen at the loop header (the real fixpoint), and (2)
+      carry a scry-octagon `Octagon` over the locals through it. There is
+      also no place to OBSERVE a relational invariant: `analysis-result`
+      exposes intervals/region/call-graph/summaries/taint but nothing
+      relational, so the AC ("constraint preserved across iterations") is not
+      testable without a decision on surfacing.
+    fields:
+      decision: >
+        Implement slice-2 in three oracle-gated steps. (2a) Replace
+        havoc-and-skip with a real intraprocedural fixpoint over the
+        structured CFG: interpret the loop body, join at the header, and
+        widen (existing analysis-config widening-threshold) until stable —
+        terminating by the interval+octagon ascending-chain + widening
+        argument. (2b) Extend FuncCtx with an `Octagon` of dimension =
+        #locals, updated by the transfer functions (local.get/set copy →
+        equality bounds; i32.add/sub of a constant → difference bounds; a
+        br_if `i < len` exit test → add_bound on the taken/not-taken edges),
+        joined/widened in lockstep with the intervals at the header.
+        Soundness: the interval+octagon product is a reduced product; each
+        domain is individually sound (Soundness.v / the octagon's lattice
+        laws) and the product over-approximates their meet. Rocq lemma in
+        slice (per DD-014). (2c) OBSERVABILITY — surface the proved
+        relational facts. PREFERRED: project the octagon back to per-local
+        intervals at each program point (tighten the EXISTING interval
+        output where the relation bounds a local), so the precision win is
+        testable through the current `invariant-bundle` with NO WIT change;
+        a dedicated relational-invariant WIT field is deferred unless an
+        assessor needs the explicit constraint. Miné strong/tight closure
+        (AC-011) is slice-3, layered on 2b.
+      rationale: >
+        Loops-and-octagon-first was rejected as one step in DD-014 precisely
+        to land the loop fixpoint before the relational domain; slice-2 now
+        adds the relational half. Projecting the octagon to intervals for
+        observability (2c) keeps slice-2 free of a WIT/spar change (and thus
+        of a wac/bindgen surface change) while still making the AC
+        falsifiable on the shipped artifact — the smallest honest way to
+        show "the constraint survived the loop". The explicit
+        relational-invariant surface is a separable later feature if the
+        qualification dossier needs the constraints verbatim.
+      alternatives: >
+        (a) keep havoc-and-skip and only add the octagon to straight-line
+            code (rejected — does not move the FEAT-016 AC, which is about
+            loops);
+        (b) surface octagon constraints via a new analysis-result WIT field
+            now (rejected for slice-2 — pulls in a spar/AADL → WIT
+            regeneration + wrapper conversion + host-decoder change; do it as
+            its own feature when an assessor needs the verbatim relation);
+        (c) a non-relational interval-only loop fixpoint (that is slice-2a
+            alone; the octagon in 2b is what satisfies the AC).
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: traces-to
+        target: FEAT-016
+      - type: traces-to
+        target: FEAT-010
+      - type: traces-to
+        target: DD-014
+      - type: references-paper
+        target: AC-011
+
   # ──────────────────────────────────────────────────────────────────────
   # Requirements added for the 2.0 line.
   # ──────────────────────────────────────────────────────────────────────
