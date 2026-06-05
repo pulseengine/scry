@@ -56,6 +56,10 @@ const FIXTURE_COUNTED_LOOP: &[u8] = include_bytes!("../fixtures/fixture-08-count
 /// Loop writing a local to a constant each iteration — drives the FEAT-016
 /// slice-2a iterate-then-widen loop fixpoint (the converging-local path).
 const FIXTURE_LOOP_CONVERGE: &[u8] = include_bytes!("../fixtures/fixture-09-loop-converge.wasm");
+/// Guard-bounded counted loop (`br_if (i >= 10)`) — drives the FEAT-016
+/// slice-2b-i guard-refinement + narrowing decisions (`try_guard_brif`,
+/// `refine_interval`, the loop_region narrowing phase) so they are covered.
+const FIXTURE_GUARD_BOUND: &[u8] = include_bytes!("../fixtures/fixture-10-guard-bound.wasm");
 
 // ── Config variants — each flips a different family of analyze decisions ─
 
@@ -258,6 +262,9 @@ run_export!(
     FIXTURE_LOOP_CONVERGE,
     cfg_widen1()
 );
+// FEAT-016 slice-2b-i: exercise the guard-refinement + narrowing decisions.
+run_export!(run_guard_bound_default, FIXTURE_GUARD_BOUND, cfg_default());
+run_export!(run_guard_bound_widen1, FIXTURE_GUARD_BOUND, cfg_widen1());
 
 #[cfg(test)]
 mod tests {
@@ -278,6 +285,7 @@ mod tests {
             (FIXTURE_OVERFLOW, cfg_default()),
             (FIXTURE_COUNTED_LOOP, cfg_default()),
             (FIXTURE_LOOP_CONVERGE, cfg_default()),
+            (FIXTURE_GUARD_BOUND, cfg_default()),
         ];
         for (bytes, cfg) in pairs {
             let _ = drive(bytes, cfg.clone());

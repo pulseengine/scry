@@ -10,7 +10,7 @@
 # Env:
 #   WITNESS_BIN        witness binary           (default: `witness` on PATH)
 #   WITNESS_VIZ_BIN    witness-viz binary       (default: `witness-viz` on PATH)
-#   MCDC_PROVED_FLOOR  min conditions_proved    (default: 148; CI/linux v1.5 = 155)
+#   MCDC_PROVED_FLOOR  min conditions_proved    (default: 155; v1.6 mac = 164, CI/linux v1.5 = 155)
 #   MCDC_FULL_FLOOR    min full-MC/DC decisions (default: 3;   CI/linux v1.5 = 4)
 #   MCDC_SITE_DIR      static viz output dir    (default: ./viz-site)
 #
@@ -28,7 +28,7 @@ cd "$HERE"
 
 W="${WITNESS_BIN:-witness}"
 VIZ="${WITNESS_VIZ_BIN:-witness-viz}"
-FLOOR="${MCDC_PROVED_FLOOR:-148}"
+FLOOR="${MCDC_PROVED_FLOOR:-155}"
 FULL_FLOOR="${MCDC_FULL_FLOOR:-3}"
 SITE="${MCDC_SITE_DIR:-$HERE/viz-site}"
 

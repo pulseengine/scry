@@ -115,3 +115,20 @@ rocq_proof_test(
     deps = [":loopfixpoint"],
     tags = ["rocq", "verification", "feat-016"],
 )
+
+# FEAT-016 slice-2b-i (v1.6): mechanized soundness of GUARD REFINEMENT —
+# meeting an interval with the half-space implied by a signed `local <cmp>
+# const` guard never drops a concrete value that satisfies the guard, so the
+# refined per-edge invariant over-approximates the states flowing down that
+# edge. No admits, no axioms (the proof-in-slice gate, DD-015).
+rocq_library(
+    name = "guardrefine",
+    srcs = ["GuardRefine.v"],
+    tags = ["rocq", "verification", "feat-016"],
+)
+
+rocq_proof_test(
+    name = "guardrefine_test",
+    deps = [":guardrefine"],
+    tags = ["rocq", "verification", "feat-016"],
+)
