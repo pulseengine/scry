@@ -697,6 +697,21 @@ artifacts:
       148 proved / 3 full, calibrated to CI. STILL OPEN: slice-2b — the octagon
       product so a loop COUNTER bounded by a relation (i < n) stays bounded
       (interval-alone it still widens to ⊤); slice-3 — Miné closure.
+
+      EVIDENCE (v1.6.0 — slice-2b-i per DD-015, feature STILL proposed): GUARD
+      REFINEMENT — a peephole (try_guard_brif) recognises the
+      `local.get L; i32.const C; i32.<cmp>; br_if D` exit idiom and refines L's
+      interval by the guard half-space on each edge (refine_interval; signed
+      comparisons only — unsigned wrap would be unsound). A narrowing phase in
+      loop_region then pulls the over-widened header back to a finite bound, and
+      a snapshot/restore of outer-label break-state stops the intermediate ⊤-era
+      passes from poisoning the block exit. A loop COUNTER bounded by a CONSTANT
+      guard now converges (fixture-10: i → bounded [0,10], hi ≤ 10, not ⊤).
+      Soundness mechanized admit-free in proofs/rocq/GuardRefine.v
+      (refine_sound: refinement drops no satisfying concrete state). MC/DC proved
+      155→164 (mac local; CI/linux is the gate), gate floor raised to 155 proved
+      / 3 full. STILL OPEN: slice-2b-ii — the octagon product for VARIABLE
+      relations (i < n, n non-constant); slice-3 — Miné closure.
     tags: [capability, relational, octagon, precision, v1.4]
     fields:
       phase: phase-2

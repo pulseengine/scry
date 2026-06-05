@@ -7,6 +7,68 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-06-05
+
+Headline: **guard refinement — a loop counter bounded by its own exit test now
+converges to a finite interval instead of ⊤.** v1.5 (slice-2a) gave loops a
+real interval fixpoint, but a counter `i` bounded only by the exit test
+`i < C` still widened to ⊤ because the interval domain could not read the
+guard. v1.6 (FEAT-016 slice-2b-i, DD-015) lets the analyzer refine a local's
+interval by the half-space implied by a signed `local <cmp> const` guard, then
+**narrows** the over-widened header back down — the first step of the
+relational track.
+
+### Added / Changed
+
+- **Guard refinement (FEAT-016 slice-2b-i).** A peephole (`try_guard_brif`)
+  recognises the `local.get L; i32.const C; i32.<cmp>; br_if D` idiom (and the
+  3-op `local.get L; i32.eqz; br_if D` form). On the **taken** edge it meets
+  `L` with the guard's half-space (recorded to the branch target); on the
+  **not-taken** edge it meets `L` with the complement (`refine_interval`). Only
+  **signed** comparisons are refined — unsigned wrap semantics would make the
+  signed half-space unsound, so they are deliberately left unrefined.
+- **Interval narrowing at loop headers.** `loop_region` gains a narrowing phase
+  after widening: it re-applies the body and replaces the header's infinite
+  bounds with the recomputed finite ones, descending to a tighter sound
+  post-fixpoint. A guard-bounded counter now converges to `[0,10]` where
+  slice-2a widened it to ⊤.
+- **Fixpoint state-leak fix.** The widening/narrowing passes re-run the loop
+  body many times with deliberately-coarse (often ⊤) intermediate headers;
+  their `br`-to-outer-label states are now snapshotted and restored so only the
+  converged header contributes to the enclosing block's exit join. Without this
+  the post-loop value stayed ⊤ (the stale ⊤-era taken edge poisoned the join).
+- **Mechanized soundness, in-slice** (`proofs/rocq/GuardRefine.v`,
+  `refine_sound`): meeting an interval with a guard's half-space never drops a
+  concrete value that satisfies the guard, so the refined per-edge invariant
+  over-approximates the states flowing down that edge. No admits/axioms;
+  verified by the `rocq-proofs` CI job (and locally with Coq 9.0.1).
+- **MC/DC proved rose 155 → 164** (macOS local; canonical x86_64-linux CI is
+  the gate) with the new `fixture-10-guard-bound` in the live gate driving the
+  guard-refinement / narrowing decisions. Gate floor raised 148 → 155 proved
+  (still below the new value, monotone since added fixtures only add coverage);
+  `full` stays floored at 3 (platform-sensitive). New native oracle
+  `feat016_guard_bounds_counter` (counter converges to `[0,10]`, `hi ≤ 10`).
+  `SCRY_VERSION` → 1.6.0.
+
+### Known limitations
+
+- **Constant guards only** (slice-2b-i). A counter bounded by a *variable*
+  relation (`i < n`, `n` not constant) still widens to ⊤ — preserving such
+  inter-variable constraints across iterations is the **octagon relational
+  product** of slice-2b-ii, with Miné closure as slice-3 (DD-015). FEAT-016
+  remains `proposed`.
+
+### Falsification statement
+
+What v1.6 claims, made falsifiable: **a loop counter bounded by a constant in
+its own signed exit guard converges to a finite interval, soundly.** Falsifier:
+`fixture-10-guard-bound` counts `i` up while `i < 10`; if the analyzer reports
+`i` as ⊤ after the loop (the slice-2a behaviour), or if the concrete result
+`10` falls outside `i`'s interval, the claim is false (the native + host
+soundness oracles check exactly this — `hi ≤ 10` and `10 ∈ [lo,hi]`). What v1.6
+does **not** claim: precision on variable-bounded counters, or refinement of
+unsigned comparisons — both still widen until slice-2b-ii.
+
 ## [1.5.0] — 2026-06-04
 
 Headline: **a real loop fixpoint — loop-carried values now converge instead

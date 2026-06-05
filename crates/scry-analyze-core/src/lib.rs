@@ -298,7 +298,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "1.5.0";
+const SCRY_VERSION: &str = "1.6.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -1445,9 +1445,86 @@ fn widen_locals(a: &[AbstractValue], b: &[AbstractValue]) -> Vec<AbstractValue> 
     a.iter().zip(b).map(|(x, y)| widen_abstract(x, y)).collect()
 }
 
+/// Interval NARROWING (FEAT-016 slice-2b-i): replace each INFINITE bound of
+/// the widened value `a` with the corresponding bound of the re-applied
+/// transfer `b` (`b ⊑ a`), recovering a finite bound widening overshot to ⊤.
+/// Finite bounds of `a` are kept (narrowing never loosens). Terminating: the
+/// number of infinite bounds only decreases.
+fn narrow_abstract(a: &AbstractValue, b: &AbstractValue) -> AbstractValue {
+    fn narrow_iv(a: Interval, b: Interval) -> Interval {
+        Interval {
+            lo: if a.lo == i64::MIN { b.lo } else { a.lo },
+            hi: if a.hi == i64::MAX { b.hi } else { a.hi },
+        }
+    }
+    match (a, b) {
+        (AbstractValue::I32Interval(x), AbstractValue::I32Interval(y)) => {
+            AbstractValue::I32Interval(narrow_iv(*x, *y))
+        }
+        (AbstractValue::I64Interval(x), AbstractValue::I64Interval(y)) => {
+            AbstractValue::I64Interval(narrow_iv(*x, *y))
+        }
+        _ => clone_value(a),
+    }
+}
+
+fn narrow_locals(a: &[AbstractValue], b: &[AbstractValue]) -> Vec<AbstractValue> {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| narrow_abstract(x, y))
+        .collect()
+}
+
 /// `a ⊑ b` pointwise over the locals vector.
 fn locals_leq(a: &[AbstractValue], b: &[AbstractValue]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| leq_abstract(x, y))
+}
+
+/// A signed i32 comparison guard `local OP const` (FEAT-016 slice-2b-i).
+#[derive(Clone, Copy)]
+enum GuardOp {
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+}
+
+/// Map a wasmparser comparison operator (with a `local` first operand and a
+/// `const` second operand) to a [`GuardOp`]. Only SIGNED i32 comparisons are
+/// refined — unsigned comparisons wrap, so refining their bounds with a
+/// signed constant is not sound; they return `None` (no refinement).
+fn guard_op(op: &Operator<'_>) -> Option<GuardOp> {
+    Some(match op {
+        Operator::I32Eq => GuardOp::Eq,
+        Operator::I32Ne => GuardOp::Ne,
+        Operator::I32LtS => GuardOp::Lt,
+        Operator::I32GtS => GuardOp::Gt,
+        Operator::I32LeS => GuardOp::Le,
+        Operator::I32GeS => GuardOp::Ge,
+        _ => return None,
+    })
+}
+
+/// Refine the interval of a local known to satisfy (`taken = true`) or
+/// violate (`taken = false`) the guard `local OP c`. Sound: it `meet`s the
+/// current interval with the half-space the guard implies; predicates that
+/// don't carve an interval (`== ` on the false edge, `!=` on the true edge)
+/// leave it unchanged. FEAT-016 slice-2b-i.
+fn refine_interval(iv: Interval, op: GuardOp, c: i64, taken: bool) -> Interval {
+    let imin = i64::MIN;
+    let imax = i64::MAX;
+    // The half-space the (possibly negated) guard implies, as [lo, hi].
+    let (lo, hi) = match (op, taken) {
+        (GuardOp::Eq, true) | (GuardOp::Ne, false) => (c, c),
+        (GuardOp::Eq, false) | (GuardOp::Ne, true) => return iv, // ≠ c: no interval
+        (GuardOp::Lt, true) | (GuardOp::Ge, false) => (imin, c.saturating_sub(1)), // < c
+        (GuardOp::Ge, true) | (GuardOp::Lt, false) => (c, imax), // ≥ c
+        (GuardOp::Gt, true) | (GuardOp::Le, false) => (c.saturating_add(1), imax), // > c
+        (GuardOp::Le, true) | (GuardOp::Gt, false) => (imin, c), // ≤ c
+    };
+    scry_interval::meet(iv, Interval { lo, hi })
 }
 
 /// Did a straight-line sequence fall through to its end, or did control
@@ -1538,6 +1615,28 @@ impl Interp<'_, '_> {
                 }
             }
 
+            // ── Guard refinement (FEAT-016 slice-2b-i) ──────────────
+            // A comparison-guarded branch `local.get L; i32.const C; <cmp>;
+            // br_if D` (or `local.get L; i32.eqz; br_if D`) refines L's
+            // interval by the comparison on each edge: the taken edge (the
+            // guard holds) reaches label D; the not-taken edge (the guard is
+            // false) falls through. This is what bounds a counted loop's
+            // counter (e.g. `i >= 10` → exit ⇒ inside the loop `i <= 9`),
+            // where the plain interval fixpoint would widen it to ⊤. A
+            // peephole on the canonical idiom — anything else falls through to
+            // the unrefined br_if below (sound, just no tightening).
+            if let Some(next) = self.try_guard_brif(pc, ctx, labels) {
+                if emit && !ctx.degraded {
+                    self.points.push(ProgramPoint {
+                        func_index: self.func_index,
+                        pc: pc as u32,
+                        locals: snapshot_locals(&ctx.locals),
+                    });
+                }
+                pc = next;
+                continue;
+            }
+
             // ── Branches: contribute to the targeted label ──────────
             match &self.ops[pc] {
                 Operator::Br { relative_depth } => {
@@ -1601,6 +1700,62 @@ impl Interp<'_, '_> {
         &mut labels[idx]
     }
 
+    /// FEAT-016 slice-2b-i guard refinement. If the ops at `pc` are the
+    /// canonical comparison-guarded branch `local.get L; i32.const C; <signed
+    /// cmp>; br_if D` (4 ops) or `local.get L; i32.eqz; br_if D` (3 ops),
+    /// refine `L`'s interval by the guard on both edges — record the
+    /// taken-edge locals (guard true) into label `D`, set `ctx.locals` to the
+    /// not-taken-edge locals (guard false) — and return the pc just past the
+    /// idiom. Returns `None` (caller handles `pc` normally) for anything else.
+    /// The idiom's net operand-stack effect is zero (push L, push C, cmp pops
+    /// 2 / pushes 1, br_if pops 1), so the stack is left untouched.
+    fn try_guard_brif(&self, pc: usize, ctx: &mut FuncCtx, labels: &mut [Label]) -> Option<usize> {
+        if ctx.degraded {
+            return None;
+        }
+        let ops = self.ops;
+        // Recognise `local.get L; i32.const C; <cmp>; br_if D`.
+        let (local, c, op, depth, next) = match ops.get(pc)? {
+            Operator::LocalGet { local_index } => {
+                let l = *local_index;
+                match (ops.get(pc + 1)?, ops.get(pc + 2)?, ops.get(pc + 3)) {
+                    // 4-op: local.get L; const C; cmp; br_if D
+                    (
+                        Operator::I32Const { value },
+                        cmp,
+                        Some(Operator::BrIf { relative_depth }),
+                    ) => {
+                        let gop = guard_op(cmp)?;
+                        (l, *value as i64, gop, *relative_depth, pc + 4)
+                    }
+                    // 3-op: local.get L; i32.eqz; br_if D  (L == 0)
+                    (Operator::I32Eqz, Operator::BrIf { relative_depth }, _) => {
+                        (l, 0, GuardOp::Eq, *relative_depth, pc + 3)
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+
+        // The local must be a tightenable i32 interval; otherwise no refine.
+        let iv = match ctx.locals.get(local as usize) {
+            Some(AbstractValue::I32Interval(iv)) => *iv,
+            _ => return None,
+        };
+        let taken_iv = refine_interval(iv, op, c, true);
+        let not_taken_iv = refine_interval(iv, op, c, false);
+
+        // Taken edge (guard true) → label D.
+        let mut taken_locals = ctx.locals.clone();
+        taken_locals[local as usize] = AbstractValue::I32Interval(taken_iv);
+        self.target(labels, depth).record(&taken_locals);
+
+        // Not-taken edge (guard false) → fall through.
+        ctx.locals[local as usize] = AbstractValue::I32Interval(not_taken_iv);
+        Some(next)
+    }
+
     /// `block`: branches to it land AFTER the block, so the post-block state
     /// is the fall-through (if reachable) joined with the break states.
     fn block(
@@ -1645,6 +1800,14 @@ impl Interp<'_, '_> {
     ) -> Result<(), AnalyzeError> {
         let entry = ctx.locals.clone();
         let saved_stack = ctx.operand_stack.clone();
+        // Snapshot the ENCLOSING labels' break-state. The widening/narrowing
+        // passes below re-run the body many times with intermediate (often ⊤)
+        // headers; each `br` to an outer label would otherwise accumulate those
+        // throwaway states into the enclosing label and poison its exit join.
+        // Only the final converged pass should contribute outer breaks, so we
+        // restore this snapshot just before it.
+        let saved_outer: Vec<Option<Vec<AbstractValue>>> =
+            labels.iter().map(|l| l.breaks.clone()).collect();
         let mut header = entry.clone();
         let mut exit: Option<Vec<AbstractValue>> = None;
         let mut iter = 0u32;
@@ -1683,6 +1846,37 @@ impl Interp<'_, '_> {
                 break;
             }
         }
+        // ── Narrowing (FEAT-016 slice-2b-i) ──────────────────────────
+        // Widening may have overshot a bound to ⊤ (e.g. a guard-bounded loop
+        // counter widens up before the `i < C` refinement is seen). Re-apply
+        // the body and replace the header's infinite bounds with the
+        // recomputed finite ones, descending to a tighter sound post-fixpoint.
+        let mut narrow_iter = 0u32;
+        loop {
+            ctx.locals = header.clone();
+            ctx.operand_stack = saved_stack.clone();
+            labels.push(Label { breaks: None });
+            let _ = self.seq(start, end, ctx, labels, false)?;
+            let label = labels.pop().expect("pushed above");
+            let candidate = match &label.breaks {
+                Some(b) => join_locals(&entry, b),
+                None => entry.clone(),
+            };
+            let narrowed = narrow_locals(&header, &candidate);
+            if narrowed == header {
+                break;
+            }
+            header = narrowed;
+            narrow_iter += 1;
+            if narrow_iter > LOOP_ITER_CAP {
+                break;
+            }
+        }
+        // Restore the enclosing labels' break-state, discarding everything the
+        // intermediate widening/narrowing passes recorded into them.
+        for (label, saved) in labels.iter_mut().zip(saved_outer) {
+            label.breaks = saved;
+        }
         // Final pass over the converged header WITH emission, to record the
         // fixpoint program points inside the loop body.
         ctx.locals = header.clone();
@@ -1696,10 +1890,10 @@ impl Interp<'_, '_> {
                 None => ctx.locals.clone(),
             });
         }
-        // Propagate the converged back-edge breaks to the enclosing labels?
-        // No — back-edges target this loop only; they shaped `header`. Any
-        // br to an OUTER label was recorded into that outer label during the
-        // passes above. Drop this loop's own breaks.
+        // Drop this loop's own back-edge breaks — they targeted this loop only
+        // and already shaped `header`. Breaks to OUTER labels were recorded by
+        // the final pass above (the intermediate passes' contributions were
+        // wiped by the snapshot restore).
         let _ = final_label;
         // Post-loop state: fall-through-exit if any, else the fixpoint header
         // (sound: covers the otherwise-unreachable fall-through).
@@ -3561,6 +3755,57 @@ mod tests {
             "m must contain the concrete results {{0, 7}}, got [{}, {}]",
             m.lo,
             m.hi
+        );
+    }
+
+    /// FEAT-016 slice-2b-i oracle (guard refinement). fixture-10 increments
+    /// local 0 (`i`) while `i < 10` (exit guard `i >= 10`). slice-2a widens
+    /// the loop-written `i` to ⊤; guard refinement bounds it: on the
+    /// not-taken edge `i <= 9` ⇒ after `i+1`, `i <= 10`, so the header
+    /// converges to `[0,10]` and the post-loop (exit) value is `[10,10]`.
+    /// Asserts `i` has an UPPER BOUND ≤ 10 (not ⊤) and contains the concrete
+    /// result 10 — the precision win, soundly.
+    #[test]
+    fn feat016_guard_bounds_counter() {
+        let wat_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../scry-analyzer/test-fixtures/fixture-10-guard-bound.wat"
+        );
+        let bytes = wat::parse_file(wat_path).expect("assemble fixture-10");
+        let config = AnalysisConfig {
+            widening_threshold: Some(3),
+            emit_diagnostics: true,
+            taint_policy: None,
+        };
+        let result = analyze(bytes, config).expect("analyze fixture-10 must succeed");
+        let last = result
+            .invariants
+            .points
+            .last()
+            .expect("fixture-10 must emit points past the loop");
+        let i = last
+            .locals
+            .iter()
+            .find(|l| l.local_index == 0)
+            .and_then(|l| match l.value {
+                AbstractValue::I32Interval(iv) => Some(iv),
+                _ => None,
+            })
+            .expect("local i (index 0) i32-interval at final point");
+        // The slice-2b-i win: i has a finite UPPER BOUND ≤ 10 (slice-2a gave
+        // ⊤ / i64::MAX). The guard `i >= 10` taught the fixpoint i is bounded.
+        assert!(
+            i.hi <= 10,
+            "guard refinement failed: loop counter i has no tight upper bound (got hi={}, \
+             expected ≤ 10 — slice-2a widens to ⊤ here)",
+            i.hi
+        );
+        // Soundness: the concrete result (10) lies in i's interval.
+        assert!(
+            i.lo <= 10 && i.hi >= 10,
+            "i must contain the concrete result 10, got [{}, {}]",
+            i.lo,
+            i.hi
         );
     }
 }
