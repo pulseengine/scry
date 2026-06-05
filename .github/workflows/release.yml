@@ -227,3 +227,86 @@ jobs:
             --notes-file release-notes.md \
             --verify-tag \
             release-assets/*
+
+  # ── MC/DC evidence bundle (witness) ──────────────────────────────────
+  #
+  # Publishes scry's witness MC/DC evidence as
+  # `scry-vX.Y.Z-mcdc-evidence.tar.gz` so pulseengine.eu's fetch-reports
+  # surfaces it under the Reports page "MC/DC Coverage" section, exactly
+  # like rivet compliance reports. The bundle is built by witness's own
+  # compliance composite action (fed scry's run.json + module paths) so it
+  # carries the canonical verdict-evidence/suite-index.html viewer the
+  # website links to. Runs after the release exists and uploads to it.
+  #
+  # ⚠ NEEDS VALIDATION WITH A TEST RELEASE. Three scry-specific assumptions
+  # below are unverified until a tag is cut:
+  #   1. witness v0.30.0 binaries build/run scry's mcdc harness cleanly
+  #      (scry's CI gate pins an older rev; floors are disabled here since
+  #      ci.yml already enforces the gate — this job only packages evidence).
+  #   2. the `modules` paths match what mcdc-gate.sh actually emits.
+  #   3. the compliance action @v0.30.0 ↔ run.json schema agree.
+  # After a pre-release tag, confirm the uploaded tarball contains
+  # `verdict-evidence/suite-index.html` before relying on it.
+  mcdc-evidence:
+    name: MC/DC evidence bundle
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      WITNESS_VERSION: v0.30.0
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve version from tag
+        env:
+          TAG_REF: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-$TAG_REF}"
+          case "$TAG" in v*) ;; *) echo "::error::tag '$TAG' must start with v"; exit 1 ;; esac
+          echo "VERSION=$TAG" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - name: Install witness + witness-viz (${{ env.WITNESS_VERSION }})
+        run: |
+          set -euo pipefail
+          URL=https://github.com/pulseengine/witness.git
+          cargo install --git "$URL" --tag "$WITNESS_VERSION" witness-mcdc
+          cargo install --git "$URL" --tag "$WITNESS_VERSION" witness-mcdc-viz
+          witness --version
+
+      - name: Produce MC/DC run record (floors disabled — gate enforced in CI)
+        env:
+          MCDC_PROVED_FLOOR: '0'
+          MCDC_FULL_FLOOR: '0'
+        run: ./crates/scry-mcdc/mcdc-gate.sh
+
+      - name: Build evidence bundle (witness compliance action)
+        id: evidence
+        uses: pulseengine/witness/.github/actions/compliance@v0.30.0
+        with:
+          report-label: ${{ env.VERSION }}
+          run-json: crates/scry-mcdc/evidence/run.json
+          modules: >-
+            [{"original":"crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm",
+              "instrumented":"crates/scry-mcdc/evidence/scry-mcdc.instrumented.wasm",
+              "harness":"crates/scry-mcdc/evidence/scry-mcdc.instrumented.wasm"}]
+          archive: 'true'
+          archive-name: scry-${{ env.VERSION }}-mcdc-evidence
+
+      - name: Upload MC/DC evidence to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE_PATH: ${{ steps.evidence.outputs.archive-path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ARCHIVE_PATH:-}" ] || [ ! -f "$ARCHIVE_PATH" ]; then
+            echo "::error::compliance action produced no archive-path"; exit 1
+          fi
+          gh release upload "$VERSION" "$ARCHIVE_PATH" --clobber
+          echo "::notice title=MC/DC evidence::uploaded $(basename "$ARCHIVE_PATH")"
