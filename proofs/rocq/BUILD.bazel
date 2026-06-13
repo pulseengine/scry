@@ -132,3 +132,20 @@ rocq_proof_test(
     deps = [":guardrefine"],
     tags = ["rocq", "verification", "feat-016"],
 )
+
+# FEAT-016 slice-2b-ii (v1.7): mechanized soundness of the octagon→interval
+# PROJECTION rounding — reading an octagon's doubled bound `2·x ≤ U` back as
+# an integer interval `x ≤ ⌊U/2⌋` (and the lower dual) over-approximates the
+# variable's true range, the soundness link that lets the analyzer fold an
+# octagon bound into the interval domain. No admits, no axioms (DD-015).
+rocq_library(
+    name = "octagonproject",
+    srcs = ["OctagonProject.v"],
+    tags = ["rocq", "verification", "feat-016"],
+)
+
+rocq_proof_test(
+    name = "octagonproject_test",
+    deps = [":octagonproject"],
+    tags = ["rocq", "verification", "feat-016"],
+)

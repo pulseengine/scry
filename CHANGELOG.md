@@ -7,6 +7,66 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-06-13
+
+Headline: **the octagon relational domain grows the primitives the analyzer
+needs — pure algebra, no analyzer behavior change yet.** This is the
+smallest-sound-first prerequisite for FEAT-016 slice-2b-ii (DD-015): the
+relational loop fixpoint that will let a counter bounded by a *variable*
+relation (`i < n`, `n` not constant) stay bounded — the case guard refinement
+(v1.6, constant guards only) cannot reach. v1.7 lands and proves the octagon
+operations in isolation; v1.8 wires them into the interpreter.
+
+### Added
+
+- **Analyzer-facing octagon primitives** (`crates/scry-octagon`), all
+  coherence-maintaining (they set both a DBM cell and its `m[i][j] = m[j̄][ī]`
+  twin, so `close` can propagate a difference bound + a unary bound into a
+  tighter unary bound — the relational product's whole point):
+  - `add_diff` / `set_upper` / `set_lower` — coherent difference and unary
+    constraints.
+  - `forget(k)` — the sound havoc transfer for a write of an unknown value to
+    local `k` (close, then clear `x_k`'s rows/cols; constraints among the other
+    variables are preserved).
+  - `assign_const` / `assign_copy` / `assign_add_const` — the transfer
+    functions for `local.set` of a const / a copy / `x := y + c`. The in-place
+    increment `x_k := x_k + c` (the loop-counter case) does **not** forget — it
+    SHIFTS every bound touching `x_k`, which is exactly what carries a
+    relational bound like `x_k − x_n ≤ −1` across the increment (→ `≤ 0`).
+  - `bound_of(k)` — project the closed octagon onto variable `x_k` as an
+    integer interval, halving the doubled DBM bounds with floor/ceil rounding;
+    `None` iff infeasible.
+  - `narrow` — octagon narrowing, recovering bounds widening discarded.
+- **Mechanized projection soundness** (`proofs/rocq/OctagonProject.v`,
+  `proj_interval_sound`): reading `2·x ≤ U` back as `x ≤ ⌊U/2⌋` (and the lower
+  dual) over-approximates the variable's true range — the soundness link the
+  v1.8 octagon→interval fold will rely on. No admits/axioms; verified by the
+  `rocq-proofs` CI job (and locally with Coq 9.0.1).
+- **9 new γ-sweep tests** in scry-octagon falsifying every primitive against
+  the concrete octagon semantics on a grid of points (the crate's established
+  evidence kind), including the two that pin the relational mechanism:
+  `coherent_diff_plus_unary_projects_to_tighter_unary` (`i ≤ n−1 ∧ n ≤ 10 ⟹
+  i ≤ 9`) and `increment_shifts_relations_not_forgets`.
+
+### Not changed
+
+- **The analyzer output is identical to v1.6.0.** The octagon is not yet
+  carried through the interpreter — `SCRY_VERSION` → 1.7.0 is a release stamp,
+  not a behavior change. FEAT-016 remains `proposed`; the interpreter
+  integration (fixture: a variable-bounded loop counter) is v1.8.0.
+
+### Falsification statement
+
+What v1.7 claims, made falsifiable: **the octagon primitives are sound — each
+transfer over-approximates the concrete semantics, and projecting a bound to an
+integer interval drops no concrete value.** Falsifier: the γ-sweep tests check
+each primitive against `gamma` (the concrete DBM semantics) on a grid; if any
+transfer admits fewer points than the concrete operation produces — e.g. if the
+increment shift dropped the `x_k − x_n` relation, or `bound_of` rounded the
+wrong way — a sweep assertion fails. The Rocq `proj_interval_sound` independently
+proves the projection rounding. What v1.7 does **not** claim: any analyzer-
+visible precision improvement — that is v1.8, when the octagon is integrated.
+
 ## [1.6.0] — 2026-06-05
 
 Headline: **guard refinement — a loop counter bounded by its own exit test now
