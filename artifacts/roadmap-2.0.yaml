@@ -712,6 +712,23 @@ artifacts:
       155→164 (mac local; CI/linux is the gate), gate floor raised to 155 proved
       / 3 full. STILL OPEN: slice-2b-ii — the octagon product for VARIABLE
       relations (i < n, n non-constant); slice-3 — Miné closure.
+
+      EVIDENCE (v1.7.0 — slice-2b-ii PREREQUISITE per DD-015, smallest-sound-
+      first; feature STILL proposed; NO analyzer behavior change): the
+      analyzer-facing octagon primitives landed in crates/scry-octagon as pure
+      algebra — coherence-maintaining add_diff/set_upper/set_lower, forget(k)
+      (sound havoc on write), assign_const/assign_copy/assign_add_const (the
+      in-place increment x_k:=x_k+c SHIFTS bounds so a relation x_k-x_n survives
+      the loop body rather than being forgotten), bound_of(k) (project closed
+      octagon → integer interval), and narrow. Projection rounding mechanized
+      admit-free in proofs/rocq/OctagonProject.v (proj_interval_sound: 2x≤U ⇒
+      x≤⌊U/2⌋ and the lower dual over-approximate). 9 γ-sweep tests falsify each
+      primitive against the concrete DBM semantics. The analyzer OUTPUT is
+      unchanged (octagon not yet carried through Interp). STILL OPEN: v1.8.0 —
+      wire the octagon into FuncCtx/Interp (join/widen/narrow in lockstep at
+      block/loop merges, transfer fns add/forget constraints, guard adds i-n≤c,
+      project octagon→intervals at emission; fixture: variable-bounded counter);
+      then slice-3 Miné closure.
     tags: [capability, relational, octagon, precision, v1.4]
     fields:
       phase: phase-2
