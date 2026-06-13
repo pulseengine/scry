@@ -30,6 +30,25 @@ members = [
     "crates/scry-analyze-core",
     "crates/scry-host-tests",
 ]
+# `wasm-lattice` and `scry-analyzer` are the Wasm-component crates
+# (`crate-type = ["cdylib"]`, `#![no_std]`; `scry-analyzer` additionally
+# `export!`s the rules_wasm_component-generated
+# `scry_analyzer_component_bindings`, which only exist under the Bazel wasm
+# build — see DD-009). Neither can be compiled by a native host `cargo build`
+# (no panic handler / unresolved bindings crate). They stay in `members` so
+# Bazel's crate_universe.from_cargo still resolves their deps, but are excluded
+# from `default-members`, so a bare `cargo build` — e.g. the one the witness
+# compliance release action runs at the workspace root — skips them instead of
+# failing. The remaining crates are plain rlibs that build natively. Native CI
+# jobs already build specific crates with explicit `-p`/`--package`.
+default-members = [
+    "crates/scry-provenance",
+    "crates/scry-taint",
+    "crates/scry-octagon",
+    "crates/scry-interval",
+    "crates/scry-analyze-core",
+    "crates/scry-host-tests",
+]
 
 [workspace.package]
 version = "0.1.0"
