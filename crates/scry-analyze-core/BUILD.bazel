@@ -23,6 +23,7 @@ rust_library(
         "@scry_crates//:sha2",
         "@scry_crates//:wasmparser",
         "//crates/scry-interval:scry_interval",
+        "//crates/scry-octagon:scry_octagon",
         "//crates/scry-provenance:scry_provenance",
         "//crates/scry-taint:scry_taint",
     ],
