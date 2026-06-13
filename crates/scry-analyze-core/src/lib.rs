@@ -61,6 +61,8 @@ use wasmparser::{Operator, Parser, Payload};
 // `provenance` field is built.
 use scry_provenance::ComponentOrigin as ProvOrigin;
 
+use scry_octagon::Octagon;
+
 pub use scry_interval::{Interval, Region};
 /// Mirror of WIT `abstract-value`. The abstract value of one Wasm
 /// value-stack entry or local at a program point.
@@ -298,7 +300,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "1.7.0";
+const SCRY_VERSION: &str = "1.8.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -542,6 +544,14 @@ struct FuncCtx {
     locals: Vec<AbstractValue>,
     /// Abstract operand stack.
     operand_stack: Vec<AbstractValue>,
+    /// Relational octagon over the locals (FEAT-016 slice-2b-ii), carried in
+    /// lockstep with `locals` through the structured-CFG fixpoint. Dimension
+    /// equals `locals.len()`; variable `k` is local `k`. `top` means "no
+    /// relation known" (so projecting it back is the identity — existing
+    /// interval-only behaviour is preserved until a transfer/guard populates
+    /// it). Soundness rule: any write to a local that the octagon transfer
+    /// does not model must `forget` that variable.
+    octagon: Octagon,
     /// Once we see an unsupported construct in a function, we stop
     /// emitting fresh program-points for it — the abstract state has
     /// become uninformative (all-top) and further records would just
@@ -551,21 +561,25 @@ struct FuncCtx {
 
 impl FuncCtx {
     fn new(locals: Vec<AbstractValue>) -> Self {
+        let octagon = scry_octagon::top(locals.len() as u32);
         Self {
             locals,
             operand_stack: Vec::new(),
+            octagon,
             degraded: false,
         }
     }
 
     /// Drop the operand stack and widen every local to top. Used when
     /// we hit any operator outside the v0.2 AC#1 supported set —
-    /// soundness over precision (REQ-001 / DD-005).
+    /// soundness over precision (REQ-001 / DD-005). The octagon is reset to
+    /// `top` too (all relations forgotten — sound).
     fn scrub_to_top(&mut self) {
         for slot in self.locals.iter_mut() {
             *slot = AbstractValue::I32Interval(domain::top());
         }
         self.operand_stack.clear();
+        self.octagon = scry_octagon::top(self.locals.len() as u32);
         self.degraded = true;
     }
 }
@@ -1527,6 +1541,127 @@ fn refine_interval(iv: Interval, op: GuardOp, c: i64, taken: bool) -> Interval {
     scry_interval::meet(iv, Interval { lo, hi })
 }
 
+/// What a `local.set`/`local.tee` stores, recovered by a look-behind over the
+/// producer ops (FEAT-016 slice-2b-ii octagon transfer). `Other` (anything not
+/// one of these canonical idioms) is handled by forgetting the variable.
+enum StoreSrc {
+    /// `x := c`
+    Const(i64),
+    /// `x := y`
+    Copy(u32),
+    /// `x := y + c` (a `local.get y; i32.const c; i32.add|sub; local.set x`
+    /// idiom — `sub` is recorded as `+(-c)`). Covers the self-increment `x :=
+    /// x + c` when `y == x`.
+    AddConst(u32, i64),
+    Other,
+}
+
+/// Classify the value a `local.set`/`local.tee` at `pc` stores, by matching
+/// the producer ops immediately before it. Sound: the producers are
+/// consecutive (structured Wasm has no mid-straight-line branch targets), so
+/// the value on top of the stack is exactly what they computed. Anything not
+/// matched is `Other` (⇒ forget). Only `i32.const` literals and `local.get`
+/// of an unmodified local are tracked relationally.
+fn classify_store(ops: &[Operator<'_>], pc: usize) -> StoreSrc {
+    // `x := y ± c` : local.get y; i32.const c; i32.add|sub; local.set x
+    if pc >= 3
+        && let (Operator::LocalGet { local_index: y }, Operator::I32Const { value: c }, op3) =
+            (&ops[pc - 3], &ops[pc - 2], &ops[pc - 1])
+    {
+        match op3 {
+            Operator::I32Add => return StoreSrc::AddConst(*y, *c as i64),
+            Operator::I32Sub => return StoreSrc::AddConst(*y, (*c as i64).saturating_neg()),
+            _ => {}
+        }
+    }
+    if pc >= 1 {
+        match &ops[pc - 1] {
+            Operator::I32Const { value } => return StoreSrc::Const(*value as i64),
+            Operator::LocalGet { local_index } => return StoreSrc::Copy(*local_index),
+            _ => {}
+        }
+    }
+    StoreSrc::Other
+}
+
+/// Add to the octagon the difference constraint implied by the signed
+/// comparison `A OP B` being true (`taken`) or false (FEAT-016 slice-2b-ii).
+/// `==`/`!=` add an equality (both directions) when they pin `A = B`, and add
+/// nothing on the `≠` edge (not octagon-expressible). All bounds are coherent
+/// ([`scry_octagon::add_diff`]).
+fn refine_octagon_rel(oct: &Octagon, a: u32, b: u32, op: GuardOp, taken: bool) -> Octagon {
+    use scry_octagon::add_diff;
+    match (op, taken) {
+        // A < B (true) / A ≥ B (false→A<B is the negation of ≥): A − B ≤ −1
+        (GuardOp::Lt, true) | (GuardOp::Ge, false) => add_diff(oct, a, b, -1),
+        // A ≥ B / ¬(A < B): B − A ≤ 0
+        (GuardOp::Ge, true) | (GuardOp::Lt, false) => add_diff(oct, b, a, 0),
+        // A ≤ B: A − B ≤ 0
+        (GuardOp::Le, true) | (GuardOp::Gt, false) => add_diff(oct, a, b, 0),
+        // A > B: B − A ≤ −1
+        (GuardOp::Gt, true) | (GuardOp::Le, false) => add_diff(oct, b, a, -1),
+        // A == B: A − B ≤ 0 ∧ B − A ≤ 0
+        (GuardOp::Eq, true) | (GuardOp::Ne, false) => {
+            let o = add_diff(oct, a, b, 0);
+            add_diff(&o, b, a, 0)
+        }
+        // A ≠ B: not an octagon constraint.
+        (GuardOp::Eq, false) | (GuardOp::Ne, true) => oct.clone(),
+    }
+}
+
+/// The reduced product (FEAT-016 slice-2b-ii observability, DD-015 2c): tighten
+/// each local's interval using the octagon, with NO WIT change. Inject the
+/// current interval bounds into a working octagon (sound — they hold for every
+/// concrete value), then project each variable back out and `meet` it with its
+/// interval. This is where a relational bound becomes a numeric one:
+/// `i ≤ n ∧ n ≤ 10 ⟹ i ≤ 10`. The octagon's `bound_of` closes internally, so
+/// the injected unary bounds propagate through the difference constraints.
+/// Inject each local's interval bounds into the octagon as coherent unary
+/// constraints. Sound: the interval bounds hold for every concrete value of
+/// the local at this point, so adding them only tightens. This is the
+/// interval→octagon half of the reduced product; it is what lets a difference
+/// relation (`i − n`) combine with a unary bound (`n ≤ 10`) — and what seeds
+/// the loop entry so the relation survives the `entry ⊔ back-edge` join.
+fn inject_intervals(octagon: &Octagon, locals: &[AbstractValue]) -> Octagon {
+    let mut oct = octagon.clone();
+    for (k, v) in locals.iter().enumerate() {
+        if let AbstractValue::I32Interval(iv) = v {
+            if iv.lo != i64::MIN {
+                oct = scry_octagon::set_lower(&oct, k as u32, iv.lo);
+            }
+            if iv.hi != i64::MAX {
+                oct = scry_octagon::set_upper(&oct, k as u32, iv.hi);
+            }
+        }
+    }
+    oct
+}
+
+fn reduce_locals(locals: &[AbstractValue], octagon: &Octagon) -> Vec<AbstractValue> {
+    // Fast path: a top octagon carries no relations, so projection is the
+    // identity — preserve the exact interval-only behaviour (and the cost).
+    if octagon.m.iter().all(|&b| b == scry_octagon::INF || b == 0) {
+        return locals.iter().map(clone_value).collect();
+    }
+    let oct = inject_intervals(octagon, locals);
+    locals
+        .iter()
+        .enumerate()
+        .map(|(k, v)| match v {
+            AbstractValue::I32Interval(iv) => match scry_octagon::bound_of(&oct, k as u32) {
+                Some((lo, hi)) => {
+                    AbstractValue::I32Interval(scry_interval::meet(*iv, Interval { lo, hi }))
+                }
+                // Infeasible (⊥): the program point is unreachable; keep the
+                // interval as a sound over-approximation rather than fabricate.
+                None => clone_value(v),
+            },
+            _ => clone_value(v),
+        })
+        .collect()
+}
+
 /// Did a straight-line sequence fall through to its end, or did control
 /// leave it (a `br`/`return`)? FEAT-016 slice-2a structured dataflow.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1535,18 +1670,33 @@ enum Flow {
     Diverged,
 }
 
-/// A structured label (an enclosing `block` or `loop`) and the joined locals
+/// The abstract state a branch carries to its target: the locals AND the
+/// relational octagon (FEAT-016 slice-2b-ii), joined across all branches that
+/// target the same label.
+#[derive(Clone)]
+struct BreakState {
+    locals: Vec<AbstractValue>,
+    octagon: Octagon,
+}
+
+/// A structured label (an enclosing `block` or `loop`) and the joined state
 /// of every branch that targets it. For a `block` the branch target is the
 /// state AFTER the block; for a `loop` it is the loop header (the back-edge).
 struct Label {
-    breaks: Option<Vec<AbstractValue>>,
+    breaks: Option<BreakState>,
 }
 
 impl Label {
-    fn record(&mut self, locals: &[AbstractValue]) {
+    fn record(&mut self, locals: &[AbstractValue], octagon: &Octagon) {
         self.breaks = Some(match self.breaks.take() {
-            Some(acc) => join_locals(&acc, locals),
-            None => locals.to_vec(),
+            Some(acc) => BreakState {
+                locals: join_locals(&acc.locals, locals),
+                octagon: scry_octagon::join(&acc.octagon, octagon),
+            },
+            None => BreakState {
+                locals: locals.to_vec(),
+                octagon: octagon.clone(),
+            },
         });
     }
 }
@@ -1630,7 +1780,26 @@ impl Interp<'_, '_> {
                     self.points.push(ProgramPoint {
                         func_index: self.func_index,
                         pc: pc as u32,
-                        locals: snapshot_locals(&ctx.locals),
+                        locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
+                    });
+                }
+                pc = next;
+                continue;
+            }
+
+            // ── Relational guard refinement (FEAT-016 slice-2b-ii) ──
+            // A comparison-guarded branch on TWO locals `local.get A;
+            // local.get B; <cmp>; br_if D` adds the octagon difference
+            // constraint the comparison implies on each edge (taken → label D,
+            // not-taken → fall through). This is what bounds a counter by a
+            // VARIABLE relation (`i < n`, n not constant) — the case the
+            // constant peephole above cannot reach.
+            if let Some(next) = self.try_guard_brif_rel(pc, ctx, labels) {
+                if emit && !ctx.degraded {
+                    self.points.push(ProgramPoint {
+                        func_index: self.func_index,
+                        pc: pc as u32,
+                        locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
                     });
                 }
                 pc = next;
@@ -1640,7 +1809,8 @@ impl Interp<'_, '_> {
             // ── Branches: contribute to the targeted label ──────────
             match &self.ops[pc] {
                 Operator::Br { relative_depth } => {
-                    self.target(labels, *relative_depth).record(&ctx.locals);
+                    self.target(labels, *relative_depth)
+                        .record(&ctx.locals, &ctx.octagon);
                     return Ok(Flow::Diverged);
                 }
                 Operator::BrIf { relative_depth } => {
@@ -1648,7 +1818,8 @@ impl Interp<'_, '_> {
                     // locals reach the target, on the not-taken edge we fall
                     // through (both modelled — sound).
                     let _ = ctx.operand_stack.pop();
-                    self.target(labels, *relative_depth).record(&ctx.locals);
+                    self.target(labels, *relative_depth)
+                        .record(&ctx.locals, &ctx.octagon);
                     pc += 1;
                     continue;
                 }
@@ -1678,11 +1849,14 @@ impl Interp<'_, '_> {
                 )?,
                 StepOutcome::Stop
             );
+            // Octagon relational transfer for this op (FEAT-016 slice-2b-ii):
+            // local.set/tee update or forget the written variable's relations.
+            self.octagon_transfer(pc, ctx);
             if emit && !ctx.degraded {
                 self.points.push(ProgramPoint {
                     func_index: self.func_index,
                     pc: pc as u32,
-                    locals: snapshot_locals(&ctx.locals),
+                    locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
                 });
             }
             if stop {
@@ -1746,14 +1920,89 @@ impl Interp<'_, '_> {
         let taken_iv = refine_interval(iv, op, c, true);
         let not_taken_iv = refine_interval(iv, op, c, false);
 
-        // Taken edge (guard true) → label D.
+        // Taken edge (guard true) → label D. The octagon rides along
+        // unchanged (the constant bound is already captured in the interval;
+        // injecting it into the octagon would be redundant for projection).
         let mut taken_locals = ctx.locals.clone();
         taken_locals[local as usize] = AbstractValue::I32Interval(taken_iv);
-        self.target(labels, depth).record(&taken_locals);
+        self.target(labels, depth)
+            .record(&taken_locals, &ctx.octagon);
 
         // Not-taken edge (guard false) → fall through.
         ctx.locals[local as usize] = AbstractValue::I32Interval(not_taken_iv);
         Some(next)
+    }
+
+    /// FEAT-016 slice-2b-ii relational guard refinement. If the ops at `pc`
+    /// are `local.get A; local.get B; <signed cmp>; br_if D`, add the octagon
+    /// difference constraint the comparison implies on each edge: the taken
+    /// edge (guard true) reaches label `D`, the not-taken edge (guard false)
+    /// falls through. Locals are NOT refined (neither operand is a constant —
+    /// that is the constant peephole's job); only the relational octagon
+    /// learns `A − B ≤ c`. Returns the pc just past the 4-op idiom, or `None`.
+    /// Net operand-stack effect is zero (push A, push B, cmp pops 2/pushes 1,
+    /// br_if pops 1), so the stack is left untouched.
+    fn try_guard_brif_rel(
+        &self,
+        pc: usize,
+        ctx: &mut FuncCtx,
+        labels: &mut [Label],
+    ) -> Option<usize> {
+        if ctx.degraded {
+            return None;
+        }
+        let ops = self.ops;
+        let (a, b, op, depth, next) = match (ops.get(pc)?, ops.get(pc + 1)?, ops.get(pc + 2)?) {
+            (Operator::LocalGet { local_index: a }, Operator::LocalGet { local_index: b }, cmp) => {
+                match ops.get(pc + 3) {
+                    Some(Operator::BrIf { relative_depth }) => {
+                        (*a, *b, guard_op(cmp)?, *relative_depth, pc + 4)
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let dim = ctx.locals.len() as u32;
+        if a == b || a >= dim || b >= dim {
+            return None; // self-compare or out-of-range: nothing relational to learn
+        }
+        let taken_oct = refine_octagon_rel(&ctx.octagon, a, b, op, true);
+        let not_taken_oct = refine_octagon_rel(&ctx.octagon, a, b, op, false);
+        // Taken edge (guard true) → label D (locals unchanged).
+        self.target(labels, depth).record(&ctx.locals, &taken_oct);
+        // Not-taken edge (guard false) → fall through.
+        ctx.octagon = not_taken_oct;
+        Some(next)
+    }
+
+    /// Octagon relational transfer for the op at `pc` (FEAT-016 slice-2b-ii).
+    /// Only `local.set` / `local.tee` change the relational state: they write
+    /// a local, so the octagon must drop or re-derive that variable's
+    /// constraints. The value stored is classified by a look-behind over the
+    /// producer ops ([`classify_store`]); anything not recognised forgets the
+    /// variable (the sound default — never retain a stale relation).
+    fn octagon_transfer(&self, pc: usize, ctx: &mut FuncCtx) {
+        if ctx.degraded {
+            return;
+        }
+        let l = match &self.ops[pc] {
+            Operator::LocalSet { local_index } | Operator::LocalTee { local_index } => *local_index,
+            _ => return,
+        };
+        let dim = ctx.locals.len() as u32;
+        if l >= dim {
+            return;
+        }
+        let oct = &ctx.octagon;
+        ctx.octagon = match classify_store(self.ops, pc) {
+            StoreSrc::Const(c) => scry_octagon::assign_const(oct, l, c),
+            StoreSrc::Copy(src) if src < dim => scry_octagon::assign_copy(oct, l, src),
+            StoreSrc::AddConst(src, c) if src < dim => {
+                scry_octagon::assign_add_const(oct, l, src, c)
+            }
+            _ => scry_octagon::forget(oct, l),
+        };
     }
 
     /// `block`: branches to it land AFTER the block, so the post-block state
@@ -1773,9 +2022,15 @@ impl Interp<'_, '_> {
         // []→[] region: the operand stack is balanced back to pre-region.
         ctx.operand_stack = saved_stack;
         match (body_flow, label.breaks) {
-            (Flow::Fall, Some(b)) => ctx.locals = join_locals(&ctx.locals, &b),
+            (Flow::Fall, Some(b)) => {
+                ctx.locals = join_locals(&ctx.locals, &b.locals);
+                ctx.octagon = scry_octagon::join(&ctx.octagon, &b.octagon);
+            }
             (Flow::Fall, None) => {}
-            (Flow::Diverged, Some(b)) => ctx.locals = b,
+            (Flow::Diverged, Some(b)) => {
+                ctx.locals = b.locals;
+                ctx.octagon = b.octagon;
+            }
             (Flow::Diverged, None) => {
                 // Post-block unreachable (body always branched elsewhere).
                 // Dead code follows; leave locals as a sound over-approx.
@@ -1799,6 +2054,13 @@ impl Interp<'_, '_> {
         emit: bool,
     ) -> Result<(), AnalyzeError> {
         let entry = ctx.locals.clone();
+        // Seed the entry octagon with the entry interval bounds (FEAT-016
+        // slice-2b-ii): without this the octagon does not relate the loop
+        // counter to its bound at entry (e.g. `i = 0`, `n = 10` ⇒ `i − n ≤
+        // −10`), and the very first `entry ⊔ back-edge` join would discard the
+        // body's `i − n ≤ 0` (join keeps the looser bound). Sound — injecting
+        // true entry bounds only tightens.
+        let entry_oct = inject_intervals(&ctx.octagon, &entry);
         let saved_stack = ctx.operand_stack.clone();
         // Snapshot the ENCLOSING labels' break-state. The widening/narrowing
         // passes below re-run the body many times with intermediate (often ⊤)
@@ -1806,13 +2068,21 @@ impl Interp<'_, '_> {
         // throwaway states into the enclosing label and poison its exit join.
         // Only the final converged pass should contribute outer breaks, so we
         // restore this snapshot just before it.
-        let saved_outer: Vec<Option<Vec<AbstractValue>>> =
+        let saved_outer: Vec<Option<BreakState>> =
             labels.iter().map(|l| l.breaks.clone()).collect();
         let mut header = entry.clone();
-        let mut exit: Option<Vec<AbstractValue>> = None;
+        // FEAT-016 slice-2b-ii: the relational octagon rides the fixpoint in
+        // LOCKSTEP with the interval locals — joined and widened at the same
+        // points, and (crucially) NARROWED in the same phase, because octagon
+        // widening drops a slowly-growing difference bound (e.g. `i − n`) to ⊤
+        // exactly as interval widening drops a counter, and narrowing is what
+        // re-derives it from the guard.
+        let mut header_oct = entry_oct.clone();
+        let mut exit: Option<(Vec<AbstractValue>, Octagon)> = None;
         let mut iter = 0u32;
         loop {
             ctx.locals = header.clone();
+            ctx.octagon = header_oct.clone();
             ctx.operand_stack = saved_stack.clone();
             labels.push(Label { breaks: None });
             // Suppress point emission until the header has converged; the
@@ -1821,52 +2091,67 @@ impl Interp<'_, '_> {
             let label = labels.pop().expect("pushed above");
             if body_flow == Flow::Fall {
                 exit = Some(match exit.take() {
-                    Some(e) => join_locals(&e, &ctx.locals),
-                    None => ctx.locals.clone(),
+                    Some((el, eo)) => (
+                        join_locals(&el, &ctx.locals),
+                        scry_octagon::join(&eo, &ctx.octagon),
+                    ),
+                    None => (ctx.locals.clone(), ctx.octagon.clone()),
                 });
             }
-            let mut next = match &label.breaks {
-                Some(b) => join_locals(&entry, b),
-                None => entry.clone(),
+            let (mut next, mut next_oct) = match &label.breaks {
+                Some(b) => (
+                    join_locals(&entry, &b.locals),
+                    scry_octagon::join(&entry_oct, &b.octagon),
+                ),
+                None => (entry.clone(), entry_oct.clone()),
             };
             if iter >= LOOP_WIDEN_THRESHOLD {
                 next = widen_locals(&header, &next);
+                next_oct = scry_octagon::widen(&header_oct, &next_oct);
             }
-            if locals_leq(&next, &header) {
+            if locals_leq(&next, &header) && scry_octagon::leq(&next_oct, &header_oct) {
                 break;
             }
             header = next;
+            header_oct = next_oct;
             iter += 1;
             if iter > LOOP_ITER_CAP {
-                // Termination safety net: widen every local to ⊤.
+                // Termination safety net: widen every local + relation to ⊤.
                 header = header
                     .iter()
                     .map(|_| AbstractValue::I32Interval(domain::top()))
                     .collect();
+                header_oct = scry_octagon::top(header.len() as u32);
                 break;
             }
         }
-        // ── Narrowing (FEAT-016 slice-2b-i) ──────────────────────────
-        // Widening may have overshot a bound to ⊤ (e.g. a guard-bounded loop
-        // counter widens up before the `i < C` refinement is seen). Re-apply
-        // the body and replace the header's infinite bounds with the
-        // recomputed finite ones, descending to a tighter sound post-fixpoint.
+        // ── Narrowing (FEAT-016 slice-2b-i + 2b-ii) ──────────────────
+        // Widening may have overshot a bound to ⊤ (an interval counter, or a
+        // relational difference bound). Re-apply the body and replace the
+        // header's infinite bounds — interval AND octagon — with the recomputed
+        // finite ones, descending to a tighter sound post-fixpoint.
         let mut narrow_iter = 0u32;
         loop {
             ctx.locals = header.clone();
+            ctx.octagon = header_oct.clone();
             ctx.operand_stack = saved_stack.clone();
             labels.push(Label { breaks: None });
             let _ = self.seq(start, end, ctx, labels, false)?;
             let label = labels.pop().expect("pushed above");
-            let candidate = match &label.breaks {
-                Some(b) => join_locals(&entry, b),
-                None => entry.clone(),
+            let (candidate, candidate_oct) = match &label.breaks {
+                Some(b) => (
+                    join_locals(&entry, &b.locals),
+                    scry_octagon::join(&entry_oct, &b.octagon),
+                ),
+                None => (entry.clone(), entry_oct.clone()),
             };
             let narrowed = narrow_locals(&header, &candidate);
-            if narrowed == header {
+            let narrowed_oct = scry_octagon::narrow(&header_oct, &candidate_oct);
+            if narrowed == header && narrowed_oct == header_oct {
                 break;
             }
             header = narrowed;
+            header_oct = narrowed_oct;
             narrow_iter += 1;
             if narrow_iter > LOOP_ITER_CAP {
                 break;
@@ -1880,14 +2165,18 @@ impl Interp<'_, '_> {
         // Final pass over the converged header WITH emission, to record the
         // fixpoint program points inside the loop body.
         ctx.locals = header.clone();
+        ctx.octagon = header_oct.clone();
         ctx.operand_stack = saved_stack.clone();
         labels.push(Label { breaks: None });
         let final_flow = self.seq(start, end, ctx, labels, emit)?;
         let final_label = labels.pop().expect("pushed above");
         if final_flow == Flow::Fall {
             exit = Some(match exit.take() {
-                Some(e) => join_locals(&e, &ctx.locals),
-                None => ctx.locals.clone(),
+                Some((el, eo)) => (
+                    join_locals(&el, &ctx.locals),
+                    scry_octagon::join(&eo, &ctx.octagon),
+                ),
+                None => (ctx.locals.clone(), ctx.octagon.clone()),
             });
         }
         // Drop this loop's own back-edge breaks — they targeted this loop only
@@ -1897,7 +2186,9 @@ impl Interp<'_, '_> {
         let _ = final_label;
         // Post-loop state: fall-through-exit if any, else the fixpoint header
         // (sound: covers the otherwise-unreachable fall-through).
-        ctx.locals = exit.unwrap_or(header);
+        let (post_locals, post_oct) = exit.unwrap_or((header, header_oct));
+        ctx.locals = post_locals;
+        ctx.octagon = post_oct;
         ctx.operand_stack = saved_stack;
         Ok(())
     }
@@ -1913,6 +2204,11 @@ impl Interp<'_, '_> {
         for idx in &written {
             if let Some(slot) = ctx.locals.get_mut(*idx as usize) {
                 *slot = AbstractValue::I32Interval(domain::top());
+            }
+            // The unmodelled region may assign these locals arbitrarily — drop
+            // their octagon relations too (sound havoc), FEAT-016 slice-2b-ii.
+            if (*idx as usize) < ctx.locals.len() {
+                ctx.octagon = scry_octagon::forget(&ctx.octagon, *idx);
             }
         }
         if self.emit_diagnostics {
@@ -3798,6 +4094,57 @@ mod tests {
             i.hi <= 10,
             "guard refinement failed: loop counter i has no tight upper bound (got hi={}, \
              expected ≤ 10 — slice-2a widens to ⊤ here)",
+            i.hi
+        );
+        // Soundness: the concrete result (10) lies in i's interval.
+        assert!(
+            i.lo <= 10 && i.hi >= 10,
+            "i must contain the concrete result 10, got [{}, {}]",
+            i.lo,
+            i.hi
+        );
+    }
+
+    /// FEAT-016 slice-2b-ii (octagon product): a loop counter bounded by a
+    /// VARIABLE relation (`i < n`, with `n` in a local, not an immediate) stays
+    /// bounded. The exit guard compares two locals, so slice-2b-i's constant
+    /// peephole cannot fire and the interval fixpoint alone widens `i` to ⊤;
+    /// the relational octagon carries `i ≤ n` across iterations and projects
+    /// `i ≤ n ≤ 10` — bounded, where interval-alone gives ⊤.
+    #[test]
+    fn feat016_octagon_var_bounds_counter() {
+        let wat_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../scry-analyzer/test-fixtures/fixture-11-var-bound.wat"
+        );
+        let bytes = wat::parse_file(wat_path).expect("assemble fixture-11");
+        let config = AnalysisConfig {
+            widening_threshold: Some(3),
+            emit_diagnostics: true,
+            taint_policy: None,
+        };
+        let result = analyze(bytes, config).expect("analyze fixture-11 must succeed");
+        let last = result
+            .invariants
+            .points
+            .last()
+            .expect("fixture-11 must emit points past the loop");
+        let i = last
+            .locals
+            .iter()
+            .find(|l| l.local_index == 0)
+            .and_then(|l| match l.value {
+                AbstractValue::I32Interval(iv) => Some(iv),
+                _ => None,
+            })
+            .expect("local i (index 0) i32-interval at final point");
+        // The slice-2b-ii win: i has a finite UPPER BOUND ≤ 10 via the
+        // RELATION i ≤ n ∧ n = 10 (interval-alone + constant guards give ⊤,
+        // since the guard compares two locals, not local-vs-const).
+        assert!(
+            i.hi <= 10,
+            "octagon product failed: variable-bounded counter i has no tight upper bound \
+             (got hi={}, expected ≤ 10 — interval/const-guard alone widen to ⊤ here)",
             i.hi
         );
         // Soundness: the concrete result (10) lies in i's interval.

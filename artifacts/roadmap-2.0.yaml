@@ -658,7 +658,7 @@ artifacts:
   - id: FEAT-016
     type: feature
     title: "v1.4 — Analyzer loop-carried octagon relational fixpoint (use the octagon, not just ship it)"
-    status: proposed
+    status: implemented
     description: >
       Promote the octagon domain from shipped-algebra (FEAT-010) to
       analyzer-consumed: maintain an octagon over local/offset pairs
@@ -729,6 +729,28 @@ artifacts:
       block/loop merges, transfer fns add/forget constraints, guard adds i-n≤c,
       project octagon→intervals at emission; fixture: variable-bounded counter);
       then slice-3 Miné closure.
+
+      EVIDENCE (v1.8.0 — slice-2b-ii per DD-015; THE AC IS NOW MET → status
+      implemented): the octagon is carried through the structured-CFG
+      interpreter (FuncCtx.octagon, dim = #locals), joined/widened/NARROWED in
+      lockstep with the intervals at every merge point (block exit; loop
+      entry⊔back-edges; widen threshold; narrowing phase — octagon widening
+      drops the slowly-growing i-n bound to ⊤ exactly like intervals, narrowing
+      re-derives it). Relational guard refinement (try_guard_brif_rel) on
+      `local.get A; local.get B; cmp; br_if` adds A-B≤c per edge; assignment
+      transfers (octagon_transfer/classify_store) handle x:=c / x:=y / x:=y±c
+      incl. the increment SHIFT, with FORGET-on-any-unmodelled-write as the
+      soundness net; reduced product at emission (reduce_locals/inject_intervals)
+      projects octagon→interval (i≤n ∧ n≤10 ⟹ i≤10, no WIT change). fixture-11
+      (counter bounded by VARIABLE relation i<n, n in a local) converges to
+      i=[0,10] (hi≤10) where interval+const-guard alone give ⊤ — the AC's
+      "relational constraint preserved across iterations without false
+      widening". Native oracle feat016_octagon_var_bounds_counter; fixture in
+      the live MC/DC corpus (proved 164→180 mac, floor 155). Soundness composes
+      v1.7 γ-tested primitives + OctagonProject.v projection + LoopFixpoint.v
+      post-fixpoint (instantiated at the octagon transfer) + host oracle over
+      all fixtures. REMAINING (precision only, NOT the AC): slice-3 Miné
+      strong/tight closure (referenced-paper AC-011).
     tags: [capability, relational, octagon, precision, v1.4]
     fields:
       phase: phase-2

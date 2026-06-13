@@ -60,6 +60,11 @@ const FIXTURE_LOOP_CONVERGE: &[u8] = include_bytes!("../fixtures/fixture-09-loop
 /// slice-2b-i guard-refinement + narrowing decisions (`try_guard_brif`,
 /// `refine_interval`, the loop_region narrowing phase) so they are covered.
 const FIXTURE_GUARD_BOUND: &[u8] = include_bytes!("../fixtures/fixture-10-guard-bound.wasm");
+/// Variable-bounded counted loop (`i < n`, n in a local) — drives the FEAT-016
+/// slice-2b-ii octagon-product decisions (`try_guard_brif_rel`,
+/// `octagon_transfer`/`classify_store`, `refine_octagon_rel`, `reduce_locals`,
+/// the lockstep octagon join/widen/narrow in loop_region) so they are covered.
+const FIXTURE_VAR_BOUND: &[u8] = include_bytes!("../fixtures/fixture-11-var-bound.wasm");
 
 // ── Config variants — each flips a different family of analyze decisions ─
 
@@ -265,6 +270,9 @@ run_export!(
 // FEAT-016 slice-2b-i: exercise the guard-refinement + narrowing decisions.
 run_export!(run_guard_bound_default, FIXTURE_GUARD_BOUND, cfg_default());
 run_export!(run_guard_bound_widen1, FIXTURE_GUARD_BOUND, cfg_widen1());
+// FEAT-016 slice-2b-ii: exercise the octagon-product decisions.
+run_export!(run_var_bound_default, FIXTURE_VAR_BOUND, cfg_default());
+run_export!(run_var_bound_widen1, FIXTURE_VAR_BOUND, cfg_widen1());
 
 #[cfg(test)]
 mod tests {
@@ -286,6 +294,7 @@ mod tests {
             (FIXTURE_COUNTED_LOOP, cfg_default()),
             (FIXTURE_LOOP_CONVERGE, cfg_default()),
             (FIXTURE_GUARD_BOUND, cfg_default()),
+            (FIXTURE_VAR_BOUND, cfg_default()),
         ];
         for (bytes, cfg) in pairs {
             let _ = drive(bytes, cfg.clone());

@@ -7,6 +7,78 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-06-13
+
+Headline: **the octagon relational product is wired into the analyzer — a loop
+counter bounded by a VARIABLE relation (`i < n`, `n` not constant) now stays
+bounded.** This is FEAT-016 slice-2b-ii (DD-015), the slice that moves the
+FEAT-016 acceptance criterion: a relational constraint between two locals is
+preserved across loop iterations instead of being widened away. It builds on
+the v1.7 octagon primitives, now carried through the interpreter in lockstep
+with the intervals.
+
+### Added / Changed
+
+- **Octagon carried through the structured-CFG interpreter** (`FuncCtx.octagon`,
+  dimension = local count). It is joined / widened / **narrowed** in lockstep
+  with the interval locals at every merge point — block exit, the loop
+  `entry ⊔ back-edges` join, the widening threshold, and (crucially) the
+  narrowing phase, because octagon widening drops a slowly-growing difference
+  bound (`i − n`) to ⊤ exactly as interval widening drops a counter, and
+  narrowing is what re-derives it from the guard. The branch break-state now
+  carries the octagon too.
+- **Relational guard refinement** (`try_guard_brif_rel`): the idiom
+  `local.get A; local.get B; <signed cmp>; br_if D` adds the octagon difference
+  constraint the comparison implies on each edge (`A − B ≤ c`) — the
+  variable-relation case the v1.6 constant peephole cannot reach.
+- **Octagon assignment transfers** (`octagon_transfer` / `classify_store`): a
+  `local.set`/`local.tee` is classified by a look-behind over its producer ops
+  into `x := c` / `x := y` / `x := y ± c` (the in-place increment `x := x + c`
+  uses the v1.7 SHIFT, carrying a relation across the loop body). **The safety
+  net: any write the transfer does not model `forget`s that variable's octagon
+  relations** — a stale relation is never retained (the soundness rule for the
+  whole slice). `br_table` / unsupported ops reset the octagon to ⊤.
+- **Reduced product at emission** (`reduce_locals` / `inject_intervals`): inject
+  the current interval bounds into the octagon, close, and project each variable
+  back as an integer interval, `meet`-ing it with its interval (DD-015 2c
+  observability — **no WIT change**). This is where `i ≤ n ∧ n ≤ 10 ⟹ i ≤ 10`.
+  The entry octagon of each loop is likewise seeded with the entry interval
+  bounds so the relation survives the first `entry ⊔ back-edge` join. A `top`
+  octagon (no relations) projects to the identity, so all prior interval-only
+  behaviour is preserved exactly.
+- **New fixture** `fixture-11-var-bound` (counter bounded by `i < n`, `n` in a
+  local) + native oracle `feat016_octagon_var_bounds_counter` (`i` converges to
+  `[0,10]`, `hi ≤ 10`, where interval + constant-guard alone give ⊤) + the
+  fixture in the live scry-mcdc corpus. MC/DC proved **164 → 180** (mac local;
+  CI/linux is the gate), gate floor held at 155 (monotone). `SCRY_VERSION` →
+  1.8.0.
+
+### Soundness evidence
+
+The integration composes pieces proven / falsified in isolation, applied at the
+established merge points: the octagon transfers (`forget`, assign, the
+increment shift) are γ-sweep-falsified in `scry-octagon` (v1.7); the
+octagon→interval projection rounding is mechanized in
+`proofs/rocq/OctagonProject.v` (`proj_interval_sound`, v1.7); the loop
+fixpoint's post-fixpoint soundness is the generic `LoopFixpoint.v`
+(`loop_postfixpoint_sound`, v1.5) instantiated at the octagon transfer; and
+injecting true interval bounds only tightens. The integration-level gate is the
+native + host soundness oracle over the whole fixture corpus (abstract ⊒
+concrete), plus the forget-on-unmodelled-write safety net.
+
+### Falsification statement
+
+What v1.8 claims, made falsifiable: **a loop counter bounded by a variable
+relation `i < n` converges to a finite interval, soundly.** Falsifier:
+`fixture-11-var-bound` counts `i` up while `i < n` with `n = 10` held in a
+local; if the analyzer reports `i` as ⊤ after the loop (the interval/const-guard
+behaviour, since the guard compares two locals), or if the concrete result `10`
+falls outside `i`'s interval, the claim is false (the native + host soundness
+oracles check `hi ≤ 10` and `10 ∈ [lo,hi]`). What v1.8 does **not** claim:
+Miné strong/tight closure (the extra octagon precision of AC-011) — that is the
+remaining slice-3; and relations more complex than a single difference against
+a guarded counter may still widen.
+
 ## [1.7.0] — 2026-06-13
 
 Headline: **the octagon relational domain grows the primitives the analyzer

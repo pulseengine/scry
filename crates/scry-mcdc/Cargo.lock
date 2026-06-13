@@ -73,6 +73,7 @@ name = "scry-analyze-core"
 version = "0.1.0"
 dependencies = [
  "scry-interval",
+ "scry-octagon",
  "scry-provenance",
  "scry-taint",
  "sha2",
@@ -89,6 +90,10 @@ version = "0.0.0"
 dependencies = [
  "scry-analyze-core",
 ]
+
+[[package]]
+name = "scry-octagon"
+version = "0.1.0"
 
 [[package]]
 name = "scry-provenance"
