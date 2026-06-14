@@ -1,5 +1,5 @@
 [package]
-name = "scry-provenance"
+name = "scry-sai-provenance"
 description = "Encode/decode + projection for meld's `component-provenance` custom section (DD-002, FEAT-002)."
 version.workspace = true
 edition.workspace = true
@@ -14,6 +14,7 @@ authors.workspace = true
 # native cargo path even while the live component `analyze()` round-trip
 # stays blocked by the wac-compose / wasmtime-45 limitation.
 [lib]
+name = "scry_provenance"
 path = "src/lib.rs"
 
 [dependencies]

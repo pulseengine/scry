@@ -1,5 +1,5 @@
 [package]
-name = "scry-taint"
+name = "scry-sai-taint"
 description = "Pure security-label lattice (low ⊑ high) for scry's taint / noninterference domain (FEAT-009, AC-007)."
 version.workspace = true
 edition.workspace = true
@@ -15,6 +15,7 @@ authors.workspace = true
 # component `analyze()` round-trip stays blocked by the wac-compose /
 # wasmtime-45 limitation. Mirrors scry-provenance.
 [lib]
+name = "scry_taint"
 path = "src/lib.rs"
 
 [dependencies]

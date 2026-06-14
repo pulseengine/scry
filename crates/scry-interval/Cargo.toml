@@ -1,5 +1,5 @@
 [package]
-name = "scry-interval"
+name = "scry-sai-interval"
 description = "Pure interval + region-memory abstract domain for scry (FEAT-001/FEAT-005; extracted for the self-contained analyzer, FEAT-013)."
 version.workspace = true
 edition.workspace = true
@@ -15,6 +15,7 @@ authors.workspace = true
 # ones whose soundness is mechanized in proofs/rocq/Soundness.v +
 # Region.v.
 [lib]
+name = "scry_interval"
 path = "src/lib.rs"
 
 [dependencies]

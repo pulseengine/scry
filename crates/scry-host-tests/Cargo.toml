@@ -44,7 +44,7 @@ jsonschema = { workspace = true }
 # source the wasm32-wasip2 analyzer links — so the encode/decode/project
 # contract is falsifiable on the cargo path even while the live
 # component round-trip stays blocked by the wac/wasmtime-45 limitation.
-scry-provenance = { path = "../scry-provenance" }
+scry-sai-provenance = { path = "../scry-provenance" }
 # Used by the provenance test to build a real Wasm module with a
 # `component-provenance` custom section and walk it back out with the
 # exact API the analyzer's pre-pass uses (Parser + CustomSection).
@@ -53,9 +53,9 @@ wasmparser = { workspace = true }
 # FEAT-009: native falsification of the shipped security-label lattice
 # (the same scry-taint crate wasm-lattice's WIT `label-*` exports
 # delegate to) in tests/taint.rs.
-scry-taint = { path = "../scry-taint" }
+scry-sai-taint = { path = "../scry-taint" }
 
 # FEAT-010: native falsification of the shipped octagon relational
 # domain (the same scry-octagon crate wasm-lattice's WIT `octagon-*`
 # exports delegate to) in tests/octagon.rs.
-scry-octagon = { path = "../scry-octagon" }
+scry-sai-octagon = { path = "../scry-octagon" }

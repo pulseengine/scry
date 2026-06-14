@@ -30,16 +30,20 @@ use std::time::Duration;
 
 /// Publish order: leaves first, then their consumer. Hand-curated to match the
 /// dependency graph (the four pure domain crates have zero internal deps;
-/// `scry-analyze-core` depends on all four). Internal-only / component crates
-/// (`publish = false`) are intentionally absent.
-const CRATES_TO_PUBLISH: &[&str] = &[
+/// `scry-sai-core` depends on all four). Each entry is `(directory, crate)`:
+/// the crates.io package name (`scry-sai-*`) differs from the on-disk directory
+/// (`scry-*`, kept stable so the Bazel target paths don't churn — the
+/// `[package] name` was renamed, the `[lib] name` and dirs were not).
+/// Internal-only / component crates (`publish = false`) are intentionally
+/// absent.
+const CRATES_TO_PUBLISH: &[(&str, &str)] = &[
     // Leaves (no internal deps) — any order among themselves.
-    "scry-interval",
-    "scry-taint",
-    "scry-octagon",
-    "scry-provenance",
+    ("scry-interval", "scry-sai-interval"),
+    ("scry-taint", "scry-sai-taint"),
+    ("scry-octagon", "scry-sai-octagon"),
+    ("scry-provenance", "scry-sai-provenance"),
     // Depends on all four leaves — publish last.
-    "scry-analyze-core",
+    ("scry-analyze-core", "scry-sai-core"),
 ];
 
 struct Krate {
@@ -53,15 +57,15 @@ fn main() {
     let ws_version = read_workspace_version();
     let crates: Vec<Krate> = CRATES_TO_PUBLISH
         .iter()
-        .map(|name| {
-            let manifest = PathBuf::from(format!("crates/{name}/Cargo.toml"));
+        .map(|(dir, pkg)| {
+            let manifest = PathBuf::from(format!("crates/{dir}/Cargo.toml"));
             assert!(
                 manifest.exists(),
                 "missing {}: publish order out of sync with crates/",
                 manifest.display()
             );
             Krate {
-                name: (*name).to_string(),
+                name: (*pkg).to_string(),
                 version: ws_version.clone(),
             }
         })

@@ -69,38 +69,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "scry-analyze-core"
+name = "scry-mcdc"
+version = "0.0.0"
+dependencies = [
+ "scry-sai-core",
+]
+
+[[package]]
+name = "scry-sai-core"
 version = "1.9.0"
 dependencies = [
- "scry-interval",
- "scry-octagon",
- "scry-provenance",
- "scry-taint",
+ "scry-sai-interval",
+ "scry-sai-octagon",
+ "scry-sai-provenance",
+ "scry-sai-taint",
  "sha2",
  "wasmparser",
 ]
 
 [[package]]
-name = "scry-interval"
+name = "scry-sai-interval"
 version = "1.9.0"
 
 [[package]]
-name = "scry-mcdc"
-version = "0.0.0"
-dependencies = [
- "scry-analyze-core",
-]
-
-[[package]]
-name = "scry-octagon"
+name = "scry-sai-octagon"
 version = "1.9.0"
 
 [[package]]
-name = "scry-provenance"
+name = "scry-sai-provenance"
 version = "1.9.0"
 
 [[package]]
-name = "scry-taint"
+name = "scry-sai-taint"
 version = "1.9.0"
 
 [[package]]
