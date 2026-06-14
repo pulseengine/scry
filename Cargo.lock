@@ -1824,23 +1824,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
-name = "scry-analyze-core"
-version = "1.9.0"
-dependencies = [
- "scry-interval",
- "scry-octagon",
- "scry-provenance",
- "scry-taint",
- "sha2",
- "wasmparser 0.247.0",
- "wat",
-]
-
-[[package]]
 name = "scry-analyzer"
 version = "1.9.0"
 dependencies = [
- "scry-analyze-core",
+ "scry-sai-core",
 ]
 
 [[package]]
@@ -1849,9 +1836,9 @@ version = "1.9.0"
 dependencies = [
  "anyhow",
  "jsonschema",
- "scry-octagon",
- "scry-provenance",
- "scry-taint",
+ "scry-sai-octagon",
+ "scry-sai-provenance",
+ "scry-sai-taint",
  "serde",
  "serde_json",
  "wasmparser 0.247.0",
@@ -1861,19 +1848,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "scry-interval"
+name = "scry-sai-core"
+version = "1.9.0"
+dependencies = [
+ "scry-sai-interval",
+ "scry-sai-octagon",
+ "scry-sai-provenance",
+ "scry-sai-taint",
+ "sha2",
+ "wasmparser 0.247.0",
+ "wat",
+]
+
+[[package]]
+name = "scry-sai-interval"
 version = "1.9.0"
 
 [[package]]
-name = "scry-octagon"
+name = "scry-sai-octagon"
 version = "1.9.0"
 
 [[package]]
-name = "scry-provenance"
+name = "scry-sai-provenance"
 version = "1.9.0"
 
 [[package]]
-name = "scry-taint"
+name = "scry-sai-taint"
 version = "1.9.0"
 
 [[package]]
@@ -2482,8 +2482,8 @@ name = "wasm-lattice"
 version = "1.9.0"
 dependencies = [
  "bitflags",
- "scry-octagon",
- "scry-taint",
+ "scry-sai-octagon",
+ "scry-sai-taint",
 ]
 
 [[package]]

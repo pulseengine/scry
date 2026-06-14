@@ -1,5 +1,5 @@
 [package]
-name = "scry-octagon"
+name = "scry-sai-octagon"
 description = "Pure octagon relational abstract domain (DBM; ±x±y ≤ c) for scry (FEAT-010, Miné HOSC 2006 / AC-011)."
 version.workspace = true
 edition.workspace = true
@@ -16,6 +16,7 @@ authors.workspace = true
 # blocked by the wac-compose / wasmtime-45 limitation. Mirrors
 # scry-taint / scry-provenance.
 [lib]
+name = "scry_octagon"
 path = "src/lib.rs"
 
 [dependencies]

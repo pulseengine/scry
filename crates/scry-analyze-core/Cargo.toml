@@ -1,5 +1,5 @@
 [package]
-name = "scry-analyze-core"
+name = "scry-sai-core"
 description = "Pure, bindgen-free analyzer core for scry (FEAT-014 / DD-012): the wasmparser + fixpoint + transfer logic and its plain-Rust result types, extracted from scry-analyzer so the analyzer's real decisions can be instrumented for witness MC/DC and the component becomes a thin canonical-ABI wrapper."
 version.workspace = true
 edition.workspace = true
@@ -21,6 +21,7 @@ authors.workspace = true
 # scry-octagon / scry-provenance deps) and rewire the component as a thin
 # Guest wrapper that converts between these types and the WIT bindings.
 [lib]
+name = "scry_analyze_core"
 path = "src/lib.rs"
 
 [dependencies]
@@ -30,7 +31,7 @@ path = "src/lib.rs"
 # Path deps carry `version` so `cargo publish` rewrites them to the crates.io
 # coordinate (crates.io rejects path-only deps). The version equals the
 # workspace version and must be bumped in lockstep with it.
-scry-interval = { path = "../scry-interval", version = "1.9.0" }
+scry-sai-interval = { path = "../scry-interval", version = "1.9.0" }
 
 # Step 2 (DD-012): the analyze body + helpers moved here. wasmparser parses
 # the input Wasm Core Model module; sha2 digests the module bytes for
@@ -42,14 +43,14 @@ sha2 = { workspace = true }
 
 # Security-label (taint) lattice for the noninterference analysis (FEAT-009)
 # and the pure meld<->scry provenance boundary crate (FEAT-002 / DD-002).
-scry-taint = { path = "../scry-taint", version = "1.9.0" }
-scry-provenance = { path = "../scry-provenance", version = "1.9.0" }
+scry-sai-taint = { path = "../scry-taint", version = "1.9.0" }
+scry-sai-provenance = { path = "../scry-provenance", version = "1.9.0" }
 
 # Octagon relational domain (FEAT-016 slice-2b-ii): carried alongside the
 # intervals through the structured-CFG fixpoint so a loop counter bounded by a
 # VARIABLE relation (`i < n`) stays bounded where the interval domain alone
 # widens it to ⊤. Same pure `#![no_std]` dual-compile crate as scry-interval.
-scry-octagon = { path = "../scry-octagon", version = "1.9.0" }
+scry-sai-octagon = { path = "../scry-octagon", version = "1.9.0" }
 
 [dev-dependencies]
 # Test-only (the crate is otherwise dep-light + no_std): assemble the .wat

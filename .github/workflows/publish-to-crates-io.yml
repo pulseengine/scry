@@ -1,8 +1,8 @@
 # Publishes the scry pure-library crates to crates.io on every `v*` tag push,
 # in parallel with release.yml (signed wasm component + SBOMs + MC/DC evidence).
 #
-# Publishes only the reusable libraries — scry-interval, scry-taint,
-# scry-octagon, scry-provenance, scry-analyze-core. The Wasm-component crates
+# Publishes only the reusable libraries — scry-sai-interval, scry-sai-taint,
+# scry-sai-octagon, scry-sai-provenance, scry-sai-core. The Wasm-component crates
 # (wasm-lattice, scry-analyzer) and the test / MC-DC harnesses are
 # `publish = false` and ship as signed `.wasm` release assets instead (the
 # witness precedent: publish the libs, ship the component).
@@ -85,8 +85,8 @@ jobs:
       # NOTE: there is intentionally NO pre-flight `./publish verify` step in CI.
       # Both `cargo publish --dry-run` AND `cargo package` resolve the path-dep
       # version requirements against the crates.io index when preparing the
-      # upload, so the dependent (scry-analyze-core) fails with "failed to
-      # select a version for scry-interval = ^1.9.x" on the FIRST publish of any
+      # upload, so the dependent (scry-sai-core) fails with "failed to
+      # select a version for scry-sai-interval = ^1.9.x" on the FIRST publish of any
       # new version (the deps aren't on the registry yet). Compile errors are
       # already caught by the CI test/build job (path deps, no chicken-and-egg);
       # `./publish publish` validates each crate's metadata as cargo's own

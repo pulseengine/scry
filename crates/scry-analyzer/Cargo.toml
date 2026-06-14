@@ -26,4 +26,4 @@ crate-type = ["cdylib"]
 # rules_wasm_component-injected scry_analyzer_component_bindings crate).
 # Bazel wires the matching //crates/scry-analyze-core rust_library target;
 # this path entry keeps the cargo metadata coherent.
-scry-analyze-core = { path = "../scry-analyze-core" }
+scry-sai-core = { path = "../scry-analyze-core" }
