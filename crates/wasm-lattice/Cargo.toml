@@ -1,5 +1,5 @@
 [package]
-name = "wasm-lattice"
+name = "scry-sai-lattice"
 description = "Interval-domain abstract-domain library as a Wasm component."
 version.workspace = true
 edition.workspace = true
@@ -16,6 +16,7 @@ authors.workspace = true
 publish = false
 
 [lib]
+name = "wasm_lattice"
 crate-type = ["cdylib"]
 
 [dependencies]
