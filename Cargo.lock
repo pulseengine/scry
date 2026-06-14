@@ -1825,7 +1825,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scry-analyze-core"
-version = "0.1.0"
+version = "1.9.0"
 dependencies = [
  "scry-interval",
  "scry-octagon",
@@ -1838,14 +1838,14 @@ dependencies = [
 
 [[package]]
 name = "scry-analyzer"
-version = "0.1.0"
+version = "1.9.0"
 dependencies = [
  "scry-analyze-core",
 ]
 
 [[package]]
 name = "scry-host-tests"
-version = "0.1.0"
+version = "1.9.0"
 dependencies = [
  "anyhow",
  "jsonschema",
@@ -1862,19 +1862,19 @@ dependencies = [
 
 [[package]]
 name = "scry-interval"
-version = "0.1.0"
+version = "1.9.0"
 
 [[package]]
 name = "scry-octagon"
-version = "0.1.0"
+version = "1.9.0"
 
 [[package]]
 name = "scry-provenance"
-version = "0.1.0"
+version = "1.9.0"
 
 [[package]]
 name = "scry-taint"
-version = "0.1.0"
+version = "1.9.0"
 
 [[package]]
 name = "semver"
@@ -2479,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-lattice"
-version = "0.1.0"
+version = "1.9.0"
 dependencies = [
  "bitflags",
  "scry-octagon",

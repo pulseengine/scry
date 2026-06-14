@@ -70,7 +70,7 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "scry-analyze-core"
-version = "0.1.0"
+version = "1.9.0"
 dependencies = [
  "scry-interval",
  "scry-octagon",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "scry-interval"
-version = "0.1.0"
+version = "1.9.0"
 
 [[package]]
 name = "scry-mcdc"
@@ -93,15 +93,15 @@ dependencies = [
 
 [[package]]
 name = "scry-octagon"
-version = "0.1.0"
+version = "1.9.0"
 
 [[package]]
 name = "scry-provenance"
-version = "0.1.0"
+version = "1.9.0"
 
 [[package]]
 name = "scry-taint"
-version = "0.1.0"
+version = "1.9.0"
 
 [[package]]
 name = "sha2"

@@ -1,0 +1,99 @@
+# Publishes the scry pure-library crates to crates.io on every `v*` tag push,
+# in parallel with release.yml (signed wasm component + SBOMs + MC/DC evidence).
+#
+# Publishes only the reusable libraries — scry-interval, scry-taint,
+# scry-octagon, scry-provenance, scry-analyze-core. The Wasm-component crates
+# (wasm-lattice, scry-analyzer) and the test / MC-DC harnesses are
+# `publish = false` and ship as signed `.wasm` release assets instead (the
+# witness precedent: publish the libs, ship the component).
+#
+# Trust model: an org-wide CRATES_IO_TOKEN secret (set at the pulseengine
+# GitHub organization, inherited by this repo); cargo reads it from
+# CARGO_REGISTRY_TOKEN. Mirrors pulseengine/synth's publish-to-crates-io.yml
+# plus scripts/publish.rs, which walks the dependency order with a 10-attempt /
+# 40s retry loop to ride out crates.io index propagation between deps.
+
+name: Publish to crates.io
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag whose workspace state should be (re)published (e.g. v1.10.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish workspace libraries
+    if: github.repository == 'pulseengine/scry'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: publish-crates-io
+
+      - name: Verify tag matches workspace version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${INPUT_TAG:-${GITHUB_REF#refs/tags/}}"
+          EXPECTED="${VERSION#v}"
+          ACTUAL=$(
+            awk '
+              /^\[workspace.package\]/ { in_pkg = 1; next }
+              /^\[/                    { in_pkg = 0 }
+              in_pkg && /^version *=/ {
+                gsub(/[ \t"]/, "", $0)
+                sub(/version=/, "", $0)
+                print
+                exit
+              }
+            ' Cargo.toml
+          )
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::tag $VERSION expects workspace version $EXPECTED but Cargo.toml has $ACTUAL"
+            exit 1
+          fi
+          echo "::notice::tag $VERSION matches workspace version $ACTUAL"
+
+      - name: Build publish helper
+        run: rustc --edition 2024 scripts/publish.rs -o publish
+
+      # NOTE: there is intentionally NO pre-flight `./publish verify` step in CI.
+      # Both `cargo publish --dry-run` AND `cargo package` resolve the path-dep
+      # version requirements against the crates.io index when preparing the
+      # upload, so the dependent (scry-analyze-core) fails with "failed to
+      # select a version for scry-interval = ^1.9.x" on the FIRST publish of any
+      # new version (the deps aren't on the registry yet). Compile errors are
+      # already caught by the CI test/build job (path deps, no chicken-and-egg);
+      # `./publish publish` validates each crate's metadata as cargo's own
+      # pre-upload check, with the 10-attempt / 40s retry loop that rides out
+      # registry index propagation between deps. `./publish verify` remains
+      # available for local pre-flight on the leaf crates.
+      - name: Publish workspace libraries to crates.io
+        run: ./publish publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
