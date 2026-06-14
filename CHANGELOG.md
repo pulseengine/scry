@@ -24,13 +24,17 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   trick — so `use scry_interval` and the Bazel target paths are unchanged.
   Internal path deps now carry `version` so `cargo publish` rewrites them to the
   crates.io coordinate.
-- **Wasm-component crates** (`wasm-lattice`, `scry-analyzer`) are being migrated
-  to the `scry-sai-*` namespace + self-contained `wit_bindgen::generate!`
-  bindings so they build and publish under plain `cargo` as well as Bazel — in a
-  follow-up PR (it touches the `//:scry` composition and needs full CI
-  re-validation). Until then they remain `publish = false` and ship as signed
-  `.wasm` release assets. The `scry-host-tests` and `scry-mcdc` harnesses remain
-  unpublished.
+- **Wasm-component crates renamed** into the namespace: `wasm-lattice` →
+  `scry-sai-lattice`, `scry-analyzer` → `scry-sai-analyzer` (`[package] name`
+  only — `[lib] name`, directories, and Bazel targets unchanged). They remain
+  `publish = false` and ship as signed `.wasm` release assets: they are `cdylib`
+  Wasm components built from Bazel-generated WIT bindings, so a host
+  `cargo publish` cannot build them and a `cargo add` consumer cannot use a
+  cdylib component (the witness precedent — publish the libraries, ship the
+  component). Making them genuine crates.io libraries would require a
+  `wit_bindgen::generate!` binding refactor that touches the shipped `//:scry`
+  composition for no consumer benefit; deferred. The `scry-host-tests` and
+  `scry-mcdc` harnesses remain unpublished.
 
 ### Changed
 

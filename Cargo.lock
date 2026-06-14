@@ -1824,13 +1824,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
-name = "scry-analyzer"
-version = "1.9.0"
-dependencies = [
- "scry-sai-core",
-]
-
-[[package]]
 name = "scry-host-tests"
 version = "1.9.0"
 dependencies = [
@@ -1845,6 +1838,13 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wat",
+]
+
+[[package]]
+name = "scry-sai-analyzer"
+version = "1.9.0"
+dependencies = [
+ "scry-sai-core",
 ]
 
 [[package]]
@@ -1863,6 +1863,15 @@ dependencies = [
 [[package]]
 name = "scry-sai-interval"
 version = "1.9.0"
+
+[[package]]
+name = "scry-sai-lattice"
+version = "1.9.0"
+dependencies = [
+ "bitflags",
+ "scry-sai-octagon",
+ "scry-sai-taint",
+]
 
 [[package]]
 name = "scry-sai-octagon"
@@ -2475,15 +2484,6 @@ checksum = "2271adb766023046af314460f1fae02cc34ea16d736d93404d3b65be44270923"
 dependencies = [
  "leb128fmt",
  "wasmparser 0.250.0",
-]
-
-[[package]]
-name = "wasm-lattice"
-version = "1.9.0"
-dependencies = [
- "bitflags",
- "scry-sai-octagon",
- "scry-sai-taint",
 ]
 
 [[package]]
