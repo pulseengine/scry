@@ -171,6 +171,51 @@ pub fn close(o: &Octagon) -> Octagon {
     r
 }
 
+/// Miné **strong** closure (FEAT-016 slice-3, AC-011). After the standard
+/// Floyd–Warshall [`close`], apply the octagon tightening
+///
+/// ```text
+///   m[i][j] := min( m[i][j], ⌊ (m[i][ī] + m[j̄][j]) / 2 ⌋ )      ī = i^1
+/// ```
+///
+/// then re-close to propagate the new bounds. This derives a ±difference/sum
+/// bound between two variables from their UNARY bounds — e.g. from `x ≤ 10`
+/// and `y ≥ 0` it derives `x − y ≤ 10`, which plain Floyd–Warshall (no edge
+/// between `x` and `y`) cannot. Sound for integers: `v(ī) − v(i) = −2·v(i) ≤
+/// m[i][ī]` and `v(j) − v(j̄) = 2·v(j) ≤ m[j̄][j]`, so `2·(v(j) − v(i)) ≤
+/// m[i][ī] + m[j̄][j]`, hence `v(j) − v(i) ≤ ⌊·/2⌋` (the integer floor only
+/// tightens, never drops a concrete point). The `/2` floor is via
+/// `div_euclid`, matching [`bound_of`]'s projection rounding.
+///
+/// Scope note: the tightening lands on DIFFERENCE/SUM entries, never on a
+/// variable's own unary bound (`m[2k+1][2k]`, the source of the derivation),
+/// so projecting a closed octagon back to per-variable intervals via
+/// [`bound_of`] sees no change from strong vs. plain closure. The precision is
+/// realised by consumers that read the relational (off-diagonal) bounds.
+pub fn strong_close(o: &Octagon) -> Octagon {
+    let c = close(o);
+    if is_bottom(&c) {
+        return c;
+    }
+    let n = c.n();
+    let mut r = c.clone();
+    for i in 0..n {
+        let a = c.at(i, i ^ 1); // bounds −2·v(i)
+        for j in 0..n {
+            let b = c.at(j ^ 1, j); // bounds 2·v(j)
+            let t = sadd(a, b);
+            if t != INF {
+                let cand = t.div_euclid(2); // ⌊(a+b)/2⌋ — sound integer floor
+                if cand < r.at(i, j) {
+                    r.set(i, j, cand);
+                }
+            }
+        }
+    }
+    // Propagate the tightened relational bounds.
+    close(&r)
+}
+
 /// `a ⊑ b` — the octagon partial order, i.e. `γ(a) ⊆ γ(b)`. Computed by
 /// closing `a` (so all implied bounds are explicit) and checking it is
 /// pointwise at least as tight as `b`. A bottom `a` is `⊑` everything.
@@ -426,7 +471,11 @@ pub fn assign_add_const(o: &Octagon, k: u32, src: u32, c: i64) -> Octagon {
 /// iff the octagon is infeasible (⊥ — no concrete point, i.e. unreachable).
 /// Sound: the returned interval over-approximates `{ x_k : point ∈ γ(o) }`.
 pub fn bound_of(o: &Octagon, k: u32) -> Option<(i64, i64)> {
-    let c = close(o);
+    // Project through the STRONG closure (FEAT-016 slice-3): for the current
+    // analyzer this matches plain `close` on unary bounds, but it keeps the
+    // projection correct for any relational constraints a richer
+    // constraint-generation would add (sum/difference tightening).
+    let c = strong_close(o);
     if is_bottom(&c) {
         return None;
     }
@@ -854,6 +903,65 @@ mod tests {
         let o = set_lower(&o, 0, 5);
         let o = set_upper(&o, 0, 2); // 5 ≤ x_0 ≤ 2 : infeasible
         assert_eq!(bound_of(&o, 0), None);
+    }
+
+    /// Strong closure PRECISION: from the unary bounds `x_0 ≤ 10` and
+    /// `x_1 ≥ 0` it derives the difference bound `x_0 − x_1 ≤ 10`, which plain
+    /// Floyd–Warshall cannot (there is no edge between `x_0` and `x_1`). This
+    /// is the AC-011 win that distinguishes strong closure from `close`.
+    #[test]
+    fn strong_close_derives_difference_from_unary_bounds() {
+        let o = top(2);
+        let o = set_upper(&o, 0, 10); // x_0 ≤ 10
+        let o = set_lower(&o, 1, 0); // x_1 ≥ 0
+        // x_0 − x_1 = v(0) − v(2) ≤ c  ⇒  cell m[2][0].
+        let n = o.n();
+        let cell = 2 * n; // m[2][0]
+        assert_eq!(
+            close(&o).m[cell],
+            INF,
+            "plain Floyd–Warshall cannot relate independent x_0, x_1"
+        );
+        assert_eq!(
+            strong_close(&o).m[cell],
+            10,
+            "strong closure must derive x_0 − x_1 ≤ 10 from x_0 ≤ 10 ∧ x_1 ≥ 0"
+        );
+    }
+
+    /// Strong closure is SOUND: like `close`, it only makes implied bounds
+    /// explicit — it never adds or drops a concrete point. Swept over a grid
+    /// of constraint systems (a difference + two unary bounds).
+    #[test]
+    fn strong_close_preserves_concretization() {
+        let base = {
+            let o = top(2);
+            let o = add_diff(&o, 0, 1, 4); // x_0 − x_1 ≤ 4
+            let o = set_lower(&o, 0, -3);
+            let o = set_upper(&o, 0, 8);
+            let o = set_lower(&o, 1, -2);
+            set_upper(&o, 1, 6)
+        };
+        let s = strong_close(&base);
+        for a in -6..=11 {
+            for b in -5..=9 {
+                assert_eq!(
+                    gamma(&base, &[a, b]),
+                    gamma(&s, &[a, b]),
+                    "strong closure changed γ at ({a},{b})"
+                );
+            }
+        }
+    }
+
+    /// Strong closure of an infeasible system stays ⊥ (it detects the
+    /// contradiction via the underlying `close`).
+    #[test]
+    fn strong_close_keeps_bottom() {
+        let o = top(1);
+        let o = set_lower(&o, 0, 5);
+        let o = set_upper(&o, 0, 2); // 5 ≤ x_0 ≤ 2 : infeasible
+        assert!(is_bottom(&strong_close(&o)));
     }
 
     /// `narrow` recovers an `INF` bound (that widening discarded) from the

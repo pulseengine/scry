@@ -751,6 +751,24 @@ artifacts:
       post-fixpoint (instantiated at the octagon transfer) + host oracle over
       all fixtures. REMAINING (precision only, NOT the AC): slice-3 Miné
       strong/tight closure (referenced-paper AC-011).
+
+      EVIDENCE (v1.9.0 — slice-3 per DD-015, AC-011): Miné STRONG closure landed
+      in scry-octagon (strong_close: Floyd-Warshall + the m[i][j] :=
+      min(m[i][j], floor((m[i][ī]+m[j̄][j])/2)) tightening + re-close), deriving
+      a difference bound from two unary bounds (x≤10 ∧ y≥0 ⟹ x-y≤10) that plain
+      close cannot. Sound (γ-sweep concretization-preservation) + strictly more
+      precise (γ-sweep precision test) + mechanized: proofs/rocq/
+      OctagonStrongClose.v strong_close_step_sound (the tightening drops no
+      concrete integer point, admit-free). bound_of projects through
+      strong_close. HONEST SCOPE: NO analyzer output change — strong closure
+      tightens difference/sum bounds, never a variable's own unary bound, and
+      the analyzer projects octagon→per-variable intervals (unary), so on the
+      current difference+unary corpus strong vs plain closure is invisible at
+      the output (fixtures 08-11 byte-identical). The precision becomes
+      observable only when a consumer reads relational bounds or the analyzer
+      generates sum constraints (future work). With slice-3 landed, the octagon
+      arc (slices 1/2a/2b-i/2b-ii/3) is complete; FEAT-016 implemented (could go
+      verified on an assessor/qualification pass).
     tags: [capability, relational, octagon, precision, v1.4]
     fields:
       phase: phase-2

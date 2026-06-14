@@ -7,6 +7,56 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-06-14
+
+Headline: **the octagon gains Miné strong (tight) closure — pure algebra,
+no analyzer output change.** This closes the referenced-paper precision item
+AC-011 (FEAT-016 slice-3). Strong closure derives a ±difference bound between
+two variables from their unary bounds (`x ≤ 10 ∧ y ≥ 0 ⟹ x − y ≤ 10`) that
+plain Floyd–Warshall cannot. FEAT-016's acceptance criterion was already met in
+v1.8.0; this is the final precision refinement of the octagon arc.
+
+### Added
+
+- **`scry_octagon::strong_close`** — Floyd–Warshall closure followed by the
+  octagon tightening `m[i][j] := min(m[i][j], ⌊(m[i][ī] + m[j̄][j])/2⌋)` and a
+  re-close. Sound for integers via the floor (`div_euclid`), matching
+  `bound_of`'s projection rounding. `bound_of` now projects through
+  `strong_close`.
+- **Mechanized soundness** (`proofs/rocq/OctagonStrongClose.v`,
+  `strong_close_step_sound`): from `−2·vi ≤ a` and `2·vj ≤ b`, the tightened
+  bound `⌊(a+b)/2⌋` over-approximates `vj − vi` — the step drops no concrete
+  integer point. No admits/axioms; verified by the `rocq-proofs` CI job (and
+  locally with Coq 9.0.1).
+- **3 new γ-sweep tests** in scry-octagon: the precision win
+  (`strong_close_derives_difference_from_unary_bounds`: derives `x_0 − x_1 ≤ 10`
+  from unary where `close` gives INF), concretization-preservation over a grid,
+  and bottom-preservation.
+
+### Not changed (honest scope)
+
+- **The analyzer output is identical to v1.8.0.** Strong closure tightens
+  difference/sum bounds, never a variable's own unary bound, and the analyzer
+  projects the octagon back to **per-variable intervals** (which read unary
+  bounds) — so on the current corpus, where the analyzer generates only
+  difference + unary constraints, strong vs. plain closure is invisible at the
+  output. All fixture invariants (08–11) are byte-identical. `SCRY_VERSION` →
+  1.9.0 is a release stamp. The precision becomes observable only when a
+  consumer reads the relational (off-diagonal) bounds or the analyzer generates
+  sum constraints — future work, not claimed here.
+
+### Falsification statement
+
+What v1.9 claims, made falsifiable: **strong closure is sound (drops no
+concrete point) and strictly more precise than Floyd–Warshall on a constraint
+system where a difference is implied only by unary bounds.** Falsifier: the
+γ-sweep test asserts `strong_close` and the base system admit exactly the same
+concrete points (soundness), and `strong_close_derives_difference_from_unary_bounds`
+asserts it derives `x_0 − x_1 ≤ 10` where `close` leaves INF (precision); the
+Rocq `strong_close_step_sound` independently proves the tightening step. What
+v1.9 does **not** claim: any change to the analyzer's interval output (see
+above), nor the full integer tight closure's extra unary even-ification.
+
 ## [1.8.0] — 2026-06-13
 
 Headline: **the octagon relational product is wired into the analyzer — a loop

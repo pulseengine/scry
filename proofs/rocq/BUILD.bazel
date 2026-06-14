@@ -149,3 +149,19 @@ rocq_proof_test(
     deps = [":octagonproject"],
     tags = ["rocq", "verification", "feat-016"],
 )
+
+# FEAT-016 slice-3 (v1.9): mechanized soundness of the Miné STRONG-closure
+# tightening step — deriving a difference bound `⌊(m[i][ī] + m[j̄][j])/2⌋` from
+# two unary bounds never excludes a concrete integer point (AC-011). No admits,
+# no axioms (DD-015).
+rocq_library(
+    name = "octagonstrongclose",
+    srcs = ["OctagonStrongClose.v"],
+    tags = ["rocq", "verification", "feat-016"],
+)
+
+rocq_proof_test(
+    name = "octagonstrongclose_test",
+    deps = [":octagonstrongclose"],
+    tags = ["rocq", "verification", "feat-016"],
+)
