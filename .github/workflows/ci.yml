@@ -75,20 +75,20 @@ jobs:
         run: cargo clippy --package scry-host-tests --all-targets -- -D warnings
       # FEAT-002: the pure meld<->scry boundary crate also lints on the
       # cargo path (it compiles natively as well as to wasm32-wasip2).
-      - name: cargo clippy --package scry-provenance
-        run: cargo clippy --package scry-provenance --all-targets -- -D warnings
+      - name: cargo clippy --package scry-sai-provenance
+        run: cargo clippy --package scry-sai-provenance --all-targets -- -D warnings
       # FEAT-009: the pure security-label (taint) lattice crate also
       # lints on the cargo path (it compiles natively as well as to
       # wasm32-wasip2, where wasm-lattice's WIT label-* exports delegate
       # to it).
-      - name: cargo clippy --package scry-taint
-        run: cargo clippy --package scry-taint --all-targets -- -D warnings
+      - name: cargo clippy --package scry-sai-taint
+        run: cargo clippy --package scry-sai-taint --all-targets -- -D warnings
       # FEAT-010: the pure octagon relational-domain crate also lints on
       # the cargo path (it compiles natively as well as to
       # wasm32-wasip2, where wasm-lattice's WIT octagon-* exports
       # delegate to it).
-      - name: cargo clippy --package scry-octagon
-        run: cargo clippy --package scry-octagon --all-targets -- -D warnings
+      - name: cargo clippy --package scry-sai-octagon
+        run: cargo clippy --package scry-sai-octagon --all-targets -- -D warnings
 
   test:
     name: Test
@@ -128,19 +128,19 @@ jobs:
         # override needed in CI; the env var is supported for local
         # iteration where bazel-bin may be elsewhere.
         run: cargo test --package scry-host-tests -- --nocapture
-      - name: cargo test --package scry-provenance
+      - name: cargo test --package scry-sai-provenance
         # FEAT-002: inline encode/decode/project unit tests for the
         # meld<->scry boundary crate (the same source the analyzer
         # links into the wasm component). The provenance round-trip is
         # additionally exercised through scry-host-tests/tests/provenance.rs.
-        run: cargo test --package scry-provenance -- --nocapture
+        run: cargo test --package scry-sai-provenance -- --nocapture
       # FEAT-009: the security-label lattice kill-criterion — the label
       # lattice obeys its algebraic laws and forward propagation never
       # moves down the lattice (exhaustive over the height-1 lattice).
       # The same crate links into the wasm component; the host harness
       # (tests/taint.rs) re-exercises it on the cargo path.
-      - name: cargo test --package scry-taint
-        run: cargo test --package scry-taint -- --nocapture
+      - name: cargo test --package scry-sai-taint
+        run: cargo test --package scry-sai-taint -- --nocapture
       # FEAT-010: the octagon relational-domain kill-criterion — the DBM
       # operations are sound w.r.t. the concretization γ (closure
       # preserves γ; join over-approximates the union; meet =
@@ -148,8 +148,8 @@ jobs:
       # host harness (tests/octagon.rs) re-exercises it on the cargo
       # path. The Rocq interval-soundness proof
       # (proofs/rocq/Soundness.v) is gated by the dedicated Rocq job.
-      - name: cargo test --package scry-octagon
-        run: cargo test --package scry-octagon -- --nocapture
+      - name: cargo test --package scry-sai-octagon
+        run: cargo test --package scry-sai-octagon -- --nocapture
       # FEAT-011: the full-stack Rocq soundness proofs (Soundness /
       # Region / CallGraph / Reachability) are gated by the dedicated
       # Rocq Formal Proofs job (bazel test //proofs/rocq/...).
