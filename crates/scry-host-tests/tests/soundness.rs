@@ -265,6 +265,14 @@ struct InvariantBundle {
 /// invariant bundle. Bails (with anyhow context) on any failure at
 /// any stage — instantiate, link, call, or `analyze-error` return.
 fn run_analyzer(component_bytes_path: &Path, module_bytes: &[u8]) -> Result<InvariantBundle> {
+    parse_analysis_result(invoke_analyze(component_bytes_path, module_bytes)?)
+}
+
+/// Invoke the composed component's `analyze` and return the raw
+/// `result<analysis-result, analyze-error>` `Val` for the caller to decode
+/// (the invariant bundle via [`parse_analysis_result`], or the FEAT-021
+/// shadow-stack bound via [`analyze_stack_usage`]).
+fn invoke_analyze(component_bytes_path: &Path, module_bytes: &[u8]) -> Result<Val> {
     let engine = component_engine()?;
     let component = Component::from_file(&engine, component_bytes_path)
         .anyhow()
@@ -399,7 +407,54 @@ fn run_analyzer(component_bytes_path: &Path, module_bytes: &[u8]) -> Result<Inva
         .next()
         .ok_or_else(|| anyhow!("analyze() returned no results"))?;
 
-    parse_analysis_result(ret)
+    Ok(ret)
+}
+
+/// FEAT-021: decode `analysis-result.stack-usage.max-stack-bytes` from the raw
+/// analyze result `Val` into a small view. Mirrors `parse_analysis_result`'s
+/// navigation, then reads the `stack-bound` variant.
+#[derive(Debug, PartialEq, Eq)]
+enum StackBoundView {
+    Bytes(u64),
+    Unbounded,
+    Unknown,
+}
+
+fn parse_stack_bound(v: Val) -> Result<StackBoundView> {
+    match v {
+        Val::Variant(case, payload) => match (case.as_str(), payload) {
+            ("bytes", Some(p)) => match *p {
+                Val::U64(n) => Ok(StackBoundView::Bytes(n)),
+                other => bail!("stack-bound bytes payload not u64: {other:?}"),
+            },
+            ("unbounded", _) => Ok(StackBoundView::Unbounded),
+            ("unknown", _) => Ok(StackBoundView::Unknown),
+            (other, _) => bail!("unexpected stack-bound case: {other}"),
+        },
+        other => bail!("stack-bound was not a variant: {other:?}"),
+    }
+}
+
+fn analyze_stack_usage(component_bytes_path: &Path, module_bytes: &[u8]) -> Result<StackBoundView> {
+    let ret = invoke_analyze(component_bytes_path, module_bytes)?;
+    let inner = match ret {
+        Val::Result(Ok(Some(payload))) => *payload,
+        Val::Result(Err(Some(err))) => {
+            bail!("analyze returned analyze-error: {}", display_val(&err))
+        }
+        other => bail!("analyze did not return Ok(analysis-result): {other:?}"),
+    };
+    let fields = expect_record(inner, "analysis-result")?;
+    let su = pop_field(&fields, "stack-usage").ok_or_else(|| {
+        anyhow!(
+            "analysis-result missing `stack-usage`; got: {:?}",
+            field_names(&fields)
+        )
+    })?;
+    let su_fields = expect_record(su, "stack-usage")?;
+    let max = pop_field(&su_fields, "max-stack-bytes")
+        .ok_or_else(|| anyhow!("stack-usage missing `max-stack-bytes`"))?;
+    parse_stack_bound(max)
 }
 
 /// Decode the top-level `result<analysis-result, analyze-error>`
@@ -1010,4 +1065,70 @@ fn feat013_live_analyze_gate() {
         "FEAT013_GATE_OK live analyze() ran on the self-contained component: {} program points",
         bundle.points.len()
     );
+}
+
+// ── FEAT-021 slice-2a: the shadow-stack bound through the composed component ──
+
+/// fixture-12: a 3-deep call chain (frames 16/32/8). The COMPOSED component's
+/// `analysis-result.stack-usage.max-stack-bytes` must equal the worst-case
+/// path sum, 56 bytes — proving the bound flows end-to-end through the shipped
+/// artifact, not just the native analyzer crate.
+#[test]
+fn fixture_12_stack_bound_via_component() -> Result<()> {
+    let comp_path = component_path();
+    if component_missing_skip(&comp_path) {
+        return Ok(());
+    }
+    let wat_path = fixtures_dir().join("fixture-12-stack-chain.wat");
+    let module_bytes = wat::parse_file(&wat_path)
+        .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
+    let bound = analyze_stack_usage(&comp_path, &module_bytes)
+        .context("[fixture-12] decode stack-usage from composed component")?;
+    assert_eq!(
+        bound,
+        StackBoundView::Bytes(56),
+        "[fixture-12] worst-case shadow-stack via the component must be 56 bytes"
+    );
+    eprintln!("scry-host-tests: fixture-12 max-stack-bytes via component = bytes(56)");
+    Ok(())
+}
+
+/// fixture-13: self-recursion → the component must report `unbounded`.
+#[test]
+fn fixture_13_stack_recursion_via_component() -> Result<()> {
+    let comp_path = component_path();
+    if component_missing_skip(&comp_path) {
+        return Ok(());
+    }
+    let wat_path = fixtures_dir().join("fixture-13-stack-recursion.wat");
+    let module_bytes = wat::parse_file(&wat_path)
+        .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
+    let bound = analyze_stack_usage(&comp_path, &module_bytes)
+        .context("[fixture-13] decode stack-usage")?;
+    assert_eq!(
+        bound,
+        StackBoundView::Unbounded,
+        "[fixture-13] recursion → unbounded"
+    );
+    Ok(())
+}
+
+/// fixture-14: dynamic frame → the component must report `unknown`.
+#[test]
+fn fixture_14_stack_dynamic_via_component() -> Result<()> {
+    let comp_path = component_path();
+    if component_missing_skip(&comp_path) {
+        return Ok(());
+    }
+    let wat_path = fixtures_dir().join("fixture-14-stack-dynamic.wat");
+    let module_bytes = wat::parse_file(&wat_path)
+        .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
+    let bound = analyze_stack_usage(&comp_path, &module_bytes)
+        .context("[fixture-14] decode stack-usage")?;
+    assert_eq!(
+        bound,
+        StackBoundView::Unknown,
+        "[fixture-14] dynamic frame → unknown"
+    );
+    Ok(())
 }

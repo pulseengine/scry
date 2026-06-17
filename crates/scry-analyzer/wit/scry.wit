@@ -341,6 +341,37 @@ interface analyzer {
         message: string,
     }
 
+    /// A worst-case shadow-stack bound (FEAT-021). `bytes` is a sound finite
+    /// over-approximation; `unbounded` marks a recursion SCC; `unknown` marks
+    /// an unrecognised / dynamic frame. Both `unbounded` and `unknown` mean
+    /// "no finite bound proven" — never treated as zero.
+    variant stack-bound {
+        bytes(u64),
+        unbounded,
+        unknown,
+    }
+
+    /// Per-function shadow-stack facts (FEAT-021): the function's own frame
+    /// and its whole-subtree worst case (this frame plus the deepest reachable
+    /// callee chain).
+    record function-stack {
+        func-index: u32,
+        frame: stack-bound,
+        max-stack: stack-bound,
+    }
+
+    /// Worst-case shadow-stack usage of the module (FEAT-021): the deepest
+    /// weighted path through the call graph, each function weighted by the
+    /// frame its prologue subtracts from the `__stack_pointer` global. Guest
+    /// shadow-stack only (host/WASI frames are out of scope).
+    record stack-usage {
+        /// The identified `__stack_pointer` global, or absent if the module
+        /// has no shadow stack / it could not be identified.
+        sp-global: option<u32>,
+        functions: list<function-stack>,
+        max-stack-bytes: stack-bound,
+    }
+
     record analysis-result {
         invariants: invariant-bundle,
         diagnostics: list<diagnostic>,
@@ -359,6 +390,9 @@ interface analyzer {
         /// sink that carries the High label. Empty when no
         /// `taint-policy` was configured or no violation was found.
         taint-findings: list<taint-finding>,
+        /// Worst-case shadow-stack bound (FEAT-021): per-function frames and
+        /// the module's `max-stack-bytes`.
+        stack-usage: stack-usage,
     }
 
     /// Reasons an analyze call can fail without producing a partial
