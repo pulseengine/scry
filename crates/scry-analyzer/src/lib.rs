@@ -75,6 +75,34 @@ fn taint_policy_to_core(p: wit::TaintPolicy) -> ac::TaintPolicy {
 
 // ───────────────────────── core → WIT (outputs) ────────────────────────
 
+fn stack_bound_to_wit(b: ac::StackBound) -> wit::StackBound {
+    match b {
+        ac::StackBound::Bytes(n) => wit::StackBound::Bytes(n),
+        ac::StackBound::Unbounded => wit::StackBound::Unbounded,
+        ac::StackBound::Unknown => wit::StackBound::Unknown,
+    }
+}
+
+fn function_stack_to_wit(f: ac::FunctionStack) -> wit::FunctionStack {
+    wit::FunctionStack {
+        func_index: f.func_index,
+        frame: stack_bound_to_wit(f.frame),
+        max_stack: stack_bound_to_wit(f.max_stack),
+    }
+}
+
+fn stack_usage_to_wit(s: ac::StackUsage) -> wit::StackUsage {
+    wit::StackUsage {
+        sp_global: s.sp_global,
+        functions: s
+            .functions
+            .into_iter()
+            .map(function_stack_to_wit)
+            .collect(),
+        max_stack_bytes: stack_bound_to_wit(s.max_stack_bytes),
+    }
+}
+
 fn result_to_wit(r: ac::AnalysisResult) -> wit::AnalysisResult {
     wit::AnalysisResult {
         invariants: bundle_to_wit(r.invariants),
@@ -91,6 +119,7 @@ fn result_to_wit(r: ac::AnalysisResult) -> wit::AnalysisResult {
             .into_iter()
             .map(taint_finding_to_wit)
             .collect(),
+        stack_usage: stack_usage_to_wit(r.stack_usage),
     }
 }
 

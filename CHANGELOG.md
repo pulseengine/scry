@@ -7,6 +7,23 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — FEAT-021 slice-2a (shadow-stack bound surfaced in WIT)
+
+- **`stack-usage` is now part of the analyzer's WIT result** (`scry.wit`): a
+  `stack-bound` variant (`bytes(u64)` / `unbounded` / `unknown`), a
+  `function-stack` record (per-function frame + subtree max), and a
+  `stack-usage` record (`sp-global`, `functions`, `max-stack-bytes`) added to
+  `analysis-result`. The component wrapper converts the core `StackUsage` to
+  the WIT shape. Additive (no existing field changed); the dynamic-`Val` host
+  decoders match fields by name, so prior consumers are unaffected.
+- **Host oracle through the composed component** (`scry-host-tests`):
+  `fixture_12_stack_bound_via_component` analyzes the chain fixture via the
+  *shipped* `//:scry` component and asserts `max-stack-bytes = bytes(56)`;
+  `fixture-13` → `unbounded`, `fixture-14` → `unknown`. This proves the bound
+  flows end-to-end through the real artifact, not just the native crate.
+  (slice-2b adds the runtime `__stack_pointer`-peak measurement + the
+  `peak ≤ bound` cross-assertion — the kill-criterion fully live.)
+
 ## [1.10.0] — 2026-06-17
 
 Headline: **worst-case shadow-stack bound — the AbsInt StackAnalyzer analogue
