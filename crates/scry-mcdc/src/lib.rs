@@ -73,6 +73,9 @@ const FIXTURE_STACK_RECURSION: &[u8] =
     include_bytes!("../fixtures/fixture-13-stack-recursion.wasm");
 const FIXTURE_STACK_DYNAMIC: &[u8] = include_bytes!("../fixtures/fixture-14-stack-dynamic.wasm");
 const FIXTURE_STACK_ALLOCA: &[u8] = include_bytes!("../fixtures/fixture-15-stack-alloca.wasm");
+/// Self-measuring chain (two mutable i32 globals) — drives resolve_sp_global
+/// with multiple SP candidates + the min-recording global.get reads.
+const FIXTURE_STACK_MEASURED: &[u8] = include_bytes!("../fixtures/fixture-16-stack-measured.wasm");
 
 // ── Config variants — each flips a different family of analyze decisions ─
 
@@ -302,6 +305,7 @@ run_export!(run_stack_chain_default, FIXTURE_STACK_CHAIN, cfg_default());
 run_export!(run_stack_recursion_default, FIXTURE_STACK_RECURSION, cfg_default());
 run_export!(run_stack_dynamic_default, FIXTURE_STACK_DYNAMIC, cfg_default());
 run_export!(run_stack_alloca_default, FIXTURE_STACK_ALLOCA, cfg_default());
+run_export!(run_stack_measured_default, FIXTURE_STACK_MEASURED, cfg_default());
 
 #[cfg(test)]
 mod tests {
@@ -328,6 +332,7 @@ mod tests {
             (FIXTURE_STACK_RECURSION, cfg_default()),
             (FIXTURE_STACK_DYNAMIC, cfg_default()),
             (FIXTURE_STACK_ALLOCA, cfg_default()),
+            (FIXTURE_STACK_MEASURED, cfg_default()),
         ];
         for (bytes, cfg) in pairs {
             let _ = drive(bytes, cfg.clone());

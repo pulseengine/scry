@@ -7,6 +7,28 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-06-17
+
+Headline: **the shadow-stack bound is now surfaced in the component's WIT result
+AND falsified against real execution (FEAT-021 slice-2).** v1.10 computed the
+bound in the native crate; v1.11 exposes it through the shipped `//:scry`
+component and adds a live kill-criterion: a self-measuring fixture's true
+runtime `__stack_pointer` peak is cross-checked `≤` the reported bound.
+
+### Added — FEAT-021 slice-2b (live kill-criterion)
+
+- **Runtime peak vs. reported bound** (`scry-host-tests`): `fixture-16-stack-
+  measured` self-measures its peak — each function records `min(min_sp, sp)`
+  (via `select`) into an exported global after lowering the `__stack_pointer`.
+  `run_concrete_peak_stack` runs it in core wasmtime and reads
+  `sp_init − min_sp`; `fixture_16_runtime_peak_within_bound` asserts the
+  component's `max-stack-bytes` (decoded from the composed component) is `≥` that
+  measured peak (here `48 ≥ 48`). This makes the FEAT-021 kill-criterion live:
+  an analyzer that under-counts a real run fails CI.
+- Native oracle `feat021_measured_chain_bound` (the analyzer reports `bytes(48)`
+  on the two-mutable-global fixture, resolving SP to global 0). Fixture-16 added
+  to the live scry-mcdc corpus (multi-SP-candidate `resolve_sp_global` path).
+
 ### Added — FEAT-021 slice-2a (shadow-stack bound surfaced in WIT)
 
 - **`stack-usage` is now part of the analyzer's WIT result** (`scry.wit`): a
@@ -21,8 +43,18 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   *shipped* `//:scry` component and asserts `max-stack-bytes = bytes(56)`;
   `fixture-13` → `unbounded`, `fixture-14` → `unknown`. This proves the bound
   flows end-to-end through the real artifact, not just the native crate.
-  (slice-2b adds the runtime `__stack_pointer`-peak measurement + the
-  `peak ≤ bound` cross-assertion — the kill-criterion fully live.)
+
+### Falsification statement
+
+What v1.11 claims: **scry's reported `max-stack-bytes` (read from the shipped
+component's WIT result) is `≥` the true peak shadow-stack usage of a real
+execution.** Falsifier: `fixture-16-stack-measured` records its actual runtime
+`__stack_pointer` peak; if the component's reported bound is ever `<` that
+measured peak, CI fails (the analyzer under-counted a real run). Does **not**
+claim the bound is tight, nor anything for recursion / dynamic frames / host
+stack (reported `unbounded` / `unknown` / out of scope as before). No
+version-number behaviour change beyond surfacing the existing bound in WIT;
+`SCRY_VERSION` → 1.11.0.
 
 ## [1.10.0] — 2026-06-17
 

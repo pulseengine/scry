@@ -1040,6 +1040,19 @@ artifacts:
       (dynamic→Unknown) + native oracles + live MC/DC corpus (proved 180→204
       mac). STILL OPEN: slice-2 (surface in WIT + wasmtime SP-peak host oracle);
       slice-3 (call_indirect target-set weighting vs whole-table ⊤).
+
+      EVIDENCE (v1.11.0 — slice-2 per DD-016, feature STILL proposed): the bound
+      is now surfaced in the component WIT result (scry.wit: stack-bound variant
+      + function-stack + stack-usage records on analysis-result; wrapper
+      conversion) AND the kill-criterion is LIVE. slice-2a host test decodes
+      max-stack-bytes from the COMPOSED //:scry component (fixture-12→bytes(56),
+      13→unbounded, 14→unknown). slice-2b: fixture-16-stack-measured
+      SELF-MEASURES its runtime peak (each fn records min(min_sp, sp) via select
+      into an exported global after lowering __stack_pointer); the host runs it
+      in core wasmtime, reads sp_init−min_sp, and asserts the component's
+      reported bound ≥ the measured peak (48≥48) — an analyzer that under-counts
+      a real run now fails CI (the FEAT-021 kill-criterion made live). STILL
+      OPEN: slice-3 (call_indirect target-set weighting).
     tags: [capability, stack-analysis, wcsu, resource-bound, v1.10]
     fields:
       phase: phase-2
