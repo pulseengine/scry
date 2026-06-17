@@ -8,7 +8,17 @@
 [advisories]
 # Vulnerabilities are denied by default in cargo-deny >=0.16.
 # Yanked crates produce warnings by default.
-ignore = []
+ignore = [
+    # RUSTSEC-2026-0182 — memory LEAK (not RCE) in wasmtime's WASIp1
+    # `fd_renumber`. Reached only through `wasmtime-wasi`, a DEV-dependency of
+    # the `scry-host-tests` harness (which runs the composed component in a
+    # short-lived wasmtime embedding); it is NOT in the shipped `scry.wasm`
+    # analyzer component (which imports only WASI as a guest, and embeds no
+    # wasmtime). A per-run leak in the test harness has no security impact on
+    # the released artifact. Re-evaluate when wasmtime is bumped past the
+    # patched release.
+    "RUSTSEC-2026-0182",
+]
 
 [licenses]
 confidence-threshold = 0.8

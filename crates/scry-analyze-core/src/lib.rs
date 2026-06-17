@@ -219,6 +219,45 @@ pub struct TaintFinding {
     pub message: String,
 }
 
+/// A worst-case shadow-stack bound (FEAT-021 slice-1). `Bytes(n)` is a sound
+/// finite over-approximation; `Unbounded` marks a recursion SCC (no finite
+/// bound provable without a ranking function); `Unknown` marks a frame we
+/// could not recognise (dynamic `alloca`, an unrecognised prologue, an
+/// unresolved `call_indirect` / host edge, or an ambiguous stack-pointer
+/// global). For a SOUND bound both `Unbounded` and `Unknown` mean "no finite
+/// bound proven" — neither is ever treated as zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StackBound {
+    Bytes(u64),
+    Unbounded,
+    Unknown,
+}
+
+/// Per-function shadow-stack facts (FEAT-021 slice-1): the function's own frame
+/// and its whole-subtree worst case (this frame plus the deepest reachable
+/// callee chain).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FunctionStack {
+    pub func_index: u32,
+    pub frame: StackBound,
+    pub max_stack: StackBound,
+}
+
+/// Worst-case shadow-stack usage of the module (FEAT-021 slice-1). The
+/// AbsInt-StackAnalyzer analogue for the Wasm linear-memory shadow stack:
+/// `max_stack_bytes` is the deepest weighted path through the call graph,
+/// each function weighted by the frame its prologue subtracts from the
+/// `__stack_pointer` global. Host/WASI frames run on a separate stack and are
+/// out of scope (the bound is "guest shadow-stack only").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StackUsage {
+    /// The identified `__stack_pointer` global, or `None` if the module has no
+    /// shadow stack (no mutable i32 global) or it could not be identified.
+    pub sp_global: Option<u32>,
+    pub functions: Vec<FunctionStack>,
+    pub max_stack_bytes: StackBound,
+}
+
 /// Mirror of WIT `analysis-result`. Full analyzer output for one call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnalysisResult {
@@ -228,6 +267,9 @@ pub struct AnalysisResult {
     pub function_summaries: Vec<FunctionSummary>,
     pub provenance: Option<ComponentProvenance>,
     pub taint_findings: Vec<TaintFinding>,
+    /// FEAT-021 slice-1: worst-case shadow-stack bound. Core-only (not yet in
+    /// the WIT mirror — slice-2 surfaces it); the component wrapper ignores it.
+    pub stack_usage: StackUsage,
 }
 
 /// Mirror of WIT `analyze-error`. Reasons an analyze call fails without a
@@ -300,7 +342,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "1.9.0";
+const SCRY_VERSION: &str = "1.10.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -716,6 +758,11 @@ pub fn analyze(
     // back to UnsoundnessFallback per the v0.3 scope).
     let mut memory_min_bytes: u64 = 0;
 
+    // ── FEAT-021 shadow-stack state ──────────────────────────────
+    // Indices of mutable i32 globals — the candidates for the C-style
+    // `__stack_pointer` the shadow-stack analysis weighs frames against.
+    let mut mutable_i32_globals: Vec<u32> = Vec::new();
+
     // ── FEAT-006 function-table state ────────────────────────────
     // The declared length of table index 0 (the funcref table a
     // `call_indirect` dispatches through). `table0_len` is the
@@ -804,6 +851,25 @@ pub fn analyze(
                         memory_min_bytes = mem.initial.saturating_mul(WASM_PAGE_SIZE);
                         first = false;
                     }
+                }
+            }
+            Payload::GlobalSection(reader) => {
+                // FEAT-021: record which globals are MUTABLE i32 — the
+                // candidates for the linear-memory shadow-stack pointer
+                // (Rust/LLVM's `__stack_pointer`, conventionally global 0).
+                // Their index here is the global index (no global imports are
+                // modelled — a sound limitation: an imported SP would leave
+                // `mutable_i32_globals` not naming it, and frame detection
+                // would then report Unknown rather than mis-count).
+                let mut gidx: u32 = 0;
+                for entry in reader {
+                    let g = entry.map_err(|e| {
+                        AnalyzeError::InvalidModule(format!("global section: {e}"))
+                    })?;
+                    if g.ty.mutable && matches!(g.ty.content_type, wasmparser::ValType::I32) {
+                        mutable_i32_globals.push(gidx);
+                    }
+                    gidx = gidx.saturating_add(1);
                 }
             }
             Payload::TableSection(reader) => {
@@ -1269,6 +1335,39 @@ pub fn analyze(
         points,
     };
 
+    // FEAT-021 slice-1: worst-case shadow-stack bound, reusing the FEAT-006/007
+    // call graph + Tarjan SCCs computed above for the summary pass.
+    let stack_usage = compute_stack_usage(
+        &defined_funcs,
+        &static_callees,
+        &sccs_reverse_topo_order(&sccs),
+        &recursive_flags,
+        resolve_sp_global(&mutable_i32_globals),
+    );
+    if config.emit_diagnostics {
+        let msg = match stack_usage.max_stack_bytes {
+            StackBound::Bytes(n) => {
+                alloc::format!("FEAT-021: worst-case shadow-stack bound = {n} bytes (sound)")
+            }
+            StackBound::Unbounded => {
+                "FEAT-021: shadow-stack usage UNBOUNDED (recursion — no finite bound \
+                 without a ranking function)"
+                    .to_string()
+            }
+            StackBound::Unknown => {
+                "FEAT-021: shadow-stack usage UNKNOWN (unrecognised frame / dynamic alloca / \
+                 unresolved call or ambiguous stack-pointer global)"
+                    .to_string()
+            }
+        };
+        diagnostics.push(Diagnostic {
+            severity: DiagnosticSeverity::Info,
+            func_index: 0,
+            pc: 0,
+            message: msg,
+        });
+    }
+
     Ok(AnalysisResult {
         invariants,
         diagnostics,
@@ -1276,6 +1375,7 @@ pub fn analyze(
         function_summaries,
         provenance,
         taint_findings,
+        stack_usage,
     })
 }
 enum StepOutcome {
@@ -2431,6 +2531,187 @@ fn sccs_reverse_topo_order(sccs: &[Vec<usize>]) -> Vec<usize> {
         }
     }
     order
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// FEAT-021 slice-1: worst-case shadow-stack bound (DD-016).
+//
+// The shadow stack is the C-style stack Rust/LLVM keep in linear memory via
+// a mutable i32 global (`__stack_pointer`). Each function's prologue subtracts
+// a constant frame from it; the worst-case usage is the deepest weighted path
+// through the call graph. We reuse the FEAT-006/007 call graph + Tarjan SCCs +
+// reverse-topological order: per-function frames are summed callees-first, a
+// recursion SCC is `Unbounded`, and any unrecognised frame / unresolved edge
+// is `Unknown` — never zero (the soundness rule, DD-016 guardrail 1 & 2).
+// ─────────────────────────────────────────────────────────────────────
+
+/// Which global, if any, is the shadow-stack pointer.
+#[derive(Clone, Copy)]
+enum SpGlobal {
+    /// The identified `__stack_pointer` (mutable i32; global 0 by LLVM
+    /// convention, or the unique mutable i32 global).
+    Index(u32),
+    /// No mutable i32 global ⇒ the module has no linear-memory shadow stack ⇒
+    /// every frame is genuinely 0 bytes (sound).
+    NoShadowStack,
+    /// Several mutable i32 globals and none is index 0 ⇒ we cannot reliably
+    /// say which is the SP ⇒ every frame is `Unknown` (sound, imprecise).
+    Ambiguous,
+}
+
+/// Pick the shadow-stack pointer global from the mutable i32 globals.
+fn resolve_sp_global(mutable_i32_globals: &[u32]) -> SpGlobal {
+    if mutable_i32_globals.is_empty() {
+        SpGlobal::NoShadowStack
+    } else if mutable_i32_globals.contains(&0) {
+        SpGlobal::Index(0)
+    } else if mutable_i32_globals.len() == 1 {
+        SpGlobal::Index(mutable_i32_globals[0])
+    } else {
+        SpGlobal::Ambiguous
+    }
+}
+
+/// Worst-case stack `+` (a frame plus its callees): any non-finite operand
+/// makes the sum non-finite (`Unbounded` dominates `Unknown`).
+fn sb_add(a: StackBound, b: StackBound) -> StackBound {
+    match (a, b) {
+        (StackBound::Unbounded, _) | (_, StackBound::Unbounded) => StackBound::Unbounded,
+        (StackBound::Unknown, _) | (_, StackBound::Unknown) => StackBound::Unknown,
+        (StackBound::Bytes(x), StackBound::Bytes(y)) => StackBound::Bytes(x.saturating_add(y)),
+    }
+}
+
+/// Worst-case stack `max` (the deepest of several callee subtrees): same
+/// non-finite domination as [`sb_add`].
+fn sb_max(a: StackBound, b: StackBound) -> StackBound {
+    match (a, b) {
+        (StackBound::Unbounded, _) | (_, StackBound::Unbounded) => StackBound::Unbounded,
+        (StackBound::Unknown, _) | (_, StackBound::Unknown) => StackBound::Unknown,
+        (StackBound::Bytes(x), StackBound::Bytes(y)) => StackBound::Bytes(x.max(y)),
+    }
+}
+
+/// Detect one function's shadow-stack frame by recognising the standard
+/// prologue `global.get SP; i32.const F; i32.sub`. Returns `Bytes(F)` only for
+/// a function whose SOLE stack-growing operation is that single constant
+/// decrement; `Bytes(0)` for a leaf that never touches SP; and `Unknown` for
+/// everything else — a non-constant / negative frame, MORE THAN ONE decrement
+/// (stacked frames), ANY DYNAMIC decrement (`alloca`, even alongside a
+/// recognised constant frame), or SP written with no recognised decrement.
+///
+/// Per DD-016 guardrail 1 this is conservatively the function's MAX live frame:
+/// every SP decrement (constant OR dynamic) is counted, and any unrecognised /
+/// extra one forces `Unknown` — so a frame is NEVER under-counted (the
+/// soundness premise the Rocq `sb_postfixpoint` / `sframe` upper-bound relies
+/// on). A `global.get SP` that is NOT followed by a subtract (e.g. the `add`
+/// epilogue, or a read for comparison) does not grow the stack and is ignored.
+fn detect_frame(ops: &[Operator<'_>], sp: SpGlobal) -> StackBound {
+    let g = match sp {
+        SpGlobal::NoShadowStack => return StackBound::Bytes(0),
+        SpGlobal::Ambiguous => return StackBound::Unknown,
+        SpGlobal::Index(g) => g,
+    };
+    let mut const_decr: u32 = 0;
+    let mut dyn_decr: u32 = 0;
+    let mut frame: u64 = 0;
+    let mut bad = false;
+    let mut sp_written = false;
+    for (i, op) in ops.iter().enumerate() {
+        if let Operator::GlobalSet { global_index } = op
+            && *global_index == g
+        {
+            sp_written = true;
+        }
+        // A stack-GROWING op is `global.get SP` whose value flows into an
+        // `i32.sub` (SP := SP - x). Recognise the constant-frame shape and,
+        // crucially, ALSO any dynamic shape — an unrecognised subtrahend must
+        // not be silently skipped.
+        if let Operator::GlobalGet { global_index } = op
+            && *global_index == g
+        {
+            match (ops.get(i + 1), ops.get(i + 2)) {
+                // global.get SP; i32.const F; i32.sub  — the recognised frame.
+                (Some(Operator::I32Const { value }), Some(Operator::I32Sub)) => {
+                    const_decr = const_decr.saturating_add(1);
+                    if *value >= 0 {
+                        frame = *value as u64;
+                    } else {
+                        bad = true;
+                    }
+                }
+                // global.get SP; i32.sub  — SP minus a stack value (dynamic).
+                (Some(Operator::I32Sub), _) => dyn_decr = dyn_decr.saturating_add(1),
+                // global.get SP; <non-const>; i32.sub  — dynamic alloca.
+                (_, Some(Operator::I32Sub)) => dyn_decr = dyn_decr.saturating_add(1),
+                _ => {}
+            }
+        }
+    }
+    if bad || const_decr > 1 || dyn_decr > 0 {
+        StackBound::Unknown
+    } else if const_decr == 1 {
+        StackBound::Bytes(frame)
+    } else if sp_written {
+        StackBound::Unknown
+    } else {
+        StackBound::Bytes(0)
+    }
+}
+
+/// Compute the module's worst-case shadow-stack usage (FEAT-021 slice-1):
+/// per-function frame, then `max_stack(f) = frame(f) + max over callees`,
+/// folded callees-first over the call-graph reverse-topological order;
+/// recursion SCCs are `Unbounded`. The overall bound is the max over all
+/// functions (any may be an entry point — sound).
+fn compute_stack_usage(
+    defined_funcs: &[DefinedFunc<'_>],
+    static_callees: &[Vec<usize>],
+    reverse_topo: &[usize],
+    recursive_flags: &[bool],
+    sp: SpGlobal,
+) -> StackUsage {
+    let n = defined_funcs.len();
+    let frames: Vec<StackBound> = defined_funcs
+        .iter()
+        .map(|f| detect_frame(&f.ops, sp))
+        .collect();
+    let mut max_stack: Vec<StackBound> = alloc::vec![StackBound::Bytes(0); n];
+    for &f in reverse_topo {
+        if f >= n {
+            continue;
+        }
+        if recursive_flags[f] {
+            max_stack[f] = StackBound::Unbounded;
+            continue;
+        }
+        let mut callee = StackBound::Bytes(0);
+        for &c in &static_callees[f] {
+            if c < n {
+                callee = sb_max(callee, max_stack[c]);
+            }
+        }
+        max_stack[f] = sb_add(frames[f], callee);
+    }
+    let functions: Vec<FunctionStack> = (0..n)
+        .map(|i| FunctionStack {
+            func_index: defined_funcs[i].abs_index,
+            frame: frames[i],
+            max_stack: max_stack[i],
+        })
+        .collect();
+    let overall = max_stack
+        .iter()
+        .fold(StackBound::Bytes(0), |acc, &b| sb_max(acc, b));
+    let sp_global = match sp {
+        SpGlobal::Index(g) => Some(g),
+        _ => None,
+    };
+    StackUsage {
+        sp_global,
+        functions,
+        max_stack_bytes: overall,
+    }
 }
 
 /// Mark every function in a non-trivial SCC (size > 1, or a single
@@ -3919,6 +4200,11 @@ mod tests {
             function_summaries: alloc::vec![],
             provenance: None,
             taint_findings: alloc::vec![],
+            stack_usage: StackUsage {
+                sp_global: None,
+                functions: alloc::vec![],
+                max_stack_bytes: StackBound::Bytes(0),
+            },
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -4154,5 +4440,104 @@ mod tests {
             i.lo,
             i.hi
         );
+    }
+
+    fn analyze_fixture(name: &str) -> AnalysisResult {
+        let wat_path = alloc::format!(
+            "{}/../scry-analyzer/test-fixtures/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            name
+        );
+        let bytes = wat::parse_file(&wat_path).expect("assemble fixture");
+        let config = AnalysisConfig {
+            widening_threshold: Some(3),
+            emit_diagnostics: true,
+            taint_policy: None,
+        };
+        analyze(bytes, config).expect("analyze must succeed")
+    }
+
+    /// FEAT-021 slice-1: a 3-deep direct call chain with constant frames sums
+    /// along the deepest path (16 + 32 + 8 = 56). The reported bound must equal
+    /// the concrete peak (sound + exact here), and per-function frames recorded.
+    #[test]
+    fn feat021_stack_chain_sums_frames() {
+        let res = analyze_fixture("fixture-12-stack-chain.wat");
+        assert_eq!(res.stack_usage.sp_global, Some(0), "global 0 is the SP");
+        assert_eq!(
+            res.stack_usage.max_stack_bytes,
+            StackBound::Bytes(56),
+            "outer(16) -> mid(32) -> inner(8) = 56"
+        );
+        // Per-function frames: inner=8, mid=32, outer=16 (func indices 0,1,2).
+        let frame = |idx: u32| {
+            res.stack_usage
+                .functions
+                .iter()
+                .find(|f| f.func_index == idx)
+                .map(|f| f.frame)
+        };
+        assert_eq!(frame(0), Some(StackBound::Bytes(8)), "inner frame");
+        assert_eq!(frame(1), Some(StackBound::Bytes(32)), "mid frame");
+        assert_eq!(frame(2), Some(StackBound::Bytes(16)), "outer frame");
+        // Soundness: the bound is >= the true peak (56) on the deepest path.
+        assert!(matches!(res.stack_usage.max_stack_bytes, StackBound::Bytes(n) if n >= 56));
+    }
+
+    /// FEAT-021 slice-1: a self-recursive function (call-graph SCC) has no
+    /// finite shadow-stack bound — must report Unbounded, never a finite
+    /// under-count.
+    #[test]
+    fn feat021_stack_recursion_is_unbounded() {
+        let res = analyze_fixture("fixture-13-stack-recursion.wat");
+        assert_eq!(
+            res.stack_usage.max_stack_bytes,
+            StackBound::Unbounded,
+            "recursion through the shadow stack is unbounded"
+        );
+    }
+
+    /// FEAT-021 slice-1: a dynamic (variable) frame is not statically known —
+    /// must report Unknown (a sound admission), never zero.
+    #[test]
+    fn feat021_stack_dynamic_frame_is_unknown() {
+        let res = analyze_fixture("fixture-14-stack-dynamic.wat");
+        let dyn_frame = res
+            .stack_usage
+            .functions
+            .iter()
+            .find(|f| f.func_index == 0)
+            .map(|f| f.frame);
+        assert_eq!(dyn_frame, Some(StackBound::Unknown), "dynamic alloca frame");
+        assert_eq!(res.stack_usage.max_stack_bytes, StackBound::Unknown);
+    }
+
+    /// FEAT-021 slice-1: a module with no mutable i32 global has no shadow
+    /// stack, so the bound is soundly 0 bytes (fixture-01 has no globals).
+    #[test]
+    fn feat021_no_shadow_stack_is_zero() {
+        let res = analyze_fixture("fixture-01-constant-fold.wat");
+        assert_eq!(res.stack_usage.sp_global, None);
+        assert_eq!(res.stack_usage.max_stack_bytes, StackBound::Bytes(0));
+    }
+
+    /// FEAT-021 slice-1 SOUNDNESS REGRESSION (clean-room finding): a constant
+    /// prologue frame PLUS a later dynamic `alloca` decrement must be Unknown —
+    /// reporting the constant 16 would under-count the true `16 + param` peak.
+    #[test]
+    fn feat021_const_frame_plus_dynamic_is_unknown() {
+        let res = analyze_fixture("fixture-15-stack-alloca.wat");
+        let f = res
+            .stack_usage
+            .functions
+            .iter()
+            .find(|f| f.func_index == 0)
+            .map(|f| f.frame);
+        assert_eq!(
+            f,
+            Some(StackBound::Unknown),
+            "const frame + dynamic alloca must be Unknown, never the under-counted constant"
+        );
+        assert_eq!(res.stack_usage.max_stack_bytes, StackBound::Unknown);
     }
 }

@@ -1,14 +1,14 @@
 {
   "tool": "witness-viz",
   "tool_version": "0.29.0",
-  "pages_written": 4546,
-  "bytes_written": 21013344,
+  "pages_written": 4721,
+  "bytes_written": 24559557,
   "verdicts": 1,
-  "decisions": 828,
+  "decisions": 882,
   "decisions_full_mcdc": 7,
-  "conditions": 3896,
-  "conditions_proved": 180,
-  "conditions_gap": 824,
-  "conditions_dead": 2892,
+  "conditions": 4057,
+  "conditions_proved": 220,
+  "conditions_gap": 931,
+  "conditions_dead": 2906,
   "source_files": 0
 }

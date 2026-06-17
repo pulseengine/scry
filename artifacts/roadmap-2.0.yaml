@@ -452,6 +452,94 @@ artifacts:
       - type: references-paper
         target: AC-011
 
+  - id: DD-016
+    type: design-decision
+    title: "FEAT-021 staging — worst-case shadow-stack bound by call-graph longest-weighted-path, smallest-sound-first"
+    status: approved
+    description: >
+      How scry computes a worst-case STACK-SIZE bound for a Wasm component, the
+      AbsInt StackAnalyzer / WCET analogue (a resource bound that complements
+      the v2.0 qualification dossier goal, G-005).
+
+      WHAT TO BOUND: not the Wasm operand stack (statically validation-bounded,
+      small) but the LINEAR-MEMORY SHADOW STACK — Rust/LLVM keep a C-style stack
+      via a mutable global (the `__stack_pointer`, conventionally global 0). Each
+      function's prologue subtracts a constant frame from it
+      (`global.get $sp; i32.const F; i32.sub; global.set $sp`) and the epilogue
+      restores it. So worst-case shadow-stack bytes = the deepest WEIGHTED PATH
+      through the call graph, each node weighted by its frame contribution —
+      exactly AbsInt's value-analysis → call-graph → longest-path/IPET shape.
+      Secondary metric: call DEPTH (wasmtime max_wasm_stack traps).
+
+      WHY scry is well-positioned: the backbone already exists in
+      crates/scry-analyze-core — the call graph (CallEdge, direct + call_indirect
+      with whole-table over-approximation), Tarjan SCCs (tarjan_sccs), a
+      reverse-topological order (sccs_reverse_topo_order), and per-function
+      FunctionSummary (with a `recursive` flag) computed bottom-up. A frame-size +
+      max-stack summary field drops straight into that traversal. The one new
+      surface is a FRAME-SIZE DETECTOR (scry does not yet model globals; it must
+      recognise the SP-prologue and extract the frame as a constant, reusing the
+      interval domain's i32.const / i32.sub transfer).
+
+      SOUNDNESS GUARDRAILS (the analysis is UNSOUND if any is violated):
+      (1) Each function's weight must be its MAXIMUM live shadow-stack
+      contribution over the whole body, NOT merely the prologue constant — a
+      mid-body dynamic alloca (variable SP subtract) or per-call push would make
+      summing prologue constants UNDER-count. Unrecognised / dynamic frames →
+      ⊤ (unknown), never 0.
+      (2) Recursion: every SCC (incl. self-recursion) is reported UNBOUNDED. The
+      SP lives in linear memory; the interval/octagon cannot bound recursion
+      depth without a ranking-function/termination argument — claiming otherwise
+      would be an overclaim. (A future slice may add a depth bound with a real
+      ranking function.)
+      (3) call_indirect / host-import / cross-component edges must be
+      over-approximated or declared explicitly OUT OF SCOPE — never silently
+      dropped — or the worst-case claim is false. Host/WASI frames run on a
+      different stack scry cannot see: declared out of scope (the claim is
+      "guest shadow-stack only").
+      (4) The mechanized soundness obligation must quantify over an operational
+      push/pop semantics of the shadow stack ("for all executions, actual peak
+      ≤ reported bound"), not merely the longest-path graph arithmetic.
+
+      STAGING (smallest-sound-first, as the octagon arc was):
+        slice-1 — frame-size detector (SP-prologue → max-live constant, ⊤ else)
+          + frame_bytes / max_stack_bytes on FunctionSummary, computed in the
+          existing reverse-topo SCC pass; non-recursive direct-call longest-path;
+          recursion-SCC → unbounded; call_indirect / dynamic / host → ⊤ / out of
+          scope. Result on the plain-Rust AnalysisResult + a diagnostic — NO WIT
+          change (so no //:scry composition risk). Rocq proof per guardrail (4).
+        slice-2 — surface max-stack-bytes + per-function frames in scry.wit
+          (additive) + a host-test oracle that measures the real SP-global peak
+          in wasmtime and cross-asserts peak ≤ bound.
+        slice-3 — precision: weight call_indirect by the resolved target set
+          (vs whole-table ⊤); optionally a ranking-function recursion bound.
+
+      Falsifiable claim (slice-1): for a non-recursive component with recognised
+      prologues, the reported max-shadow-stack-bytes ≥ the true peak on every
+      concrete run. Falsifier: a .wat fixture whose concrete peak (SP-global
+      instrumentation) exceeds the reported bound.
+    tags: [decision, capability, stack-analysis, wcsu, v2.0]
+    fields:
+      rationale: >
+        Longest-weighted-path over the acyclic call graph is the standard sound
+        model for peak stack (= max over call-stack configurations of the sum of
+        simultaneously-live frames; any root-to-leaf path is a realisable live
+        set). scry already builds the call graph + SCCs + bottom-up summaries, so
+        the marginal cost is a frame detector + one summary field + the soundness
+        discipline above — net-new risk low and isolated (additive pass, does not
+        touch the interval/octagon/taint domains or the //:scry composition).
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: traces-to
+        target: FEAT-021
+      - type: traces-to
+        target: FEAT-006
+      - type: traces-to
+        target: FEAT-007
+      - type: traces-to
+        target: G-005
+
   # ──────────────────────────────────────────────────────────────────────
   # Requirements added for the 2.0 line.
   # ──────────────────────────────────────────────────────────────────────
@@ -913,6 +1001,61 @@ artifacts:
         target: MF-005
       - type: depends-on
         target: FEAT-011
+      - type: traces-to
+        target: G-005
+
+  - id: FEAT-021
+    type: feature
+    title: "v1.10 — Worst-case shadow-stack bound (WCSU): AbsInt StackAnalyzer analogue for Wasm"
+    status: proposed
+    description: >
+      Compute a sound worst-case STACK-SIZE bound for a Wasm component — the
+      resource-bound analysis AbsInt StackAnalyzer (the aiT family) and
+      Polyspace provide for native code, here for the Wasm linear-memory
+      SHADOW STACK. Each function's frame is the constant its prologue subtracts
+      from the `__stack_pointer` global; the worst-case usage is the deepest
+      weighted path through the call graph. scry already has the backbone — the
+      call graph (FEAT-006), Tarjan SCCs + reverse-topo order, and bottom-up
+      FunctionSummary (FEAT-007) — so this adds a frame-size detector + a
+      max-stack summary field computed in that existing traversal. Staged
+      smallest-sound-first per DD-016, with explicit soundness guardrails
+      (max-live weight not prologue-only; recursion-SCC → unbounded;
+      call_indirect / host / dynamic frames → ⊤ / out of scope; the bound
+      over-approximates the true peak under an operational push/pop semantics).
+      A concrete resource bound strengthens the v2.0 qualification dossier
+      (G-005) with the WCSU evidence assessors expect alongside WCET.
+
+      EVIDENCE (v1.10.0 — slice-1 per DD-016, feature STILL proposed): landed in
+      scry-analyze-core — global-section parsing identifies the mutable-i32
+      __stack_pointer (resolve_sp_global); a frame-size detector recognises the
+      `global.get SP; i32.const F; i32.sub` prologue (detect_frame, F else
+      Unknown, ≥2 sub-sites/dynamic → Unknown); compute_stack_usage folds
+      frame(f)+max-over-callees callees-first over the existing Tarjan-SCC
+      reverse-topo order (recursion SCC → Unbounded; no mutable-i32 global →
+      Bytes(0)); result on AnalysisResult.stack_usage + an Info diagnostic (NO
+      WIT change → no //:scry risk). Soundness mechanized admit-free in
+      proofs/rocq/StackBound.v (stack_bound_sound: any active call chain's
+      frame-sum ≤ the per-function bound, over an operational push/pop
+      semantics). Fixtures 12 (chain→56B) / 13 (recursion→Unbounded) / 14
+      (dynamic→Unknown) + native oracles + live MC/DC corpus (proved 180→204
+      mac). STILL OPEN: slice-2 (surface in WIT + wasmtime SP-peak host oracle);
+      slice-3 (call_indirect target-set weighting vs whole-table ⊤).
+    tags: [capability, stack-analysis, wcsu, resource-bound, v1.10]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a non-recursive Wasm component whose functions use the standard __stack_pointer prologue, When scry runs its stack-usage analysis, Then it reports a max-shadow-stack-bytes bound that is >= the true peak shadow-stack usage on every concrete execution (a sound over-approximation), with per-function frame sizes."
+        - "Given a component with recursion (a call-graph SCC), an unrecognised/dynamic frame, or an unresolved call_indirect/host edge, When scry runs the analysis, Then those are reported as unbounded / unknown / out-of-scope respectively — never silently counted as zero (no unsound under-count)."
+        - "KILL-CRITERION: a .wat fixture whose true peak shadow-stack usage (measured by instrumenting the __stack_pointer global in wasmtime) EXCEEDS scry's reported max-shadow-stack-bytes bound falsifies the soundness claim."
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: depends-on
+        target: FEAT-006
+      - type: depends-on
+        target: FEAT-007
+      - type: traces-to
+        target: DD-016
       - type: traces-to
         target: G-005
 
