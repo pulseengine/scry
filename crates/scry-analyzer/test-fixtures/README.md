@@ -83,6 +83,7 @@ than working around it here.
 | `fixture-13-stack-recursion.wat`  | v1.10 (FEAT-021 slice-1) shadow-stack: self-recursion (call-graph SCC) → UNBOUNDED, never a finite under-count |
 | `fixture-14-stack-dynamic.wat`    | v1.10 (FEAT-021 slice-1) shadow-stack: dynamic (variable) frame → UNKNOWN, never zero |
 | `fixture-15-stack-alloca.wat`     | v1.10 (FEAT-021 slice-1) shadow-stack soundness regression: const frame + dynamic alloca → UNKNOWN, never the under-counted constant (clean-room finding) |
+| `fixture-16-stack-measured.wat`  | v1.11 (FEAT-021 slice-2b) LIVE kill-criterion: self-measuring chain (frames 32/16) → reported bytes(48) >= wasmtime-measured peak 48 |
 
 ## Adding fixtures
 

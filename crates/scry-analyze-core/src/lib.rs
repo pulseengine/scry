@@ -342,7 +342,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "1.10.0";
+const SCRY_VERSION: &str = "1.11.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -4519,6 +4519,25 @@ mod tests {
         let res = analyze_fixture("fixture-01-constant-fold.wat");
         assert_eq!(res.stack_usage.sp_global, None);
         assert_eq!(res.stack_usage.max_stack_bytes, StackBound::Bytes(0));
+    }
+
+    /// FEAT-021 slice-2b: the self-measuring fixture (two mutable i32 globals:
+    /// SP=0 + min_sp=1) must still resolve SP to global 0 and report the chain
+    /// bound 32+16 = 48 — the min-recording `global.get SP` reads (not followed
+    /// by `i32.sub`) do not perturb frame detection.
+    #[test]
+    fn feat021_measured_chain_bound() {
+        let res = analyze_fixture("fixture-16-stack-measured.wat");
+        assert_eq!(
+            res.stack_usage.sp_global,
+            Some(0),
+            "SP is global 0 despite min_sp"
+        );
+        assert_eq!(
+            res.stack_usage.max_stack_bytes,
+            StackBound::Bytes(48),
+            "entry(32) -> deep(16) = 48"
+        );
     }
 
     /// FEAT-021 slice-1 SOUNDNESS REGRESSION (clean-room finding): a constant

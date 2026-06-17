@@ -643,6 +643,50 @@ fn run_concrete_i32(wat_bytes: &[u8], func_name: &str, args: &[i32]) -> Result<i
     }
 }
 
+/// FEAT-021 slice-2b: run a SELF-MEASURING fixture as a core module and return
+/// its true peak shadow-stack usage in bytes. The fixture exports the
+/// `__stack_pointer` global as `sp` and a running-minimum global as `min_sp`
+/// (each function records `min(min_sp, sp)` after lowering SP). Peak =
+/// `sp_init - min_sp` after invoking `entry`. This is the concrete side of the
+/// live kill-criterion: the analyzer's reported bound must be `>=` this.
+fn run_concrete_peak_stack(wat_bytes: &[u8], entry: &str) -> Result<u64> {
+    let engine = core_engine()?;
+    let module = Module::new(&engine, wat_bytes)
+        .anyhow()
+        .context("compile self-measuring core module")?;
+    let mut store: Store<()> = Store::new(&engine, ());
+    let instance = wasmtime::Instance::new(&mut store, &module, &[])
+        .anyhow()
+        .context("instantiate self-measuring core module")?;
+
+    let read_i32_global =
+        |store: &mut Store<()>, inst: &wasmtime::Instance, name: &str| -> Result<i64> {
+            let g = inst
+                .get_global(&mut *store, name)
+                .ok_or_else(|| anyhow!("module does not export global `{name}`"))?;
+            match g.get(&mut *store) {
+                wasmtime::Val::I32(n) => Ok(n as i64),
+                other => bail!("global `{name}` not i32: {other:?}"),
+            }
+        };
+
+    let sp_init = read_i32_global(&mut store, &instance, "sp")?;
+    let func = instance
+        .get_func(&mut store, entry)
+        .ok_or_else(|| anyhow!("self-measuring module does not export `{entry}`"))?;
+    let mut results = [wasmtime::Val::I32(0)];
+    func.call(&mut store, &[], &mut results)
+        .anyhow()
+        .with_context(|| format!("call `{entry}` on self-measuring module"))?;
+    let min_sp = read_i32_global(&mut store, &instance, "min_sp")?;
+
+    let peak = sp_init - min_sp;
+    if peak < 0 {
+        bail!("measured peak negative (sp_init={sp_init}, min_sp={min_sp})");
+    }
+    Ok(peak as u64)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Shared structural assertions.
 // ─────────────────────────────────────────────────────────────────────
@@ -1129,6 +1173,42 @@ fn fixture_14_stack_dynamic_via_component() -> Result<()> {
         bound,
         StackBoundView::Unknown,
         "[fixture-14] dynamic frame → unknown"
+    );
+    Ok(())
+}
+
+/// fixture-16: the LIVE kill-criterion (FEAT-021 slice-2b). Cross-check the
+/// analyzer's reported `max-stack-bytes` (decoded from the composed component)
+/// against the TRUE peak measured by running the self-measuring fixture in
+/// core wasmtime. Soundness requires reported >= measured (here 48 >= 48).
+#[test]
+fn fixture_16_runtime_peak_within_bound() -> Result<()> {
+    let comp_path = component_path();
+    if component_missing_skip(&comp_path) {
+        return Ok(());
+    }
+    let wat_path = fixtures_dir().join("fixture-16-stack-measured.wat");
+    let module_bytes = wat::parse_file(&wat_path)
+        .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
+
+    // Abstract side: the bound the analyzer reports through the component.
+    let bound = analyze_stack_usage(&comp_path, &module_bytes)
+        .context("[fixture-16] decode stack-usage from composed component")?;
+
+    // Concrete side: the true peak from a real wasmtime run.
+    let peak = run_concrete_peak_stack(&module_bytes, "run")
+        .context("[fixture-16] measure runtime shadow-stack peak")?;
+
+    // The kill-criterion: a sound bound is never less than the real peak.
+    match bound {
+        StackBoundView::Bytes(b) => assert!(
+            b >= peak,
+            "[fixture-16] UNSOUND: reported max-stack-bytes {b} < measured peak {peak}"
+        ),
+        other => panic!("[fixture-16] expected a finite byte bound, got {other:?}"),
+    }
+    eprintln!(
+        "scry-host-tests: fixture-16 reported bound {bound:?} >= measured peak {peak} bytes (sound)"
     );
     Ok(())
 }
