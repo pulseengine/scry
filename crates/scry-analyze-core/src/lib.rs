@@ -2593,45 +2593,64 @@ fn sb_max(a: StackBound, b: StackBound) -> StackBound {
 }
 
 /// Detect one function's shadow-stack frame by recognising the standard
-/// prologue `global.get SP; i32.const F; i32.sub` (the result is stored back
-/// to SP). Returns `Bytes(F)` for the single recognised frame, `Bytes(0)` for
-/// a leaf that never touches SP, and `Unknown` for anything else: more than
-/// one decrement site (a dynamic `alloca` or stacked frames), a non-constant
-/// or negative subtrahend, or SP written without a recognised prologue. Per
-/// DD-016 guardrail 1 this is conservatively the function's MAX live frame —
-/// an unrecognised mid-body manipulation is `Unknown`, never undercounted.
+/// prologue `global.get SP; i32.const F; i32.sub`. Returns `Bytes(F)` only for
+/// a function whose SOLE stack-growing operation is that single constant
+/// decrement; `Bytes(0)` for a leaf that never touches SP; and `Unknown` for
+/// everything else — a non-constant / negative frame, MORE THAN ONE decrement
+/// (stacked frames), ANY DYNAMIC decrement (`alloca`, even alongside a
+/// recognised constant frame), or SP written with no recognised decrement.
+///
+/// Per DD-016 guardrail 1 this is conservatively the function's MAX live frame:
+/// every SP decrement (constant OR dynamic) is counted, and any unrecognised /
+/// extra one forces `Unknown` — so a frame is NEVER under-counted (the
+/// soundness premise the Rocq `sb_postfixpoint` / `sframe` upper-bound relies
+/// on). A `global.get SP` that is NOT followed by a subtract (e.g. the `add`
+/// epilogue, or a read for comparison) does not grow the stack and is ignored.
 fn detect_frame(ops: &[Operator<'_>], sp: SpGlobal) -> StackBound {
     let g = match sp {
         SpGlobal::NoShadowStack => return StackBound::Bytes(0),
         SpGlobal::Ambiguous => return StackBound::Unknown,
         SpGlobal::Index(g) => g,
     };
-    let mut sub_sites: u32 = 0;
+    let mut const_decr: u32 = 0;
+    let mut dyn_decr: u32 = 0;
     let mut frame: u64 = 0;
-    let mut sp_written = false;
     let mut bad = false;
+    let mut sp_written = false;
     for (i, op) in ops.iter().enumerate() {
         if let Operator::GlobalSet { global_index } = op
             && *global_index == g
         {
             sp_written = true;
         }
+        // A stack-GROWING op is `global.get SP` whose value flows into an
+        // `i32.sub` (SP := SP - x). Recognise the constant-frame shape and,
+        // crucially, ALSO any dynamic shape — an unrecognised subtrahend must
+        // not be silently skipped.
         if let Operator::GlobalGet { global_index } = op
             && *global_index == g
-            && let (Some(Operator::I32Const { value }), Some(Operator::I32Sub)) =
-                (ops.get(i + 1), ops.get(i + 2))
         {
-            sub_sites = sub_sites.saturating_add(1);
-            if *value >= 0 {
-                frame = *value as u64;
-            } else {
-                bad = true;
+            match (ops.get(i + 1), ops.get(i + 2)) {
+                // global.get SP; i32.const F; i32.sub  — the recognised frame.
+                (Some(Operator::I32Const { value }), Some(Operator::I32Sub)) => {
+                    const_decr = const_decr.saturating_add(1);
+                    if *value >= 0 {
+                        frame = *value as u64;
+                    } else {
+                        bad = true;
+                    }
+                }
+                // global.get SP; i32.sub  — SP minus a stack value (dynamic).
+                (Some(Operator::I32Sub), _) => dyn_decr = dyn_decr.saturating_add(1),
+                // global.get SP; <non-const>; i32.sub  — dynamic alloca.
+                (_, Some(Operator::I32Sub)) => dyn_decr = dyn_decr.saturating_add(1),
+                _ => {}
             }
         }
     }
-    if bad || sub_sites > 1 {
+    if bad || const_decr > 1 || dyn_decr > 0 {
         StackBound::Unknown
-    } else if sub_sites == 1 {
+    } else if const_decr == 1 {
         StackBound::Bytes(frame)
     } else if sp_written {
         StackBound::Unknown
@@ -4500,5 +4519,25 @@ mod tests {
         let res = analyze_fixture("fixture-01-constant-fold.wat");
         assert_eq!(res.stack_usage.sp_global, None);
         assert_eq!(res.stack_usage.max_stack_bytes, StackBound::Bytes(0));
+    }
+
+    /// FEAT-021 slice-1 SOUNDNESS REGRESSION (clean-room finding): a constant
+    /// prologue frame PLUS a later dynamic `alloca` decrement must be Unknown —
+    /// reporting the constant 16 would under-count the true `16 + param` peak.
+    #[test]
+    fn feat021_const_frame_plus_dynamic_is_unknown() {
+        let res = analyze_fixture("fixture-15-stack-alloca.wat");
+        let f = res
+            .stack_usage
+            .functions
+            .iter()
+            .find(|f| f.func_index == 0)
+            .map(|f| f.frame);
+        assert_eq!(
+            f,
+            Some(StackBound::Unknown),
+            "const frame + dynamic alloca must be Unknown, never the under-counted constant"
+        );
+        assert_eq!(res.stack_usage.max_stack_bytes, StackBound::Unknown);
     }
 }

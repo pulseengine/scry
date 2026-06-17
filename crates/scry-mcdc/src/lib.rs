@@ -72,6 +72,7 @@ const FIXTURE_STACK_CHAIN: &[u8] = include_bytes!("../fixtures/fixture-12-stack-
 const FIXTURE_STACK_RECURSION: &[u8] =
     include_bytes!("../fixtures/fixture-13-stack-recursion.wasm");
 const FIXTURE_STACK_DYNAMIC: &[u8] = include_bytes!("../fixtures/fixture-14-stack-dynamic.wasm");
+const FIXTURE_STACK_ALLOCA: &[u8] = include_bytes!("../fixtures/fixture-15-stack-alloca.wasm");
 
 // ── Config variants — each flips a different family of analyze decisions ─
 
@@ -167,6 +168,22 @@ fn observe(r: &AnalysisResult) -> i32 {
         for v in &s.result_summary {
             fold_value(v, &mut acc);
         }
+    }
+    // FEAT-021: fold the shadow-stack result so the optimizer keeps the
+    // stack-usage decisions live (they are measured in scry-analyze-core).
+    let fold_bound = |b: scry_analyze_core::StackBound, acc: &mut i64| {
+        *acc = match b {
+            scry_analyze_core::StackBound::Bytes(n) => acc.wrapping_add(n as i64),
+            scry_analyze_core::StackBound::Unbounded => acc.wrapping_add(-1),
+            scry_analyze_core::StackBound::Unknown => acc.wrapping_add(-2),
+        };
+    };
+    acc = acc.wrapping_add(r.stack_usage.sp_global.unwrap_or(0) as i64);
+    fold_bound(r.stack_usage.max_stack_bytes, &mut acc);
+    for f in &r.stack_usage.functions {
+        acc = acc.wrapping_add(f.func_index as i64);
+        fold_bound(f.frame, &mut acc);
+        fold_bound(f.max_stack, &mut acc);
     }
     acc as i32
 }
@@ -284,6 +301,7 @@ run_export!(run_var_bound_widen1, FIXTURE_VAR_BOUND, cfg_widen1());
 run_export!(run_stack_chain_default, FIXTURE_STACK_CHAIN, cfg_default());
 run_export!(run_stack_recursion_default, FIXTURE_STACK_RECURSION, cfg_default());
 run_export!(run_stack_dynamic_default, FIXTURE_STACK_DYNAMIC, cfg_default());
+run_export!(run_stack_alloca_default, FIXTURE_STACK_ALLOCA, cfg_default());
 
 #[cfg(test)]
 mod tests {
@@ -309,6 +327,7 @@ mod tests {
             (FIXTURE_STACK_CHAIN, cfg_default()),
             (FIXTURE_STACK_RECURSION, cfg_default()),
             (FIXTURE_STACK_DYNAMIC, cfg_default()),
+            (FIXTURE_STACK_ALLOCA, cfg_default()),
         ];
         for (bytes, cfg) in pairs {
             let _ = drive(bytes, cfg.clone());

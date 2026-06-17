@@ -82,6 +82,7 @@ than working around it here.
 | `fixture-12-stack-chain.wat`      | v1.10 (FEAT-021 slice-1) shadow-stack bound: 3-deep call chain, frames 16/32/8 → worst-case 56 bytes (sound) |
 | `fixture-13-stack-recursion.wat`  | v1.10 (FEAT-021 slice-1) shadow-stack: self-recursion (call-graph SCC) → UNBOUNDED, never a finite under-count |
 | `fixture-14-stack-dynamic.wat`    | v1.10 (FEAT-021 slice-1) shadow-stack: dynamic (variable) frame → UNKNOWN, never zero |
+| `fixture-15-stack-alloca.wat`     | v1.10 (FEAT-021 slice-1) shadow-stack soundness regression: const frame + dynamic alloca → UNKNOWN, never the under-counted constant (clean-room finding) |
 
 ## Adding fixtures
 
