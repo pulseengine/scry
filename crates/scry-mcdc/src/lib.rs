@@ -65,6 +65,13 @@ const FIXTURE_GUARD_BOUND: &[u8] = include_bytes!("../fixtures/fixture-10-guard-
 /// `octagon_transfer`/`classify_store`, `refine_octagon_rel`, `reduce_locals`,
 /// the lockstep octagon join/widen/narrow in loop_region) so they are covered.
 const FIXTURE_VAR_BOUND: &[u8] = include_bytes!("../fixtures/fixture-11-var-bound.wasm");
+/// FEAT-021 slice-1 shadow-stack fixtures — drive the stack-usage decisions
+/// (resolve_sp_global, detect_frame's prologue peephole, compute_stack_usage's
+/// sb_add/sb_max + recursion/Unknown branches) over the real analyzer core.
+const FIXTURE_STACK_CHAIN: &[u8] = include_bytes!("../fixtures/fixture-12-stack-chain.wasm");
+const FIXTURE_STACK_RECURSION: &[u8] =
+    include_bytes!("../fixtures/fixture-13-stack-recursion.wasm");
+const FIXTURE_STACK_DYNAMIC: &[u8] = include_bytes!("../fixtures/fixture-14-stack-dynamic.wasm");
 
 // ── Config variants — each flips a different family of analyze decisions ─
 
@@ -273,6 +280,10 @@ run_export!(run_guard_bound_widen1, FIXTURE_GUARD_BOUND, cfg_widen1());
 // FEAT-016 slice-2b-ii: exercise the octagon-product decisions.
 run_export!(run_var_bound_default, FIXTURE_VAR_BOUND, cfg_default());
 run_export!(run_var_bound_widen1, FIXTURE_VAR_BOUND, cfg_widen1());
+// FEAT-021 slice-1: exercise the shadow-stack-bound decisions.
+run_export!(run_stack_chain_default, FIXTURE_STACK_CHAIN, cfg_default());
+run_export!(run_stack_recursion_default, FIXTURE_STACK_RECURSION, cfg_default());
+run_export!(run_stack_dynamic_default, FIXTURE_STACK_DYNAMIC, cfg_default());
 
 #[cfg(test)]
 mod tests {
@@ -295,6 +306,9 @@ mod tests {
             (FIXTURE_LOOP_CONVERGE, cfg_default()),
             (FIXTURE_GUARD_BOUND, cfg_default()),
             (FIXTURE_VAR_BOUND, cfg_default()),
+            (FIXTURE_STACK_CHAIN, cfg_default()),
+            (FIXTURE_STACK_RECURSION, cfg_default()),
+            (FIXTURE_STACK_DYNAMIC, cfg_default()),
         ];
         for (bytes, cfg) in pairs {
             let _ = drive(bytes, cfg.clone());

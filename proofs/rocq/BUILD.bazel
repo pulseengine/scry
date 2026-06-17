@@ -165,3 +165,20 @@ rocq_proof_test(
     deps = [":octagonstrongclose"],
     tags = ["rocq", "verification", "feat-016"],
 )
+
+# FEAT-021 slice-1 (v1.10): mechanized soundness of the worst-case shadow-stack
+# bound — for any active call chain (each step a static callee, each frame
+# bounded by the detected size), the frame-sum is <= the analyzer's per-function
+# bound `sb`, so the reported max over all chains over-approximates the true
+# peak shadow-stack usage. No admits, no axioms (DD-016 guardrail 4).
+rocq_library(
+    name = "stackbound",
+    srcs = ["StackBound.v"],
+    tags = ["rocq", "verification", "feat-021"],
+)
+
+rocq_proof_test(
+    name = "stackbound_test",
+    deps = [":stackbound"],
+    tags = ["rocq", "verification", "feat-021"],
+)

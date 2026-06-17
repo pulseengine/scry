@@ -7,7 +7,57 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added — crates.io publishing
+## [1.10.0] — 2026-06-17
+
+Headline: **worst-case shadow-stack bound — the AbsInt StackAnalyzer analogue
+for Wasm (FEAT-021 slice-1).** scry now computes a sound over-approximation of
+a component's linear-memory shadow-stack usage, reusing the call graph + Tarjan
+SCCs it already builds. **This is also the first release to publish the
+`scry-sai-*` libraries to crates.io** (the publishing setup below activates on
+this `v*` tag).
+
+### Added — FEAT-021 slice-1 (worst-case shadow-stack bound, DD-016)
+
+- **`StackUsage` on the analysis result**: per-function frame sizes + a
+  `max_stack_bytes` bound. The shadow stack is the C-style stack Rust/LLVM keep
+  in linear memory via the `__stack_pointer` global; each function's frame is
+  the constant its prologue (`global.get $sp; i32.const F; i32.sub;
+  global.set $sp`) subtracts, and the worst case is the deepest weighted path
+  through the call graph — exactly AbsInt StackAnalyzer's value-analysis →
+  call-graph → longest-path shape.
+- **Reuses the FEAT-006/007 backbone**: a frame-size detector feeds
+  `compute_stack_usage`, which folds `frame(f) + max over callees` callees-first
+  over the existing Tarjan-SCC reverse-topological order. New global-section
+  parsing identifies the mutable-i32 `__stack_pointer`.
+- **Soundness guardrails (DD-016), never an under-count**: a recursion SCC →
+  `Unbounded` (no finite bound without a ranking function); a dynamic
+  `alloca` / unrecognised prologue / ambiguous SP global → `Unknown`; a module
+  with no mutable-i32 global → `Bytes(0)` (no shadow stack); host/WASI frames
+  out of scope (guest shadow-stack only). `Unbounded`/`Unknown` are never
+  treated as zero.
+- **Mechanized soundness** (`proofs/rocq/StackBound.v`, `stack_bound_sound`):
+  for any active call chain (each step a static callee, each frame ≤ the
+  detected size), the frame-sum is ≤ the analyzer's per-function bound — so the
+  reported max over all chains over-approximates the true peak under an
+  operational push/pop semantics. No admits/axioms; `rocq-proofs` CI job (and
+  locally with Coq 9.0.1).
+- **Fixtures + oracles**: `fixture-12-stack-chain` (frames 16/32/8 → 56 bytes),
+  `fixture-13-stack-recursion` (→ Unbounded), `fixture-14-stack-dynamic`
+  (→ Unknown), all in the live scry-mcdc corpus. MC/DC proved **180 → 204**
+  (mac local; CI/linux gate). `SCRY_VERSION` → 1.10.0.
+
+### Falsification statement
+
+What v1.10 claims: **for a non-recursive component using the standard
+`__stack_pointer` prologue, the reported `max_stack_bytes` ≥ the true peak
+shadow-stack usage on every concrete run.** Falsifier: a `.wat` whose true peak
+(measured by instrumenting the SP global in wasmtime) exceeds the reported
+bound. Does **not** claim: a bound for recursion (reported Unbounded), dynamic
+frames (Unknown), or host/WASI stack (out of scope) — slice-2 surfaces the
+result in WIT + a host-test oracle; slice-3 adds `call_indirect` target-set
+precision. FEAT-021 stays `proposed` until those land.
+
+### Added — crates.io publishing (activates on this tag)
 
 - **The reusable library crates are now publishable to crates.io**, mirroring
   `pulseengine/synth`: a `Publish to crates.io` workflow

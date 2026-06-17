@@ -79,6 +79,9 @@ than working around it here.
 | `fixture-09-loop-converge.wat`    | v1.5 (FEAT-016 slice-2a) real loop fixpoint: loop-written `m` converges to bounded `[0,7]` (vs slice-1 havoc ⊤) |
 | `fixture-10-guard-bound.wat`      | v1.6 (FEAT-016 slice-2b-i) guard refinement: guard-bounded counter `i` converges to bounded `[0,10]` (vs slice-2a widen-to-⊤) |
 | `fixture-11-var-bound.wat`        | v1.8 (FEAT-016 slice-2b-ii) octagon product: counter bounded by a VARIABLE relation `i<n` (n in a local) converges to `[0,10]` (vs interval/const-guard widen-to-⊤) |
+| `fixture-12-stack-chain.wat`      | v1.10 (FEAT-021 slice-1) shadow-stack bound: 3-deep call chain, frames 16/32/8 → worst-case 56 bytes (sound) |
+| `fixture-13-stack-recursion.wat`  | v1.10 (FEAT-021 slice-1) shadow-stack: self-recursion (call-graph SCC) → UNBOUNDED, never a finite under-count |
+| `fixture-14-stack-dynamic.wat`    | v1.10 (FEAT-021 slice-1) shadow-stack: dynamic (variable) frame → UNKNOWN, never zero |
 
 ## Adding fixtures
 
