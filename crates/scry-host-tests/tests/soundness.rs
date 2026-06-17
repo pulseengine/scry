@@ -1105,7 +1105,11 @@ fn fixture_13_stack_recursion_via_component() -> Result<()> {
         .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
     let bound = analyze_stack_usage(&comp_path, &module_bytes)
         .context("[fixture-13] decode stack-usage")?;
-    assert_eq!(bound, StackBoundView::Unbounded, "[fixture-13] recursion → unbounded");
+    assert_eq!(
+        bound,
+        StackBoundView::Unbounded,
+        "[fixture-13] recursion → unbounded"
+    );
     Ok(())
 }
 
@@ -1121,6 +1125,10 @@ fn fixture_14_stack_dynamic_via_component() -> Result<()> {
         .with_context(|| format!("assemble fixture {}", wat_path.display()))?;
     let bound = analyze_stack_usage(&comp_path, &module_bytes)
         .context("[fixture-14] decode stack-usage")?;
-    assert_eq!(bound, StackBoundView::Unknown, "[fixture-14] dynamic frame → unknown");
+    assert_eq!(
+        bound,
+        StackBoundView::Unknown,
+        "[fixture-14] dynamic frame → unknown"
+    );
     Ok(())
 }

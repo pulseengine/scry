@@ -94,11 +94,7 @@ fn function_stack_to_wit(f: ac::FunctionStack) -> wit::FunctionStack {
 fn stack_usage_to_wit(s: ac::StackUsage) -> wit::StackUsage {
     wit::StackUsage {
         sp_global: s.sp_global,
-        functions: s
-            .functions
-            .into_iter()
-            .map(function_stack_to_wit)
-            .collect(),
+        functions: s.functions.into_iter().map(function_stack_to_wit).collect(),
         max_stack_bytes: stack_bound_to_wit(s.max_stack_bytes),
     }
 }
