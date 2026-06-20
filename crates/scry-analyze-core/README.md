@@ -44,6 +44,13 @@ for e in &r.call_graph {
 let has_cycle = r.function_summaries.iter().any(|s| s.recursive); // honest-fail gate
 let reachable = &r.reachable_from_exports; // sound superset; prune anything absent
 let stack = r.stack_usage.max_stack_bytes;  // Bytes(n) | Unbounded | Unknown
+
+for p in &r.invariants.points {
+    // Per (func, pc): p.locals (per-local invariants) AND p.operand_stack —
+    // the abstract value-stack in stack order (bottom → top). A backend maps
+    // these onto SSA temps; a singleton interval is a known constant.
+    let _stack_top = p.operand_stack.last();
+}
 # Ok::<(), scry_analyze_core::AnalyzeError>(())
 ```
 

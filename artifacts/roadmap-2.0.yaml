@@ -633,6 +633,42 @@ artifacts:
       - type: traces-to
         target: FEAT-022
 
+  - id: REQ-012
+    type: requirement
+    title: "Downstream consumers get the sound abstract operand-stack at each program point"
+    status: proposed
+    description: >
+      The analysis-result shall expose, per emitted program point, the abstract
+      OPERAND-STACK (the transient value-stack) in stack order (bottom → top),
+      not only the locals. A code-generation / backend consumer (synth, collab
+      issue #54 item 1) maps these transient temps onto SSA values / selected
+      instructions and wants the same constant / range facts scry already
+      proves for locals — e.g. a known singleton on the stack top is the
+      operand-stack analogue of a constant local.
+
+      Soundness contract (what enters the consumer's TCB): each listed stack
+      slot OVER-APPROXIMATES the concrete value at that slot under the interval
+      domain (identical to the per-local contract). Listing FEWER slots than
+      the true height is sound (a vacuous claim about the omitted top slots);
+      listing a slot whose abstract value does NOT contain the concrete value
+      is the only unsoundness, and is forbidden. At a point reached only via a
+      not-precisely-modelled region (write-set havoc), scry emits an EMPTY
+      operand-stack rather than a stale one — honest silence over a false claim.
+
+      Library-only surface: synth consumes `scry-sai-core` as a crate and reads
+      `ProgramPoint.operand_stack: Vec<AbstractValue>` directly (the WIT
+      `program-point` mirror is unchanged; a later slice may surface it for
+      non-Rust consumers).
+    tags: [interop, invariants, operand-stack, soundness, v1.x]
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: FEAT-023
+
   # ──────────────────────────────────────────────────────────────────────
   # Feature ladder v1.1 → v2.0.  status: proposed (provisional until built).
   #
@@ -1164,6 +1200,46 @@ artifacts:
         target: FEAT-007
       - type: traces-to
         target: FEAT-021
+      - type: traces-to
+        target: G-005
+
+  - id: FEAT-023
+    type: feature
+    title: "v1.x — Per-program-point abstract operand-stack output (synth backend, collab #54)"
+    status: proposed
+    description: >
+      Surface the abstract OPERAND-STACK (transient value-stack) on every
+      emitted `ProgramPoint`, alongside the existing per-local invariants. A
+      backend / code-generation consumer (synth, collab issue #54 item 1) maps
+      these transient temps onto SSA values / selected instructions and wants
+      the same constant / range facts scry already proves for locals. scry's
+      `Interp` already models the operand stack soundly over the interval domain
+      (push on const/load/arith, pop on consume, save/restore at block/loop
+      boundaries); FEAT-023 just EXPOSES that state — no new analysis.
+
+      CONSUMPTION PATH (per collab #51/#54): library-only. synth reads
+      `ProgramPoint.operand_stack: Vec<AbstractValue>` (bottom → top) off the
+      `scry-sai-core` `AnalysisResult` directly. The WIT `program-point` mirror
+      is unchanged this slice (a later slice may surface it for non-Rust
+      consumers). Additive field on a 1.x struct — SemVer-compatible per the
+      field-stability commitment to synth.
+
+      Soundness (REQ-012): each listed slot over-approximates the concrete value
+      at that slot under the interval domain. At a point reached only via
+      write-set havoc (a not-precisely-modelled region), scry emits an EMPTY
+      operand-stack rather than a stale one — honest silence over a false claim.
+    tags: [capability, interop, invariants, operand-stack, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a Core Wasm module, When scry analyzes it, Then each emitted program-point carries an operand-stack list of abstract values in stack order (bottom → top)."
+        - "Given a function pushing a known constant (i32.const 42), When scry analyzes it, Then a program point's operand-stack top is the singleton interval [42,42] — the operand-stack analogue of a constant local — and stack depth/order are preserved (a two-const sequence yields a depth-2 stack [42,7])."
+        - "Given a program point reached only via a not-precisely-modelled region (write-set havoc), When scry emits it, Then its operand-stack is EMPTY (a vacuous, sound claim) rather than a stale, potentially-unsound snapshot."
+    links:
+      - type: satisfies
+        target: REQ-012
+      - type: traces-to
+        target: FEAT-016
       - type: traces-to
         target: G-005
 

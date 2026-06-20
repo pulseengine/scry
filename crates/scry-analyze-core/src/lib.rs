@@ -111,12 +111,19 @@ pub struct LocalInvariant {
     pub value: AbstractValue,
 }
 
-/// Mirror of WIT `program-point`. All locals at one pc in one function.
+/// Mirror of WIT `program-point`. The abstract state at one pc in one function.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgramPoint {
     pub func_index: u32,
     pub pc: u32,
     pub locals: Vec<LocalInvariant>,
+    /// FEAT-023: the abstract operand-stack at this pc, in stack order
+    /// (bottom → top). The transient value-stack state a backend maps onto
+    /// SSA temps / selected instructions. Core-only for now (the WIT
+    /// `program-point` mirror still carries only `locals`; a later slice
+    /// surfaces it for non-Rust consumers). Sound over the same interval
+    /// domain as `locals`.
+    pub operand_stack: Vec<AbstractValue>,
 }
 
 /// Mirror of WIT `invariant-bundle`. The full per-module invariant bundle.
@@ -378,7 +385,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "1.12.0";
+const SCRY_VERSION: &str = "1.13.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -698,6 +705,13 @@ fn snapshot_locals(locals: &[AbstractValue]) -> Vec<LocalInvariant> {
             value: clone_value(v),
         })
         .collect()
+}
+
+/// FEAT-023: snapshot the abstract operand-stack (bottom → top) for a
+/// `ProgramPoint`. The values are the same sound abstract values as the
+/// locals; no octagon reduction (the octagon is over locals, not stack slots).
+fn snapshot_stack(stack: &[AbstractValue]) -> Vec<AbstractValue> {
+    stack.iter().map(clone_value).collect()
 }
 
 /// `AbstractValue` derives no Copy/Clone in the generated bindings (it
@@ -1949,6 +1963,7 @@ impl Interp<'_, '_> {
                         func_index: self.func_index,
                         pc: pc as u32,
                         locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
+                        operand_stack: snapshot_stack(&ctx.operand_stack),
                     });
                 }
                 pc = next;
@@ -1968,6 +1983,7 @@ impl Interp<'_, '_> {
                         func_index: self.func_index,
                         pc: pc as u32,
                         locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
+                        operand_stack: snapshot_stack(&ctx.operand_stack),
                     });
                 }
                 pc = next;
@@ -2025,6 +2041,7 @@ impl Interp<'_, '_> {
                     func_index: self.func_index,
                     pc: pc as u32,
                     locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
+                    operand_stack: snapshot_stack(&ctx.operand_stack),
                 });
             }
             if stop {
@@ -2397,6 +2414,14 @@ impl Interp<'_, '_> {
                 func_index: self.func_index,
                 pc: end as u32,
                 locals: snapshot_locals(&ctx.locals),
+                // FEAT-023: havoc does NOT model the region's operand-stack
+                // effect (a non-empty block type leaves result values our model
+                // never simulated). `ctx.operand_stack` is therefore stale here,
+                // so we emit an EMPTY stack — a vacuous, trivially-sound claim
+                // ("no operand-stack info at this pc") rather than a
+                // precise-looking-but-unsound one. Locals stay meaningful: they
+                // were soundly widened to ⊤ above.
+                operand_stack: Vec::new(),
             });
         }
     }
@@ -4311,6 +4336,7 @@ mod tests {
                     local_index: 0,
                     value: av.clone(),
                 }],
+                operand_stack: alloc::vec![av.clone()],
             }],
         };
         let res = AnalysisResult {
@@ -4674,6 +4700,61 @@ mod tests {
         assert_eq!(
             sorted, res.reachable_from_exports,
             "set is sorted + deduped"
+        );
+    }
+
+    /// FEAT-023: the abstract operand-stack is surfaced on each `ProgramPoint`
+    /// and is sound over the same interval domain as the locals. In
+    /// fixture-18, `i32.const 42; i32.const 7; i32.add` produces program points
+    /// whose stack top is the singleton 42 (after the first const) and 49
+    /// (after the add) — so a consumer can read a known constant off the stack
+    /// top, the operand-stack analogue of a constant local.
+    #[test]
+    fn feat023_operand_stack_constants() {
+        let res = analyze_fixture("fixture-18-operand-stack.wat");
+        let points = &res.invariants.points;
+        assert!(!points.is_empty(), "fixture-18 must emit program points");
+
+        // The singleton constant on top of the stack after `i32.const 42`.
+        let saw_42 = points.iter().any(|p| {
+            matches!(
+                p.operand_stack.last(),
+                Some(AbstractValue::I32Interval(iv)) if iv.lo == 42 && iv.hi == 42
+            )
+        });
+        assert!(
+            saw_42,
+            "a program point's operand-stack top must be the constant 42"
+        );
+
+        // The add result 42 + 7 = 49, again a singleton, on the stack top.
+        let saw_49 = points.iter().any(|p| {
+            matches!(
+                p.operand_stack.last(),
+                Some(AbstractValue::I32Interval(iv)) if iv.lo == 49 && iv.hi == 49
+            )
+        });
+        assert!(
+            saw_49,
+            "the i32.add result 49 must appear as a singleton on the operand-stack top"
+        );
+
+        // Soundness/shape: at the point holding [42,7] the stack has depth 2
+        // (bottom → top), confirming bottom-to-top ordering is preserved.
+        let saw_depth2 = points.iter().any(|p| {
+            p.operand_stack.len() == 2
+                && matches!(
+                    p.operand_stack.first(),
+                    Some(AbstractValue::I32Interval(iv)) if iv.lo == 42 && iv.hi == 42
+                )
+                && matches!(
+                    p.operand_stack.last(),
+                    Some(AbstractValue::I32Interval(iv)) if iv.lo == 7 && iv.hi == 7
+                )
+        });
+        assert!(
+            saw_depth2,
+            "after the second const the stack is [42, 7] bottom → top"
         );
     }
 
