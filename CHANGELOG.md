@@ -7,6 +7,56 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-06-20
+
+Headline: **scry-viz — a static-HTML visualization of scry's own analysis
+output (FEAT-024) — plus a self-analysis dogfood (FEAT-025).** scry already
+ships a static-site evidence artifact for MC/DC truth tables (witness-viz);
+this release adds the analyzer's own analogue: turn an `AnalysisResult` into a
+single self-contained HTML page a human can audit, and run it on scry's *own*
+compiled module in CI.
+
+### Added — FEAT-024 (REQ-013)
+
+- New crate **`scry-sai-viz`** (library `scry_viz` + binary `scry-viz`), a
+  plain `std` host tool that consumes `scry-sai-core` and renders an
+  `AnalysisResult` as a self-contained HTML page — no server, no JavaScript, no
+  external assets. Renders: a summary (module SHA-256, schema, worst-case
+  shadow-stack bound, counts); a functions table (reachable-from-exports? ·
+  recursive? · params · frame · max stack); the call graph (caller · pc ·
+  direct/indirect · resolved targets · soundness tag); diagnostics; and the
+  per-program-point invariants — `locals` AND the FEAT-023 **operand stack**
+  (bottom → top). A singleton interval renders as a bare constant, the full
+  domain as `⊤`, an empty operand stack as an explicit `(empty)`.
+- `scry-viz <module.wasm|module.wat> [-o out.html] [--title NAME]` CLI.
+- Published to crates.io (`cargo install scry-sai-viz`).
+
+### Added — FEAT-025 (dogfood)
+
+- CI step (in the existing MC/DC job) runs `scry-viz` on scry's own compiled
+  module (`scry_mcdc.wasm`) and uploads the resulting **`scry-self-analysis`**
+  HTML artifact. "scry visualizing scry." This is also a robustness oracle: a
+  panic or error analyzing a real, large, compiler-emitted module turns the
+  build red, where the tiny hand-written fixtures cannot reach. (Verified
+  locally: 548 functions, 423 call edges, 4326 program points, no panic.)
+
+### Soundness
+
+- `scry-viz` is a **faithful rendering**: it re-derives nothing and asserts
+  nothing beyond what the `AnalysisResult` already states. Each value shown is a
+  verbatim projection of an analyzer field. An empty operand-stack renders as
+  `(empty)` — the analyzer's honest "no info here" — never a claim that the
+  concrete stack is empty. Attacker-influenced strings (diagnostic messages,
+  schema URL, module name) are HTML-escaped.
+
+### Falsification statement
+
+If `scry-viz` displays a value that is NOT a verbatim projection of an
+`AnalysisResult` field — i.e. it re-derives, rounds, or over-states any
+analyzer output — this release's faithful-rendering claim is false. The native
+tests pin the constant-on-stack, empty-stack, and HTML-escaping cases; the
+dogfood CI step is the live no-panic oracle on a real module.
+
 ## [1.13.0] — 2026-06-20
 
 Headline: **per-program-point abstract operand-stack output (FEAT-023),

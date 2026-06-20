@@ -42,8 +42,11 @@ const CRATES_TO_PUBLISH: &[(&str, &str)] = &[
     ("scry-taint", "scry-sai-taint"),
     ("scry-octagon", "scry-sai-octagon"),
     ("scry-provenance", "scry-sai-provenance"),
-    // Depends on all four leaves — publish last.
+    // Depends on all four leaves — publish before its own consumers.
     ("scry-analyze-core", "scry-sai-core"),
+    // Depends on scry-sai-core — publish last. The `scry-viz` binary/library
+    // (FEAT-024) consumes the analyzer library to render an AnalysisResult.
+    ("scry-viz", "scry-sai-viz"),
 ];
 
 struct Krate {

@@ -29,6 +29,7 @@ members = [
     "crates/scry-interval",
     "crates/scry-analyze-core",
     "crates/scry-host-tests",
+    "crates/scry-viz",
 ]
 # `wasm-lattice` and `scry-analyzer` are the Wasm-component crates
 # (`crate-type = ["cdylib"]`, `#![no_std]`; `scry-analyzer` additionally
@@ -48,6 +49,7 @@ default-members = [
     "crates/scry-interval",
     "crates/scry-analyze-core",
     "crates/scry-host-tests",
+    "crates/scry-viz",
 ]
 
 [workspace.package]
@@ -55,7 +57,7 @@ default-members = [
 # on crates.io matches the release artifacts. The crates.io publish workflow
 # asserts the pushed `v*` tag equals this version, so a release bump must move
 # both in lockstep (and the internal path-dep `version = "..."` fields below).
-version = "1.13.0"
+version = "1.14.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pulseengine/scry"

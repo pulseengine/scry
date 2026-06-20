@@ -301,3 +301,22 @@ jobs:
           path: ${{ github.workspace }}/mcdc-viz-site
           if-no-files-found: error
           retention-days: 14
+      # FEAT-025 dogfood: run scry on its OWN compiled module (the analyzer
+      # core, already built above as scry_mcdc.wasm) and render the analysis
+      # with scry-viz (FEAT-024). "scry visualizing scry." This is also a
+      # robustness oracle — a panic / error analyzing a real, large,
+      # compiler-emitted module turns the build red, where the tiny fixtures
+      # cannot reach.
+      - name: Dogfood — scry-viz on scry's own module (FEAT-025)
+        run: |
+          cargo run --release -p scry-sai-viz -- \
+            crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm \
+            -o "${{ github.workspace }}/scry-self-analysis.html" \
+            --title "scry analyzing scry (scry_mcdc.wasm)"
+      - name: Upload scry self-analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: scry-self-analysis
+          path: ${{ github.workspace }}/scry-self-analysis.html
+          if-no-files-found: error
+          retention-days: 14
