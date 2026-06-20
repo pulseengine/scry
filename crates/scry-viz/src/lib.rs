@@ -104,6 +104,16 @@ fn render_functions(s: &mut String, r: &AnalysisResult) {
         "<table><thead><tr><th>func</th><th>reachable</th><th>recursive</th>\
          <th>params</th><th>frame</th><th>max stack</th></tr></thead><tbody>",
     );
+    // The `reachable` column reads `reachable_from_exports` via binary_search,
+    // which is only correct if that vector is sorted ascending — which scry's
+    // `compute_reachable_from_exports` guarantees (sort_unstable + dedup, per
+    // its doc + analyzer test). Defend our own correctness against an upstream
+    // regression: a future change that returned it unsorted would silently
+    // mis-render reachability, so we self-check in debug/test builds.
+    debug_assert!(
+        r.reachable_from_exports.is_sorted(),
+        "reachable_from_exports must be sorted ascending for binary_search"
+    );
     // Union of every function index we know something about, ascending.
     let mut indices: Vec<u32> = r
         .function_summaries
