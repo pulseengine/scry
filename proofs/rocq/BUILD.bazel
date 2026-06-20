@@ -182,3 +182,20 @@ rocq_proof_test(
     deps = [":stackbound"],
     tags = ["rocq", "verification", "feat-021"],
 )
+
+# FEAT-022 slice-1 (REQ-011/SCRY-001): mechanized soundness of
+# reachable-from-exports — if the concrete call-edge relation is a subset of
+# the over-approximated one scry searches, every concretely-reachable function
+# is in the reported reachable set (a superset), so a consumer pruning the
+# complement never drops a reachable function. No admits, no axioms.
+rocq_library(
+    name = "reachable",
+    srcs = ["Reachable.v"],
+    tags = ["rocq", "verification", "feat-022"],
+)
+
+rocq_proof_test(
+    name = "reachable_test",
+    deps = [":reachable"],
+    tags = ["rocq", "verification", "feat-022"],
+)

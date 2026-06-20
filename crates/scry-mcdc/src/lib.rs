@@ -76,6 +76,9 @@ const FIXTURE_STACK_ALLOCA: &[u8] = include_bytes!("../fixtures/fixture-15-stack
 /// Self-measuring chain (two mutable i32 globals) — drives resolve_sp_global
 /// with multiple SP candidates + the min-recording global.get reads.
 const FIXTURE_STACK_MEASURED: &[u8] = include_bytes!("../fixtures/fixture-16-stack-measured.wasm");
+/// Exports + a dead function — drives the FEAT-022 export/start parsing and
+/// reachable-from-exports BFS decisions.
+const FIXTURE_REACHABILITY: &[u8] = include_bytes!("../fixtures/fixture-17-reachability.wasm");
 
 // ── Config variants — each flips a different family of analyze decisions ─
 
@@ -306,6 +309,7 @@ run_export!(run_stack_recursion_default, FIXTURE_STACK_RECURSION, cfg_default())
 run_export!(run_stack_dynamic_default, FIXTURE_STACK_DYNAMIC, cfg_default());
 run_export!(run_stack_alloca_default, FIXTURE_STACK_ALLOCA, cfg_default());
 run_export!(run_stack_measured_default, FIXTURE_STACK_MEASURED, cfg_default());
+run_export!(run_reachability_default, FIXTURE_REACHABILITY, cfg_default());
 
 #[cfg(test)]
 mod tests {
@@ -333,6 +337,7 @@ mod tests {
             (FIXTURE_STACK_DYNAMIC, cfg_default()),
             (FIXTURE_STACK_ALLOCA, cfg_default()),
             (FIXTURE_STACK_MEASURED, cfg_default()),
+            (FIXTURE_REACHABILITY, cfg_default()),
         ];
         for (bytes, cfg) in pairs {
             let _ = drive(bytes, cfg.clone());

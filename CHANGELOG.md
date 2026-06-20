@@ -7,6 +7,40 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-06-20
+
+Headline: **reachable-from-exports output for downstream consumers (FEAT-022
+slice-1), driven by the synth collaboration (#51, VCR-MEM-001).** synth needs a
+sound call graph + reachability + recursion detection to prove a firmware
+shadow-stack / linear-memory footprint fits a RAM budget; the call graph
+(FEAT-006) and recursion (FEAT-007/FEAT-021) already shipped, and this adds the
+reachability piece — consumed as the crates.io **library** `scry-sai-core`, not
+the wasm component.
+
+### Added — FEAT-022 slice-1 (REQ-011 / SCRY-001)
+
+- **`AnalysisResult.reachable_from_exports: Vec<u32>`**: the sorted absolute
+  indices of functions reachable (via direct + over-approximated `call_indirect`
+  edges) from an exported or start function — a sound **superset** of
+  concretely-reachable functions, so a consumer may soundly prune anything
+  absent. New export/start-section parsing supplies the BFS roots; the search
+  reuses the FEAT-006 static call graph.
+- **Soundness contract (REQ-011 / SCRY-001)** formalised for downstream
+  consumers: `call-edge.resolved-targets` is a sound superset for `call_indirect`,
+  and `function-summary.recursive` is true for any reachable cycle. Mechanized
+  superset-soundness in `proofs/rocq/Reachable.v` (`reach_superset`: concrete
+  reach ⊆ abstract reach), admit-free.
+- **Integration:** synth (a Rust tool) consumes scry as the `scry-sai-core`
+  crate — `analyze(module_bytes, config)` returns plain-Rust `call_graph` /
+  `function_summaries` / `stack_usage` / `reachable_from_exports`; no wasm
+  component, wasmtime, or WIT marshalling. `fixture-17-reachability` + native
+  oracle `feat022_reachable_from_exports` (callee included, dead function
+  excluded). `SCRY_VERSION` → 1.12.0.
+
+### Changed
+
+- Every crate now has a README (renders on crates.io at this publish).
+
 ## [1.11.0] — 2026-06-17
 
 Headline: **the shadow-stack bound is now surfaced in the component's WIT result
