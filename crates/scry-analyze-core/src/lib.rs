@@ -1,5 +1,31 @@
 //! scry-analyze-core — pure, bindgen-free analyzer core (FEAT-014 / DD-012).
 //!
+//! ## Normal API
+//!
+//! Call [`analyze`] with a Core Wasm module's bytes and an [`AnalysisConfig`];
+//! it returns an [`AnalysisResult`] of plain Rust types — no WIT, no component,
+//! no `wasmtime`. This is the library a Rust tool (e.g. synth's footprint
+//! analysis) consumes directly from crates.io:
+//!
+//! ```ignore
+//! use scry_analyze_core::{analyze, AnalysisConfig};
+//!
+//! let r = analyze(wasm_bytes, AnalysisConfig::default())?;
+//!
+//! for e in &r.call_graph {
+//!     // e.indirect, e.resolved_targets: Vec<u32> (over-approximated for
+//!     // call_indirect), e.soundness — fold edges into a longest-path, etc.
+//! }
+//! let has_cycle = r.function_summaries.iter().any(|s| s.recursive);
+//! let reachable = &r.reachable_from_exports; // sound superset; prune the rest
+//! let stack = r.stack_usage.max_stack_bytes;  // Bytes(n) | Unbounded | Unknown
+//! ```
+//!
+//! Every result type ([`AnalysisResult`], [`CallEdge`], [`FunctionSummary`],
+//! [`StackUsage`]/[`StackBound`], …) is `pub` and `#[derive(Clone, Debug, Eq)]`.
+//! The crate is `#![no_std]` (over `alloc`), which is a fine dependency for a
+//! `std` tool.
+//!
 //! ## Why this crate exists
 //!
 //! Through v1.1 the analyzer's decision logic (wasmparser parse, the
@@ -143,7 +169,11 @@ pub struct TaintPolicy {
 }
 
 /// Mirror of WIT `analysis-config`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// [`AnalysisConfig::default()`] is the normal entry-point config for a library
+/// consumer: default widening, no diagnostics, no taint policy — i.e. just the
+/// intervals / call-graph / stack / reachability results.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct AnalysisConfig {
     /// Max fixpoint iterations per loop header before widening. Default 3.
     pub widening_threshold: Option<u32>,
