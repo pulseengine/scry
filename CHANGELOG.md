@@ -7,6 +7,45 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-06-20
+
+Headline: **per-program-point abstract operand-stack output (FEAT-023),
+driven by the synth collaboration (#54 item 1).** A backend / code-generation
+consumer maps Wasm's transient value-stack onto SSA temps / selected
+instructions and wants the same constant / range facts scry already proves for
+locals. scry's `Interp` already models the operand stack soundly over the
+interval domain; this release EXPOSES that state on each program point — no new
+analysis. Consumed as the crates.io **library** `scry-sai-core`.
+
+### Added — FEAT-023 (REQ-012)
+
+- `ProgramPoint.operand_stack: Vec<AbstractValue>` — the abstract operand-stack
+  at each emitted pc, in stack order (bottom → top). Additive field on a 1.x
+  struct (SemVer-compatible, per the field-stability commitment to synth). The
+  WIT `program-point` mirror is unchanged this slice (library-only surface).
+- fixture-18-operand-stack + native `feat023_operand_stack_constants`: a
+  `i32.const 42; i32.const 7; i32.add` sequence yields program points whose
+  stack top is the singleton 42 (after the first const) and 49 (after the add),
+  with a depth-2 `[42, 7]` stack in between — proving order/depth are preserved.
+
+### Soundness
+
+- Each listed stack slot over-approximates the concrete value at that slot under
+  the interval domain (identical to the per-local contract). At a program point
+  reached only via write-set havoc (a not-precisely-modelled region), scry emits
+  an **empty** operand-stack rather than a stale one — honest silence over a
+  false claim. Listing fewer slots than the true height is sound (a vacuous
+  claim about the omitted top slots); the only forbidden case is a slot whose
+  abstract value does not contain the concrete value.
+
+### Falsification statement
+
+If scry reports an `operand_stack` slot whose interval does NOT contain the
+concrete value that Wasm's value-stack holds at that pc in some execution, this
+release's soundness claim is false. The native `feat023_operand_stack_constants`
+test pins the singleton-constant case; the empty-stack-at-havoc rule is the
+conservative guard for the unmodelled case.
+
 ## [1.12.0] — 2026-06-20
 
 Headline: **reachable-from-exports output for downstream consumers (FEAT-022
