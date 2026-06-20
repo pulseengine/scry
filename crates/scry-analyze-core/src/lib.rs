@@ -1,5 +1,31 @@
 //! scry-analyze-core — pure, bindgen-free analyzer core (FEAT-014 / DD-012).
 //!
+//! ## Normal API
+//!
+//! Call [`analyze`] with a Core Wasm module's bytes and an [`AnalysisConfig`];
+//! it returns an [`AnalysisResult`] of plain Rust types — no WIT, no component,
+//! no `wasmtime`. This is the library a Rust tool (e.g. synth's footprint
+//! analysis) consumes directly from crates.io:
+//!
+//! ```ignore
+//! use scry_analyze_core::{analyze, AnalysisConfig};
+//!
+//! let r = analyze(wasm_bytes, AnalysisConfig::default())?;
+//!
+//! for e in &r.call_graph {
+//!     // e.indirect, e.resolved_targets: Vec<u32> (over-approximated for
+//!     // call_indirect), e.soundness — fold edges into a longest-path, etc.
+//! }
+//! let has_cycle = r.function_summaries.iter().any(|s| s.recursive);
+//! let reachable = &r.reachable_from_exports; // sound superset; prune the rest
+//! let stack = r.stack_usage.max_stack_bytes;  // Bytes(n) | Unbounded | Unknown
+//! ```
+//!
+//! Every result type ([`AnalysisResult`], [`CallEdge`], [`FunctionSummary`],
+//! [`StackUsage`]/[`StackBound`], …) is `pub` and `#[derive(Clone, Debug, Eq)]`.
+//! The crate is `#![no_std]` (over `alloc`), which is a fine dependency for a
+//! `std` tool.
+//!
 //! ## Why this crate exists
 //!
 //! Through v1.1 the analyzer's decision logic (wasmparser parse, the
@@ -143,7 +169,11 @@ pub struct TaintPolicy {
 }
 
 /// Mirror of WIT `analysis-config`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// [`AnalysisConfig::default()`] is the normal entry-point config for a library
+/// consumer: default widening, no diagnostics, no taint policy — i.e. just the
+/// intervals / call-graph / stack / reachability results.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct AnalysisConfig {
     /// Max fixpoint iterations per loop header before widening. Default 3.
     pub widening_threshold: Option<u32>,
@@ -270,6 +300,12 @@ pub struct AnalysisResult {
     /// FEAT-021 slice-1: worst-case shadow-stack bound. Core-only (not yet in
     /// the WIT mirror — slice-2 surfaces it); the component wrapper ignores it.
     pub stack_usage: StackUsage,
+    /// FEAT-022 slice-1: absolute indices of functions reachable (via direct +
+    /// over-approximated `call_indirect` edges) from an exported or start
+    /// function — a sound SUPERSET of concretely-reachable functions, so a
+    /// downstream consumer can soundly prune what is absent (REQ-011/SCRY-001).
+    /// Sorted ascending. Core-only for now (slice-1b surfaces it in WIT).
+    pub reachable_from_exports: Vec<u32>,
 }
 
 /// Mirror of WIT `analyze-error`. Reasons an analyze call fails without a
@@ -342,7 +378,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "1.11.0";
+const SCRY_VERSION: &str = "1.12.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -763,6 +799,13 @@ pub fn analyze(
     // `__stack_pointer` the shadow-stack analysis weighs frames against.
     let mut mutable_i32_globals: Vec<u32> = Vec::new();
 
+    // ── FEAT-022 reachability roots ──────────────────────────────
+    // Exported functions + the optional start function are the entry
+    // points the `reachable-from-exports` set (FEAT-022) is computed
+    // from (absolute function indices).
+    let mut exported_funcs: Vec<u32> = Vec::new();
+    let mut start_func: Option<u32> = None;
+
     // ── FEAT-006 function-table state ────────────────────────────
     // The declared length of table index 0 (the funcref table a
     // `call_indirect` dispatches through). `table0_len` is the
@@ -835,6 +878,21 @@ pub fn analyze(
                     })?;
                     function_type_indices.push(ty);
                 }
+            }
+            Payload::ExportSection(reader) => {
+                // FEAT-022: exported FUNCTIONS are reachability roots.
+                for entry in reader {
+                    let ex = entry.map_err(|e| {
+                        AnalyzeError::InvalidModule(format!("export section: {e}"))
+                    })?;
+                    if matches!(ex.kind, wasmparser::ExternalKind::Func) {
+                        exported_funcs.push(ex.index);
+                    }
+                }
+            }
+            Payload::StartSection { func, .. } => {
+                // FEAT-022: the start function is a reachability root.
+                start_func = Some(func);
             }
             Payload::MemorySection(reader) => {
                 // v0.3 region domain (FEAT-005): the first
@@ -1368,6 +1426,15 @@ pub fn analyze(
         });
     }
 
+    // FEAT-022 slice-1: reachability from the module's entry points, over the
+    // same over-approximated static call graph used for the summary pass.
+    let reachable_from_exports = compute_reachable_from_exports(
+        &static_callees,
+        import_func_count,
+        &exported_funcs,
+        start_func,
+    );
+
     Ok(AnalysisResult {
         invariants,
         diagnostics,
@@ -1376,6 +1443,7 @@ pub fn analyze(
         provenance,
         taint_findings,
         stack_usage,
+        reachable_from_exports,
     })
 }
 enum StepOutcome {
@@ -2439,6 +2507,63 @@ fn build_static_call_graph(
         graph.push(callees);
     }
     graph
+}
+
+/// FEAT-022 slice-1: the set of functions reachable from the module's entry
+/// points, as sorted ABSOLUTE function indices. Roots are the exported
+/// functions + the optional start function; the search follows the static
+/// call graph (`build_static_call_graph` — direct calls plus every
+/// over-approximated `call_indirect` target), so the result is a sound
+/// SUPERSET of the concretely-reachable functions (REQ-011/SCRY-001): an edge
+/// the analyzer over-approximates only ever ADDS a function, never drops a
+/// reachable one. A consumer may soundly prune any function NOT in this set.
+fn compute_reachable_from_exports(
+    static_callees: &[Vec<usize>],
+    import_func_count: u32,
+    exported_funcs: &[u32],
+    start_func: Option<u32>,
+) -> Vec<u32> {
+    let n = static_callees.len();
+    let mut reachable_defined = alloc::vec![false; n];
+    let mut work: Vec<usize> = Vec::new();
+    let mut out: Vec<u32> = Vec::new();
+
+    let seed = |abs: u32, work: &mut Vec<usize>, out: &mut Vec<u32>, vis: &mut [bool]| {
+        if abs >= import_func_count {
+            let d = (abs - import_func_count) as usize;
+            if d < n && !vis[d] {
+                vis[d] = true;
+                work.push(d);
+            }
+        } else {
+            // An exported/start IMPORT: reachable itself, reaches nothing in
+            // the defined call graph. Record its absolute index directly.
+            out.push(abs);
+        }
+    };
+    for &abs in exported_funcs {
+        seed(abs, &mut work, &mut out, &mut reachable_defined);
+    }
+    if let Some(s) = start_func {
+        seed(s, &mut work, &mut out, &mut reachable_defined);
+    }
+    // BFS/DFS over the over-approximated static call graph.
+    while let Some(d) = work.pop() {
+        for &c in &static_callees[d] {
+            if c < n && !reachable_defined[c] {
+                reachable_defined[c] = true;
+                work.push(c);
+            }
+        }
+    }
+    for (d, &r) in reachable_defined.iter().enumerate() {
+        if r {
+            out.push(import_func_count + d as u32);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// Tarjan's strongly-connected-components algorithm (iterative, to
@@ -4205,6 +4330,7 @@ mod tests {
                 functions: alloc::vec![],
                 max_stack_bytes: StackBound::Bytes(0),
             },
+            reachable_from_exports: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -4519,6 +4645,36 @@ mod tests {
         let res = analyze_fixture("fixture-01-constant-fold.wat");
         assert_eq!(res.stack_usage.sp_global, None);
         assert_eq!(res.stack_usage.max_stack_bytes, StackBound::Bytes(0));
+    }
+
+    /// FEAT-022 slice-1: reachable-from-exports is a sound superset — it
+    /// INCLUDES an exported function and its (transitive) callees, and EXCLUDES
+    /// a function that is neither exported/start nor reachable (so a consumer
+    /// may soundly prune the absent one).
+    #[test]
+    fn feat022_reachable_from_exports() {
+        let res = analyze_fixture("fixture-17-reachability.wat");
+        // func 0 = $exported (root), func 1 = $helper (called), func 2 = $dead.
+        assert!(
+            res.reachable_from_exports.contains(&0),
+            "exported root must be reachable"
+        );
+        assert!(
+            res.reachable_from_exports.contains(&1),
+            "callee of the export must be reachable"
+        );
+        assert!(
+            !res.reachable_from_exports.contains(&2),
+            "uncalled non-exported function must NOT be in the reachable set"
+        );
+        // Sorted, no dups.
+        let mut sorted = res.reachable_from_exports.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted, res.reachable_from_exports,
+            "set is sorted + deduped"
+        );
     }
 
     /// FEAT-021 slice-2b: the self-measuring fixture (two mutable i32 globals:

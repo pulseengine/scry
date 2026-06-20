@@ -84,6 +84,7 @@ than working around it here.
 | `fixture-14-stack-dynamic.wat`    | v1.10 (FEAT-021 slice-1) shadow-stack: dynamic (variable) frame → UNKNOWN, never zero |
 | `fixture-15-stack-alloca.wat`     | v1.10 (FEAT-021 slice-1) shadow-stack soundness regression: const frame + dynamic alloca → UNKNOWN, never the under-counted constant (clean-room finding) |
 | `fixture-16-stack-measured.wat`  | v1.11 (FEAT-021 slice-2b) LIVE kill-criterion: self-measuring chain (frames 32/16) → reported bytes(48) >= wasmtime-measured peak 48 |
+| `fixture-17-reachability.wat`    | v1.12 (FEAT-022 slice-1) reachable-from-exports: exported→callee included, dead function excluded (sound superset) |
 
 ## Adding fixtures
 

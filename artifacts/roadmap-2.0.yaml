@@ -594,6 +594,45 @@ artifacts:
       - type: traces-to
         target: REQ-005
 
+  - id: REQ-011
+    type: requirement
+    title: "Downstream consumers get a sound, over-approximate call-graph/reachability output (SCRY-001)"
+    status: proposed
+    description: >
+      The analysis-result shall expose, with a stated soundness contract, the
+      call structure a downstream tool needs to PROVE a program property fits a
+      budget. synth's shadow-stack / linear-memory footprint (synth#383,
+      VCR-MEM-001; collab issue #51) is the first consumer. This is the schema
+      synth's VCR-RA-010 forward-references as "SCRY-001". The contract — the
+      two facts that enter the consumer's TCB:
+        (1) `call-edge.resolved-targets` for a `call_indirect` site is a SOUND
+            SUPERSET of the concretely-reachable callees (type-signature +
+            reachable-`elem` filtered; whole declared table when the index is
+            unconstrained). A superset only ever RAISES a longest-path bound,
+            never lowers it.
+        (2) `function-summary.recursive` is TRUE for every function in a cycle
+            of the (over-approximated, incl. indirect) reachable call graph, so
+            a consumer can honest-fail on unbounded depth.
+      Over-approximation is the safety posture: nothing scry asserts enters the
+      consumer's correctness TCB beyond "this is an over-approximation"; the
+      consumer re-derives its property and fails closed when the bound is
+      unprovable. (1) and (2) are met today by FEAT-006 / FEAT-007; this
+      requirement formalises the contract and adds the reachability output
+      (FEAT-022).
+    tags: [reality, interop, call-graph, reachability, soundness, scry-001]
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: FEAT-006
+      - type: traces-to
+        target: FEAT-007
+      - type: traces-to
+        target: FEAT-022
+
   # ──────────────────────────────────────────────────────────────────────
   # Feature ladder v1.1 → v2.0.  status: proposed (provisional until built).
   #
@@ -1069,6 +1108,62 @@ artifacts:
         target: FEAT-007
       - type: traces-to
         target: DD-016
+      - type: traces-to
+        target: G-005
+
+  - id: FEAT-022
+    type: feature
+    title: "v1.x — Downstream-consumer call-graph/reachability output (synth footprint, VCR-MEM-001)"
+    status: proposed
+    description: >
+      Make scry's call structure directly consumable by a downstream tool that
+      must PROVE a program property fits a budget — synth's shadow-stack /
+      linear-memory footprint (synth#383, VCR-MEM-001) is the first consumer
+      (collab issue #51). Captures synth's three requests:
+        (1) sound call graph incl. call_indirect target sets — ALREADY SHIPPED
+            (FEAT-006: analysis-result.call-graph, per-site resolved-targets +
+            soundness tag);
+        (2) recursion / cycle detection — ALREADY SHIPPED (FEAT-007:
+            function-summary.recursive; FEAT-021: stack-usage = unbounded);
+        (3) reachability pruning — THE NEW WORK: an additive
+            reachable-from-exports output so a consumer can prune provably-dead
+            deep paths without re-deriving reachability itself.
+      The soundness contract is REQ-011 / SCRY-001. Runs on a single Core Wasm
+      module (no meld fusion required — provenance is an optional custom-section
+      decode).
+
+      CONSUMPTION PATH (per collab #51): synth is a Rust tool, so it consumes
+      scry as the published crates.io LIBRARY `scry-sai-core` — `cargo add
+      scry-sai-core`, call `scry_analyze_core::analyze(module_bytes, config)`,
+      and read the plain-Rust `AnalysisResult` fields (`call_graph`,
+      `function_summaries[*].recursive`, `stack_usage`, `reachable_from_exports`)
+      directly. No wasm-component embedding / wasmtime / WIT marshalling. The
+      WasiP2 component (`scry.wasm`) remains for non-Rust / sandboxed consumers.
+
+      Staged smallest-sound-first:
+        slice-1 — a `reachable_from_exports` function set on the
+          `scry-sai-core` `AnalysisResult` (BFS over the over-approximated
+          static call graph from exported + start roots; a sound SUPERSET of
+          concretely-reachable functions), with a Rocq superset-soundness proof
+          (proofs/rocq/Reachable.v). Library-only — no WIT change.
+        slice-2 — (optional) surface it in scry.wit for non-Rust consumers;
+          reachable-edge filtering / a pruned call-graph view if a consumer
+          needs more than the function set.
+    tags: [capability, interop, reachability, call-graph, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a Core Wasm module, When scry analyzes it, Then analysis-result carries a reachable-from-exports function set that is a sound superset of every function reachable (via direct + over-approximated call_indirect edges) from an exported or start function."
+        - "Given a function not reachable from any export/start, When scry analyzes the module, Then that function is absent from the reachable set (so a consumer can soundly prune it) — and no reachable function is ever omitted."
+    links:
+      - type: satisfies
+        target: REQ-011
+      - type: depends-on
+        target: FEAT-006
+      - type: depends-on
+        target: FEAT-007
+      - type: traces-to
+        target: FEAT-021
       - type: traces-to
         target: G-005
 
