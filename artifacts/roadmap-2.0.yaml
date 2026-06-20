@@ -669,6 +669,39 @@ artifacts:
       - type: traces-to
         target: FEAT-023
 
+  - id: REQ-013
+    type: requirement
+    title: "scry's analysis output is inspectable as a static, shareable visualization"
+    status: proposed
+    description: >
+      A scry `AnalysisResult` shall be renderable as a self-contained static
+      artifact (no server, no JavaScript, no external assets) that a human can
+      open and audit — the analyzer's own analogue of the witness-viz MC/DC
+      truth-table site. The artifact surfaces the analysis a reviewer/consumer
+      cares about: per-function shadow-stack bound, reachability and recursion
+      flags, the call graph (incl. call_indirect resolved-target sets +
+      soundness tag), diagnostics, and the per-program-point invariants
+      (locals AND the FEAT-023 operand-stack).
+
+      Soundness posture (what enters NO TCB): the visualization is a FAITHFUL
+      RENDERING — it re-derives nothing and asserts nothing beyond what the
+      `AnalysisResult` states. Each value shown is a verbatim projection of an
+      analyzer field; an empty operand-stack is rendered as an explicit
+      "(empty)" (the analyzer's honest "no info here"), never as a claim that
+      the concrete stack is empty. Attacker-influenced strings (diagnostic
+      messages, schema URL, module name) are HTML-escaped.
+    tags: [interop, visualization, tooling, evidence, v1.x]
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: FEAT-024
+      - type: traces-to
+        target: FEAT-023
+
   # ──────────────────────────────────────────────────────────────────────
   # Feature ladder v1.1 → v2.0.  status: proposed (provisional until built).
   #
@@ -1240,6 +1273,80 @@ artifacts:
         target: REQ-012
       - type: traces-to
         target: FEAT-016
+      - type: traces-to
+        target: G-005
+
+  - id: FEAT-024
+    type: feature
+    title: "v1.x — scry-viz: static-HTML visualization of an AnalysisResult"
+    status: proposed
+    description: >
+      A `std` host tool + library (`scry-sai-viz`) that turns a scry
+      `AnalysisResult` into a single self-contained HTML page — no server, no
+      JavaScript, no external assets — mirroring the witness-viz static-site
+      evidence pattern, but for the analyzer's OWN output. Consumes
+      `scry-sai-core` as a crate (plain-Rust types, no WIT/component).
+
+      The page renders: a header (module sha256, schema, headline counts); a
+      functions table (reachable-from-exports? · recursive? · params · frame ·
+      worst-case stack — merging stack-usage / function-summaries /
+      reachable-from-exports); the call graph (caller · pc · direct/indirect ·
+      resolved targets · soundness); diagnostics; and the per-program-point
+      invariants (locals AND the FEAT-023 operand-stack, bottom → top). A
+      singleton interval renders as a bare constant; the full domain as ⊤; an
+      empty operand-stack as an explicit "(empty)".
+
+      Staged smallest-sound-first:
+        slice-1 — a pure `render_html(&AnalysisResult, title) -> String` in the
+          `scry-sai-viz` library, with native unit tests (constant on the stack
+          shows verbatim; empty stack shows "(empty)"; untrusted text escaped;
+          no panic on empty module). Plus a `scry-viz` CLI that analyzes a
+          .wasm/.wat and writes the page.
+        slice-2 — (optional) call-graph diagram (Mermaid/Graphviz) and
+          cross-links between points / functions / edges.
+    tags: [capability, visualization, tooling, evidence, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given an AnalysisResult, When scry-viz renders it, Then the output is a single self-contained HTML document (no external assets) containing the functions table, call graph, diagnostics, and per-program-point invariants incl. the operand stack."
+        - "Given a program point with a known constant on the operand stack, When rendered, Then the constant appears verbatim (singleton interval as a bare value); given an empty operand stack, Then it renders as an explicit \"(empty)\" — never re-deriving or over-stating any value."
+        - "Given an AnalysisResult containing attacker-influenced strings (diagnostic messages, schema URL, module name), When rendered, Then those strings are HTML-escaped."
+    links:
+      - type: satisfies
+        target: REQ-013
+      - type: depends-on
+        target: FEAT-023
+      - type: traces-to
+        target: G-005
+
+  - id: FEAT-025
+    type: feature
+    title: "v1.x — Dogfood: scry analyzes its own compiled module in CI (self-analysis artifact)"
+    status: proposed
+    description: >
+      Roll scry out on OUR OWN artifacts: run `analyze()` (and scry-viz) on
+      scry's own compiled Core Wasm module as part of the build. Tiny
+      hand-written fixtures exercise specific transfer functions; a real,
+      large, compiler-emitted module (scry's own analyzer core, already built
+      for the MC/DC harness as `scry_mcdc.wasm`) is a robustness oracle they
+      cannot reach — it catches panics, pathological blow-ups, and unsound
+      corner cases on production-shaped code.
+
+      Staged smallest-sound-first:
+        slice-1 — a CI step (in the existing MC/DC job, which already builds
+          `scry_mcdc.wasm`) that runs `scry-viz` on that module and uploads the
+          resulting self-analysis HTML as an artifact. "scry visualizing scry."
+        slice-2 — (optional) a gated robustness assertion: analysis of the
+          self-module succeeds (no panic, well-formed bundle, every interval
+          lo ≤ hi, call graph non-empty), promoted to a live gate once stable.
+    tags: [capability, dogfood, ci, robustness, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given scry's own compiled Core Wasm module, When CI runs scry-viz on it, Then a self-analysis HTML artifact is produced and uploaded (build fails if rendering panics or errors)."
+    links:
+      - type: depends-on
+        target: FEAT-024
       - type: traces-to
         target: G-005
 

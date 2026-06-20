@@ -1886,6 +1886,14 @@ name = "scry-sai-taint"
 version = "1.13.0"
 
 [[package]]
+name = "scry-sai-viz"
+version = "1.13.0"
+dependencies = [
+ "scry-sai-core",
+ "wat",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"

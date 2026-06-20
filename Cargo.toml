@@ -29,6 +29,7 @@ members = [
     "crates/scry-interval",
     "crates/scry-analyze-core",
     "crates/scry-host-tests",
+    "crates/scry-viz",
 ]
 # `wasm-lattice` and `scry-analyzer` are the Wasm-component crates
 # (`crate-type = ["cdylib"]`, `#![no_std]`; `scry-analyzer` additionally
@@ -48,6 +49,7 @@ default-members = [
     "crates/scry-interval",
     "crates/scry-analyze-core",
     "crates/scry-host-tests",
+    "crates/scry-viz",
 ]
 
 [workspace.package]
