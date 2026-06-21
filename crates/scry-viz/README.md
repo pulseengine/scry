@@ -33,7 +33,16 @@ cargo install scry-sai-viz
 scry-viz module.wasm                 # writes module.html
 scry-viz module.wat -o report.html   # .wat is assembled in-process
 scry-viz module.wasm --title "my firmware"
+
+# Build a landing page linking the dashboard views present in a site dir
+# (the analogue of `witness-viz pages-index`):
+scry-viz index --site-dir dist --title "scry — verification dashboard"
 ```
+
+scry uses this to publish a verification dashboard to GitHub Pages on every
+release (`pulseengine.github.io/scry/`): a landing page linking the scry-viz
+self-analysis (scry analyzing its own module) and the witness-viz MC/DC
+truth-table dashboard.
 
 Library:
 

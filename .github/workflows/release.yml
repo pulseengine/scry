@@ -310,3 +310,121 @@ jobs:
           fi
           gh release upload "$VERSION" "$ARCHIVE_PATH" --clobber
           echo "::notice title=MC/DC evidence::uploaded $(basename "$ARCHIVE_PATH")"
+
+  # ── GitHub Pages: scry verification dashboard (FEAT-026) ─────────────────
+  #
+  # Same delivery pattern as witness's release.yml `publish-pages` job
+  # (actions/upload-pages-artifact + actions/deploy-pages; Pages Source =
+  # "GitHub Actions"). Builds a single self-contained dashboard under dist/ and
+  # deploys it to https://pulseengine.github.io/scry/:
+  #   * dist/self-analysis.html — scry-viz analyzing scry's OWN compiled module
+  #     (FEAT-024/025: functions, call graph, diagnostics, per-program-point
+  #     invariants incl. the operand stack);
+  #   * dist/mcdc/            — the witness-viz MC/DC truth-table dashboard over
+  #     scry's real analyzer corpus (same site CI uploads as an artifact);
+  #   * dist/index.html       — a landing page (scry-viz index) linking both.
+  #
+  # Two one-time repo settings (mirroring witness; applied out of band so a
+  # fresh fork must redo them):
+  #   1. Pages → Source = "GitHub Actions" (not "Branch"), else deploy-pages
+  #      fails with a setting-pointing error.
+  #   2. The `github-pages` environment's default deployment-branch policy only
+  #      allows `main`; tag-triggered deploys need a `v*` TAG policy:
+  #        gh api -X POST repos/pulseengine/scry/environments/github-pages/deployment-branch-policies \
+  #          -f name='v*' -f type=tag
+  #
+  # witness binaries are pinned to the SAME rev the CI MC/DC gate uses (proven
+  # green), and floors are disabled here — CI already enforces the gate; this
+  # job only renders the dashboard.
+  publish-pages:
+    name: Publish verification dashboard to GitHub Pages
+    needs: [release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    env:
+      WITNESS_REV: 6ff96e75a1b495aa165f1ee91abda3049fffe628
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve version from tag
+        env:
+          TAG_REF: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-$TAG_REF}"
+          case "$TAG" in v*) ;; *) echo "::error::tag '$TAG' must start with v"; exit 1 ;; esac
+          echo "VERSION=$TAG" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache witness binaries
+        id: witness-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/witness
+            ~/.cargo/bin/witness-viz
+          key: witness-bins-${{ runner.os }}-6ff96e75a1b495aa165f1ee91abda3049fffe628
+      - name: Install witness + witness-viz (pinned rev)
+        if: steps.witness-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          URL=https://github.com/pulseengine/witness.git
+          cargo install --git "$URL" --rev "$WITNESS_REV" witness-mcdc
+          cargo install --git "$URL" --rev "$WITNESS_REV" witness-mcdc-viz
+
+      # Builds scry_mcdc.wasm AND renders the witness-viz MC/DC dashboard into
+      # dist/mcdc (floors disabled — CI is the gate).
+      - name: Render MC/DC dashboard (witness-viz)
+        env:
+          MCDC_SITE_DIR: ${{ github.workspace }}/dist/mcdc
+          MCDC_PROVED_FLOOR: '0'
+          MCDC_FULL_FLOOR: '0'
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ./crates/scry-mcdc/mcdc-gate.sh
+
+      - name: Render scry-viz self-analysis (scry on scry)
+        run: |
+          set -euo pipefail
+          cargo run --release -p scry-sai-viz -- \
+            crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm \
+            -o "$GITHUB_WORKSPACE/dist/self-analysis.html" \
+            --title "scry ${VERSION} — self-analysis (scry_mcdc.wasm)"
+
+      - name: Build landing page (scry-viz index)
+        run: |
+          set -euo pipefail
+          cargo run --release -p scry-sai-viz -- index \
+            --site-dir "$GITHUB_WORKSPACE/dist" \
+            --title "scry ${VERSION} — verification dashboard"
+
+      - name: Sanity-check the site (every page is a complete HTML document)
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          test -f dist/self-analysis.html
+          find dist -name '*.html' -print0 \
+            | xargs -0 -I{} sh -c 'head -c 64 "{}" | grep -qi "<!doctype html>" || (echo "::error::{} missing doctype" && exit 1)'
+          echo "=== site tree (top level) ===" && find dist -maxdepth 1
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

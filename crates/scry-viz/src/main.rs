@@ -15,7 +15,13 @@ use scry_analyze_core::{AnalysisConfig, analyze};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match run(&args) {
+    // Subcommand dispatch: `scry-viz index ...` builds a landing page; the
+    // bare form `scry-viz <input> ...` renders one analysis.
+    let result = match args.first().map(String::as_str) {
+        Some("index") => run_index(&args[1..]),
+        _ => run(&args),
+    };
+    match result {
         Ok(out) => {
             eprintln!("scry-viz: wrote {}", out.display());
             ExitCode::SUCCESS
@@ -97,6 +103,72 @@ fn run(args: &[String]) -> Result<PathBuf, CliError> {
 
     let html = scry_viz::render_html(&result, &title);
     let out = output.unwrap_or_else(|| input.with_extension("html"));
+    std::fs::write(&out, html).map_err(|e| err(4, format!("writing {}: {e}", out.display())))?;
+    Ok(out)
+}
+
+/// `scry-viz index --site-dir DIR [--title NAME]` — write a landing
+/// `index.html` into DIR linking the known dashboard views that exist there
+/// (the scry-viz self-analysis and the MC/DC dashboard). Only views actually
+/// present on disk are linked, so a partial build still yields a valid page.
+fn run_index(args: &[String]) -> Result<PathBuf, CliError> {
+    let mut site_dir: Option<PathBuf> = None;
+    let mut title: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-h" | "--help" => {
+                return Err(err(
+                    2,
+                    "usage: scry-viz index --site-dir DIR [--title NAME]",
+                ));
+            }
+            "--site-dir" => {
+                site_dir = Some(PathBuf::from(
+                    it.next().ok_or_else(|| err(2, "--site-dir needs a path"))?,
+                ));
+            }
+            "--title" => {
+                title = Some(
+                    it.next()
+                        .ok_or_else(|| err(2, "--title needs a value"))?
+                        .clone(),
+                );
+            }
+            other => return Err(err(2, format!("unknown index arg: {other}"))),
+        }
+    }
+    let site_dir = site_dir.ok_or_else(|| err(2, "index needs --site-dir DIR"))?;
+    let title = title.unwrap_or_else(|| "scry verification dashboard".to_string());
+
+    // Known views, in display order. (relative href, on-disk probe, title, description)
+    let known: &[(&str, &str, &str, &str)] = &[
+        (
+            "self-analysis.html",
+            "self-analysis.html",
+            "Self-analysis (scry on scry)",
+            "scry analyzing its own compiled module — functions, call graph, \
+             diagnostics, and per-program-point invariants (locals + operand stack).",
+        ),
+        (
+            "mcdc/index.html",
+            "mcdc/index.html",
+            "MC/DC truth-table dashboard",
+            "witness-viz coverage of scry's real analyzer decision corpus.",
+        ),
+    ];
+    let entries: Vec<scry_viz::IndexEntry> = known
+        .iter()
+        .filter(|(_, probe, _, _)| site_dir.join(probe).exists())
+        .map(|(href, _, t, d)| scry_viz::IndexEntry {
+            href: (*href).to_string(),
+            title: (*t).to_string(),
+            description: (*d).to_string(),
+        })
+        .collect();
+
+    let html = scry_viz::render_index(&title, &entries);
+    let out = site_dir.join("index.html");
     std::fs::write(&out, html).map_err(|e| err(4, format!("writing {}: {e}", out.display())))?;
     Ok(out)
 }
