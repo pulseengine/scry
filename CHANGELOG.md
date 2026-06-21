@@ -7,6 +7,38 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.15.0] — 2026-06-21
+
+Headline: **the scry verification dashboard is published to GitHub Pages
+(FEAT-026), the same way witness publishes its MC/DC dashboard.** Every release
+now deploys a single public dashboard at `https://pulseengine.github.io/scry/`
+tying together the two evidence views scry produces.
+
+### Added — FEAT-026 (REQ-013)
+
+- A `publish-pages` job in `release.yml` (on `v*` tag) builds a self-contained
+  `dist/` site and deploys it via `actions/upload-pages-artifact` +
+  `actions/deploy-pages` (Pages Source = "GitHub Actions"). The site:
+  - `index.html` — a landing page (new `scry-viz index` subcommand) linking the
+    views that exist;
+  - `self-analysis.html` — scry-viz analyzing scry's OWN compiled module
+    (`scry_mcdc.wasm`): functions, call graph, diagnostics, and the
+    per-program-point invariants incl. the operand stack;
+  - `mcdc/` — the witness-viz MC/DC truth-table dashboard over scry's real
+    analyzer corpus.
+- `scry-viz index --site-dir DIR [--title NAME]` + a `render_index` library
+  function (the analogue of `witness-viz pages-index`): emits a self-contained
+  landing page linking only the views present on disk, so a partial build still
+  yields a valid page. Untrusted fields HTML-escaped.
+
+### Posture
+
+- Pages is a **delivery** surface for the FEAT-024 faithful rendering: it runs
+  no new analysis and asserts nothing beyond what the published pages state.
+  witness binaries are pinned to the same rev the CI MC/DC gate uses; coverage
+  floors are disabled in this job (CI is the enforcing gate — Pages only
+  renders).
+
 ## [1.14.0] — 2026-06-20
 
 Headline: **scry-viz — a static-HTML visualization of scry's own analysis

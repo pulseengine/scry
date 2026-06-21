@@ -1350,6 +1350,53 @@ artifacts:
       - type: traces-to
         target: G-005
 
+  - id: FEAT-026
+    type: feature
+    title: "v1.x — Publish the scry verification dashboard to GitHub Pages (same pattern as witness)"
+    status: proposed
+    description: >
+      Deliver scry's visualization output to GitHub Pages on every release, the
+      same way witness publishes its MC/DC dashboard (witness release.yml
+      `publish-pages` job → `actions/upload-pages-artifact` +
+      `actions/deploy-pages`, Pages Source = "GitHub Actions"). A single public
+      verification dashboard at `pulseengine.github.io/scry/` ties together the
+      two evidence views scry already produces:
+        * the **scry-viz self-analysis** (FEAT-024/025: scry analyzing its own
+          compiled `scry_mcdc.wasm` — functions, call graph, diagnostics, and
+          per-program-point invariants incl. the operand stack);
+        * the **MC/DC truth-table dashboard** (witness-viz over scry's REAL
+          analyzer corpus — the same artifact CI already uploads).
+      A landing `index.html` links both, rendered by a new `scry-viz index`
+      subcommand (the analogue of `witness-viz pages-index`).
+
+      Staged smallest-sound-first:
+        slice-1 — a `publish-pages` job in release.yml (on `v*` tag) that builds
+          `dist/` = {index.html, self-analysis.html, mcdc/} and deploys it via
+          `actions/deploy-pages`. One-time repo setup (Pages Source = GitHub
+          Actions; a `v*` tag deployment-branch-policy on the `github-pages`
+          environment so tag-triggered deploys are allowed) applied out of band.
+        slice-2 — (optional) multi-version site (current + prior releases under
+          `dist/<tag>/`), matching witness DEC-033.
+
+      Soundness/posture: Pages is a DELIVERY surface for the FEAT-024 faithful
+      rendering — it adds no new analysis and asserts nothing beyond what the
+      published pages already state.
+    tags: [capability, visualization, ci, github-pages, delivery, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a v* release tag, When the release workflow runs, Then a dist/ site (landing index.html + scry-viz self-analysis + MC/DC dashboard) is built and deployed to GitHub Pages via actions/deploy-pages (the job fails if any page is missing or truncated)."
+        - "Given the deployed site, When a user opens the landing page, Then it links to both the self-analysis and the MC/DC dashboard, each a self-contained set of pages that renders from the Pages URL prefix."
+    links:
+      - type: satisfies
+        target: REQ-013
+      - type: depends-on
+        target: FEAT-024
+      - type: depends-on
+        target: FEAT-025
+      - type: traces-to
+        target: G-005
+
   # ──────────────────────────────────────────────────────────────────────
   # Safety goal for the v2.0 qualification milestone.
   # ──────────────────────────────────────────────────────────────────────
