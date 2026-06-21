@@ -313,6 +313,29 @@ pub struct AnalysisResult {
     /// downstream consumer can soundly prune what is absent (REQ-011/SCRY-001).
     /// Sorted ascending. Core-only for now (slice-1b surfaces it in WIT).
     pub reachable_from_exports: Vec<u32>,
+    /// FEAT-027: human-readable metadata for every function index (imports +
+    /// defined), sorted by `func_index`. Names come from the custom `name`
+    /// section, else an export name, else an import `module.field`; `None`
+    /// when the module carries none (consumers fall back to the index). Lets a
+    /// consumer (synth's footprint report, scry-viz) show `$compute_stack` in
+    /// place of `func 42`. Library-only addition (not in the WIT mirror).
+    pub function_meta: Vec<FunctionMeta>,
+}
+
+/// FEAT-027: human-readable metadata for one function index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FunctionMeta {
+    /// Absolute function index (imports occupy the low indices, then defined).
+    pub func_index: u32,
+    /// Best human-readable name, in priority order: custom `name` section →
+    /// first export name → import `module.field`. `None` when the module
+    /// carries no name for this index (fall back to the index).
+    pub name: Option<String>,
+    /// True when this index is an imported function.
+    pub imported: bool,
+    /// Export names for this function (empty when not exported). A function may
+    /// be exported under several names.
+    pub exports: Vec<String>,
 }
 
 /// Mirror of WIT `analyze-error`. Reasons an analyze call fails without a
@@ -385,7 +408,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "1.15.0";
+const SCRY_VERSION: &str = "1.16.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -820,6 +843,17 @@ pub fn analyze(
     let mut exported_funcs: Vec<u32> = Vec::new();
     let mut start_func: Option<u32> = None;
 
+    // ── FEAT-027 human-readable function metadata ────────────────
+    // Names from three sources, resolved later in priority order:
+    // the custom `name` section (canonical debug names), else an
+    // export name, else an import "module.field". `import_func_meta`
+    // is indexed by import order (absolute index == position, since
+    // imports occupy the low indices); `export_names`/`name_section`
+    // are (abs-index, name) pairs.
+    let mut import_func_meta: Vec<String> = Vec::new();
+    let mut export_names: Vec<(u32, String)> = Vec::new();
+    let mut name_section: Vec<(u32, String)> = Vec::new();
+
     // ── FEAT-006 function-table state ────────────────────────────
     // The declared length of table index 0 (the funcref table a
     // `call_indirect` dispatches through). `table0_len` is the
@@ -882,6 +916,9 @@ pub fn analyze(
                         .map_err(|e| AnalyzeError::InvalidModule(format!("import section: {e}")))?;
                     if matches!(imp.ty, wasmparser::TypeRef::Func(_)) {
                         import_func_count = import_func_count.saturating_add(1);
+                        // FEAT-027: imported funcs occupy the low indices in
+                        // import order; record "module.field" as a fallback name.
+                        import_func_meta.push(alloc::format!("{}.{}", imp.module, imp.name));
                     }
                 }
             }
@@ -901,6 +938,8 @@ pub fn analyze(
                     })?;
                     if matches!(ex.kind, wasmparser::ExternalKind::Func) {
                         exported_funcs.push(ex.index);
+                        // FEAT-027: keep the export name for readable metadata.
+                        export_names.push((ex.index, alloc::string::String::from(ex.name)));
                     }
                 }
             }
@@ -1065,6 +1104,25 @@ pub fn analyze(
                         }
                     }
                 }
+            // FEAT-027: the standard `name` custom section maps function
+            // indices to human-readable names. Best-effort — a malformed
+            // entry is skipped, never an error (debug info is advisory).
+            Payload::CustomSection(reader) if reader.name() == "name" => {
+                let names = wasmparser::NameSectionReader::new(wasmparser::BinaryReader::new(
+                    reader.data(),
+                    reader.data_offset(),
+                ));
+                for subsection in names {
+                    let Ok(subsection) = subsection else { break };
+                    if let wasmparser::Name::Function(map) = subsection {
+                        for naming in map {
+                            let Ok(naming) = naming else { break };
+                            name_section
+                                .push((naming.index, alloc::string::String::from(naming.name)));
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1449,6 +1507,14 @@ pub fn analyze(
         start_func,
     );
 
+    let function_meta = build_function_meta(
+        import_func_count,
+        function_type_indices.len() as u32,
+        &import_func_meta,
+        &export_names,
+        &name_section,
+    );
+
     Ok(AnalysisResult {
         invariants,
         diagnostics,
@@ -1458,7 +1524,50 @@ pub fn analyze(
         taint_findings,
         stack_usage,
         reachable_from_exports,
+        function_meta,
     })
+}
+
+/// FEAT-027: assemble per-function human-readable metadata for every index
+/// (imports + defined). Name priority: custom `name` section → first export
+/// name → import `module.field` → `None`.
+fn build_function_meta(
+    import_func_count: u32,
+    defined_func_count: u32,
+    import_func_meta: &[String],
+    export_names: &[(u32, String)],
+    name_section: &[(u32, String)],
+) -> Vec<FunctionMeta> {
+    let total = import_func_count.saturating_add(defined_func_count);
+    let mut out = Vec::with_capacity(total as usize);
+    for idx in 0..total {
+        let imported = idx < import_func_count;
+        let exports: Vec<String> = export_names
+            .iter()
+            .filter(|(i, _)| *i == idx)
+            .map(|(_, n)| n.clone())
+            .collect();
+        // Priority: name section → export name → import "module.field".
+        let name = name_section
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, n)| n.clone())
+            .or_else(|| exports.first().cloned())
+            .or_else(|| {
+                if imported {
+                    import_func_meta.get(idx as usize).cloned()
+                } else {
+                    None
+                }
+            });
+        out.push(FunctionMeta {
+            func_index: idx,
+            name,
+            imported,
+            exports,
+        });
+    }
+    out
 }
 enum StepOutcome {
     Continue,
@@ -4357,6 +4466,7 @@ mod tests {
                 max_stack_bytes: StackBound::Bytes(0),
             },
             reachable_from_exports: alloc::vec![],
+            function_meta: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -4756,6 +4866,69 @@ mod tests {
             saw_depth2,
             "after the second const the stack is [42, 7] bottom → top"
         );
+    }
+
+    /// FEAT-027: every function index resolves to human-readable metadata —
+    /// name (custom `name` section → export → import), imported flag, and
+    /// export names — so a consumer can show `$compute` for `func 1`.
+    #[test]
+    fn feat027_function_meta_names() {
+        let res = analyze_fixture("fixture-19-named-functions.wat");
+        let meta = &res.function_meta;
+        assert_eq!(
+            meta.len(),
+            3,
+            "one entry per function index (1 import + 2 defined)"
+        );
+
+        // func 0: imported $log. The name section name wins over the
+        // "env.log" import fallback.
+        assert_eq!(meta[0].func_index, 0);
+        assert!(meta[0].imported, "func 0 is imported");
+        assert_eq!(meta[0].name.as_deref(), Some("log"));
+        assert!(meta[0].exports.is_empty());
+
+        // func 1: defined $compute, exported "run".
+        assert!(!meta[1].imported, "func 1 is defined");
+        assert_eq!(meta[1].name.as_deref(), Some("compute"));
+        assert!(
+            meta[1].exports.iter().any(|e| e == "run"),
+            "func 1 is exported as \"run\""
+        );
+
+        // func 2: defined $helper, not exported.
+        assert!(!meta[2].imported);
+        assert_eq!(meta[2].name.as_deref(), Some("helper"));
+        assert!(meta[2].exports.is_empty());
+
+        // Sorted by func_index, one entry per index, no gaps.
+        for (i, m) in meta.iter().enumerate() {
+            assert_eq!(
+                m.func_index as usize, i,
+                "function_meta is index-ordered, gapless"
+            );
+        }
+    }
+
+    /// FEAT-027: a module with no name section, no exports, and no imports
+    /// yields metadata with `None` names — consumers fall back to the index.
+    #[test]
+    fn feat027_no_names_is_none() {
+        // wat emits a name section from `$id`s, so use a numerically-indexed
+        // module with no symbolic names / exports / imports.
+        let bytes = wat::parse_str("(module (func nop))").expect("assemble");
+        let res = analyze(
+            bytes,
+            AnalysisConfig {
+                widening_threshold: Some(3),
+                emit_diagnostics: true,
+                taint_policy: None,
+            },
+        )
+        .expect("analyze");
+        assert_eq!(res.function_meta.len(), 1);
+        assert_eq!(res.function_meta[0].name, None, "no name source → None");
+        assert!(!res.function_meta[0].imported);
     }
 
     /// FEAT-021 slice-2b: the self-measuring fixture (two mutable i32 globals:

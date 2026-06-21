@@ -16,15 +16,19 @@ assets) with:
 
 - **Summary** — module SHA-256, schema, worst-case shadow-stack bound,
   stack-pointer global, and headline counts.
-- **Functions** — per function: reachable-from-exports? · recursive? · params ·
-  shadow-stack frame · worst-case stack.
-- **Call graph** — caller · pc · `call`/`call_indirect` · resolved target set ·
-  soundness tag.
+- **Functions** — per function: **name** (resolved from the wasm `name`
+  section / export / import) · **kind** badges (import · `export "run"` ·
+  defined) · reachable-from-exports? · recursive? · params · shadow-stack
+  frame · worst-case stack · program-point count. Rows are anchored.
+- **Call graph** — caller · pc · `call`/`call_indirect` · resolved targets ·
+  soundness tag. Caller and targets are **named links** (`1 compute →
+  2 helper`) that jump to the function's row.
 - **Diagnostics** — severity · `fn:pc` · message.
-- **Program points** — for each visited `(func, pc)`, the abstract `locals`
-  *and* the abstract **operand stack** (bottom → top). A singleton interval
-  shows as a bare constant (`i32 42`), the full domain as `⊤`, and an empty
-  operand stack as an explicit `(empty)`.
+- **Program points** — **grouped per function** under an anchored heading
+  (`func 1 · compute`): for each visited `pc`, the abstract `locals` *and* the
+  abstract **operand stack** (bottom → top). A singleton interval shows as a
+  bare constant (`i32 42`), the full domain as `⊤`, and an empty operand stack
+  as an explicit `(empty)`.
 
 ## Usage
 

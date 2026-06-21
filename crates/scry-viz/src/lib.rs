@@ -30,9 +30,45 @@
 use core::fmt::Write as _;
 
 use scry_analyze_core::{
-    AbstractValue, AnalysisResult, CallEdge, Diagnostic, DiagnosticSeverity, FunctionStack,
-    Interval, ProgramPoint, Region, SoundnessTag, StackBound,
+    AbstractValue, AnalysisResult, Diagnostic, DiagnosticSeverity, FunctionMeta, FunctionStack,
+    Interval, Region, SoundnessTag, StackBound,
 };
+
+/// FEAT-027: metadata for one function index, if scry resolved any.
+fn fn_meta(r: &AnalysisResult, idx: u32) -> Option<&FunctionMeta> {
+    r.function_meta.iter().find(|m| m.func_index == idx)
+}
+
+/// A function reference as a link to its row in the Functions table, showing
+/// the resolved name when there is one: `42 $compute` (or just `42`).
+fn fn_link(r: &AnalysisResult, idx: u32) -> String {
+    match fn_meta(r, idx).and_then(|m| m.name.as_deref()) {
+        Some(n) => format!("<a href=\"#fn-{idx}\">{idx} <code>{}</code></a>", esc(n)),
+        None => format!("<a href=\"#fn-{idx}\">{idx}</a>"),
+    }
+}
+
+/// Kind badges for a function: `import`, `export "run"` (one per export), or a
+/// muted `defined` when neither.
+fn kind_badges(m: Option<&FunctionMeta>) -> String {
+    let mut out = String::new();
+    if let Some(m) = m {
+        if m.imported {
+            out.push_str("<span class=\"badge import\">import</span> ");
+        }
+        for ex in &m.exports {
+            let _ = write!(
+                out,
+                "<span class=\"badge export\">export \"{}\"</span> ",
+                esc(ex)
+            );
+        }
+    }
+    if out.is_empty() {
+        out.push_str("<span class=\"muted\">defined</span>");
+    }
+    out
+}
 
 /// Render a complete, self-contained HTML document for `result`.
 ///
@@ -49,9 +85,9 @@ pub fn render_html(result: &AnalysisResult, title: &str) -> String {
     let _ = write!(s, "<h1>scry analysis — {}</h1>", esc(title));
     render_header(&mut s, result);
     render_functions(&mut s, result);
-    render_call_graph(&mut s, &result.call_graph);
+    render_call_graph(&mut s, result);
     render_diagnostics(&mut s, &result.diagnostics);
-    render_points(&mut s, &result.invariants.points);
+    render_points(&mut s, result);
 
     s.push_str(
         "<footer>Rendered by scry-viz · a faithful projection of the \
@@ -146,13 +182,17 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
 
 fn render_functions(s: &mut String, r: &AnalysisResult) {
     s.push_str("<section><h2>Functions</h2>");
-    if r.function_summaries.is_empty() && r.stack_usage.functions.is_empty() {
+    if r.function_summaries.is_empty()
+        && r.stack_usage.functions.is_empty()
+        && r.function_meta.is_empty()
+    {
         s.push_str("<p class=\"empty\">No functions.</p></section>");
         return;
     }
     s.push_str(
-        "<table><thead><tr><th>func</th><th>reachable</th><th>recursive</th>\
-         <th>params</th><th>frame</th><th>max stack</th></tr></thead><tbody>",
+        "<table><thead><tr><th>func</th><th>name</th><th>kind</th><th>reachable</th>\
+         <th>recursive</th><th>params</th><th>frame</th><th>max stack</th><th>points</th>\
+         </tr></thead><tbody>",
     );
     // The `reachable` column reads `reachable_from_exports` via binary_search,
     // which is only correct if that vector is sorted ascending — which scry's
@@ -164,16 +204,19 @@ fn render_functions(s: &mut String, r: &AnalysisResult) {
         r.reachable_from_exports.is_sorted(),
         "reachable_from_exports must be sorted ascending for binary_search"
     );
-    // Union of every function index we know something about, ascending.
+    // Union of every function index we know something about (FEAT-027 metadata
+    // covers imports too, which have no summary/stack entry), ascending.
     let mut indices: Vec<u32> = r
         .function_summaries
         .iter()
         .map(|f| f.func_index)
         .chain(r.stack_usage.functions.iter().map(|f| f.func_index))
+        .chain(r.function_meta.iter().map(|m| m.func_index))
         .collect();
     indices.sort_unstable();
     indices.dedup();
     for idx in indices {
+        let meta = fn_meta(r, idx);
         let summary = r.function_summaries.iter().find(|f| f.func_index == idx);
         let stack: Option<&FunctionStack> =
             r.stack_usage.functions.iter().find(|f| f.func_index == idx);
@@ -188,10 +231,26 @@ fn render_functions(s: &mut String, r: &AnalysisResult) {
         let maxs = stack
             .map(|f| stack_bound(&f.max_stack))
             .unwrap_or_else(|| "?".into());
+        let name = match meta.and_then(|m| m.name.as_deref()) {
+            Some(n) => format!("<code>{}</code>", esc(n)),
+            None => "<span class=\"muted\">—</span>".to_string(),
+        };
+        let n_points = r
+            .invariants
+            .points
+            .iter()
+            .filter(|p| p.func_index == idx)
+            .count();
+        let points_cell = if n_points > 0 {
+            format!("<a href=\"#pts-{idx}\">{n_points}</a>")
+        } else {
+            "<span class=\"muted\">0</span>".to_string()
+        };
         let _ = write!(
             s,
-            "<tr><td>{idx}</td><td>{}</td><td>{}</td><td>{params}</td>\
-             <td>{frame}</td><td>{maxs}</td></tr>",
+            "<tr id=\"fn-{idx}\"><td>{idx}</td><td>{name}</td><td>{}</td><td>{}</td>\
+             <td>{}</td><td>{params}</td><td>{frame}</td><td>{maxs}</td><td>{points_cell}</td></tr>",
+            kind_badges(meta),
             yesno(reachable),
             yesno(recursive),
         );
@@ -199,9 +258,9 @@ fn render_functions(s: &mut String, r: &AnalysisResult) {
     s.push_str("</tbody></table></section>");
 }
 
-fn render_call_graph(s: &mut String, edges: &[CallEdge]) {
+fn render_call_graph(s: &mut String, r: &AnalysisResult) {
     s.push_str("<section><h2>Call graph</h2>");
-    if edges.is_empty() {
+    if r.call_graph.is_empty() {
         s.push_str("<p class=\"empty\">No call edges.</p></section>");
         return;
     }
@@ -209,13 +268,15 @@ fn render_call_graph(s: &mut String, edges: &[CallEdge]) {
         "<table><thead><tr><th>caller</th><th>pc</th><th>kind</th>\
          <th>resolved targets</th><th>soundness</th></tr></thead><tbody>",
     );
-    for e in edges {
+    for e in &r.call_graph {
+        // FEAT-027: resolve caller + target indices to named links so an edge
+        // reads `1 $compute → 2 $helper`, and each end jumps to its row.
         let targets = if e.resolved_targets.is_empty() {
-            "(none)".to_string()
+            "<span class=\"muted\">(none)</span>".to_string()
         } else {
             e.resolved_targets
                 .iter()
-                .map(u32::to_string)
+                .map(|t| fn_link(r, *t))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -225,11 +286,10 @@ fn render_call_graph(s: &mut String, edges: &[CallEdge]) {
         };
         let _ = write!(
             s,
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{sound}</td></tr>",
-            e.caller_func,
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{targets}</td><td>{sound}</td></tr>",
+            fn_link(r, e.caller_func),
             e.pc,
             if e.indirect { "call_indirect" } else { "call" },
-            esc(&targets),
         );
     }
     s.push_str("</tbody></table></section>");
@@ -260,49 +320,66 @@ fn render_diagnostics(s: &mut String, diags: &[Diagnostic]) {
     s.push_str("</ul></section>");
 }
 
-fn render_points(s: &mut String, points: &[ProgramPoint]) {
+fn render_points(s: &mut String, r: &AnalysisResult) {
+    let points = &r.invariants.points;
     s.push_str("<section><h2>Program points</h2>");
     if points.is_empty() {
         s.push_str("<p class=\"empty\">No program points.</p></section>");
         return;
     }
-    s.push_str(
-        "<table><thead><tr><th>func</th><th>pc</th><th>locals</th>\
-         <th>operand stack (bottom → top)</th></tr></thead><tbody>",
-    );
-    for p in points {
-        let locals = if p.locals.is_empty() {
-            "(none)".to_string()
-        } else {
-            p.locals
-                .iter()
-                .map(|l| format!("L{}={}", l.local_index, abstract_value(&l.value)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        // FEAT-023: the abstract operand stack. Empty is shown as "(empty)" —
-        // the analyzer's honest "no operand-stack info here", not a claim that
-        // the concrete stack is empty.
-        let stack = if p.operand_stack.is_empty() {
-            "<span class=\"empty\">(empty)</span>".to_string()
-        } else {
-            p.operand_stack
-                .iter()
-                .map(abstract_value)
-                .collect::<Vec<_>>()
-                .join(" · ")
+    // FEAT-027: group the points BY function ("where they sit") instead of one
+    // flat table — each function gets an anchored subsection titled by its
+    // name, so the Functions table's points-count and the call graph link here.
+    let mut func_indices: Vec<u32> = points.iter().map(|p| p.func_index).collect();
+    func_indices.sort_unstable();
+    func_indices.dedup();
+    for idx in func_indices {
+        let heading = match fn_meta(r, idx).and_then(|m| m.name.as_deref()) {
+            Some(n) => format!("func {idx} · <code>{}</code>", esc(n)),
+            None => format!("func {idx}"),
         };
         let _ = write!(
             s,
-            "<tr><td>{}</td><td>{}</td><td><code>{}</code></td>\
-             <td><code>{}</code></td></tr>",
-            p.func_index,
-            p.pc,
-            esc(&locals),
-            stack,
+            "<h3 id=\"pts-{idx}\" class=\"fn-points\">{heading} \
+             <a class=\"backref\" href=\"#fn-{idx}\">↑ row</a></h3>",
         );
+        s.push_str(
+            "<table><thead><tr><th>pc</th><th>locals</th>\
+             <th>operand stack (bottom → top)</th></tr></thead><tbody>",
+        );
+        for p in points.iter().filter(|p| p.func_index == idx) {
+            let locals = if p.locals.is_empty() {
+                "(none)".to_string()
+            } else {
+                p.locals
+                    .iter()
+                    .map(|l| format!("L{}={}", l.local_index, abstract_value(&l.value)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            // FEAT-023: the abstract operand stack. Empty is shown as "(empty)"
+            // — the analyzer's honest "no operand-stack info here", not a claim
+            // that the concrete stack is empty.
+            let stack = if p.operand_stack.is_empty() {
+                "<span class=\"empty\">(empty)</span>".to_string()
+            } else {
+                p.operand_stack
+                    .iter()
+                    .map(abstract_value)
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            };
+            let _ = write!(
+                s,
+                "<tr><td>{}</td><td><code>{}</code></td><td><code>{}</code></td></tr>",
+                p.pc,
+                esc(&locals),
+                stack,
+            );
+        }
+        s.push_str("</tbody></table>");
     }
-    s.push_str("</tbody></table></section>");
+    s.push_str("</section>");
 }
 
 // ── value formatting ─────────────────────────────────────────────────────
@@ -385,6 +462,13 @@ const STYLE: &str = "<style>\
     .ok{color:var(--ok);font-weight:600}.warn{color:var(--warn);font-weight:600}\
     .err{color:var(--err);font-weight:600}.muted,.empty{color:var(--muted)}\
     .diags{list-style:none;padding:0}.diags li{padding:4px 0;border-bottom:1px solid var(--line)}\
+    .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:10px;\
+    border:1px solid var(--line);white-space:nowrap}\
+    .badge.import{background:#eef4ff;border-color:#cdd9f0}\
+    .badge.export{background:#eafaf0;border-color:#c5e8d2}\
+    h3.fn-points{font-size:14px;margin:22px 0 4px;scroll-margin-top:8px}\
+    tr[id^=\"fn-\"]{scroll-margin-top:8px}\
+    .backref{font-size:11px;font-weight:400;text-decoration:none;color:var(--muted)}\
     .cards{list-style:none;padding:0;display:grid;gap:12px;max-width:640px}\
     .cards li{border:1px solid var(--line);border-radius:6px;padding:14px 16px}\
     .cards a{font-size:16px;text-decoration:none}.cards a:hover{text-decoration:underline}\
@@ -502,6 +586,49 @@ mod tests {
             "no raw script tag from entry fields"
         );
         assert!(html.contains("&lt;script&gt;"), "escaped form present");
+    }
+
+    #[test]
+    fn renders_function_names_kinds_and_grouped_points() {
+        // FEAT-027: an imported $log, a defined+exported $compute calling
+        // $helper. The viz must show names, kind badges, named call-graph
+        // links, and per-function point groups.
+        let r = analyze_wat(
+            "(module (import \"env\" \"log\" (func $log (param i32))) \
+             (func $compute (export \"run\") (result i32) call $helper i32.const 7) \
+             (func $helper nop))",
+        );
+        let html = render_html(&r, "named");
+        // Names appear (from the name section).
+        assert!(html.contains("compute"), "defined function name shown");
+        assert!(html.contains("helper"), "callee name shown");
+        // Kind badges.
+        assert!(
+            html.contains("class=\"badge import\">import"),
+            "import badge"
+        );
+        assert!(html.contains("export \"run\""), "export badge with name");
+        // The functions table row is anchored, and the call graph links to it.
+        assert!(html.contains("id=\"fn-2\""), "function row anchored");
+        assert!(
+            html.contains("href=\"#fn-2\""),
+            "call graph / points link to the function row"
+        );
+        // Program points are grouped per function under an anchored heading.
+        assert!(
+            html.contains("id=\"pts-1\""),
+            "per-function points group anchored"
+        );
+    }
+
+    #[test]
+    fn function_names_html_escaped() {
+        // A name with HTML metacharacters must be escaped wherever it's shown.
+        // (wat allows arbitrary quoted ids.)
+        let r = analyze_wat("(module (func $\"<x>\" (export \"e\") nop))");
+        let html = render_html(&r, "esc");
+        assert!(!html.contains("<x>"), "raw name not injected");
+        assert!(html.contains("&lt;x&gt;"), "name escaped");
     }
 
     #[test]
