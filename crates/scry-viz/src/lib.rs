@@ -292,7 +292,225 @@ fn render_call_graph(s: &mut String, r: &AnalysisResult) {
             if e.indirect { "call_indirect" } else { "call" },
         );
     }
-    s.push_str("</tbody></table></section>");
+    s.push_str("</tbody></table>");
+    // FEAT-028: a call-graph DIAGRAM. Inline SVG (self-contained, zero-JS) for
+    // graphs small enough to lay out cleanly; the Mermaid source for any size.
+    render_callgraph_diagram(s, r);
+    s.push_str("</section>");
+}
+
+/// Largest node count we lay out as inline SVG. Above this the SVG would be an
+/// unreadable tangle, so we emit only the Mermaid source (which an external
+/// renderer can lay out).
+const DIAGRAM_SVG_NODE_CAP: usize = 48;
+
+/// FEAT-028: render the call graph as a diagram. Two faithful projections of
+/// the same edges (nothing inferred): an inline SVG (drawn at build time, no
+/// JS, works from `file://`) when the graph is small, plus the Mermaid `graph`
+/// source in a `<details>` for export to any Mermaid renderer (GitHub,
+/// mermaid.live, …). Direct calls are solid, `call_indirect` dashed, and an
+/// unsound-fallback edge is red — matching the table's soundness column.
+fn render_callgraph_diagram(s: &mut String, r: &AnalysisResult) {
+    // Collect the directed edges (caller → each resolved target) and the node
+    // set. An indirect site with no resolved target contributes no edge.
+    let mut edges: Vec<DiagramEdge> = Vec::new();
+    let mut nodes: Vec<u32> = Vec::new();
+    let push_node = |nodes: &mut Vec<u32>, n: u32| {
+        if !nodes.contains(&n) {
+            nodes.push(n);
+        }
+    };
+    for e in &r.call_graph {
+        for &t in &e.resolved_targets {
+            push_node(&mut nodes, e.caller_func);
+            push_node(&mut nodes, t);
+            edges.push(DiagramEdge {
+                from: e.caller_func,
+                to: t,
+                indirect: e.indirect,
+                unsound: matches!(e.soundness, SoundnessTag::UnsoundFallback),
+            });
+        }
+    }
+    nodes.sort_unstable();
+    if nodes.is_empty() {
+        s.push_str(
+            "<p class=\"muted\">No resolved call edges to diagram (any indirect \
+             sites had no resolved targets).</p>",
+        );
+        return;
+    }
+
+    s.push_str("<h3 class=\"fn-points\">Call-graph diagram</h3>");
+    if nodes.len() <= DIAGRAM_SVG_NODE_CAP {
+        render_callgraph_svg(s, r, &nodes, &edges);
+    } else {
+        let _ = write!(
+            s,
+            "<p class=\"muted\">{} functions — too large to lay out inline; \
+             use the Mermaid source below.</p>",
+            nodes.len(),
+        );
+    }
+    // Mermaid source (always) — copy into any Mermaid renderer.
+    s.push_str(
+        "<details><summary>Mermaid source</summary>\
+         <pre class=\"mermaid-src\">",
+    );
+    s.push_str(&esc(&mermaid_source(r, &nodes, &edges)));
+    s.push_str("</pre></details>");
+}
+
+struct DiagramEdge {
+    from: u32,
+    to: u32,
+    indirect: bool,
+    unsound: bool,
+}
+
+/// Mermaid `graph LR` text for the call graph. Node ids are `n{idx}`; labels
+/// are `idx name`. Direct edges `-->`, indirect `-.->`. (Mermaid does its own
+/// layout; this is the export/large-graph path.)
+fn mermaid_source(r: &AnalysisResult, nodes: &[u32], edges: &[DiagramEdge]) -> String {
+    let mut m = String::from("graph LR\n");
+    for &n in nodes {
+        // Mermaid labels go in quotes; drop any quotes in the name to keep the
+        // label well-formed (the whole block is additionally HTML-escaped).
+        let label = match fn_meta(r, n).and_then(|x| x.name.as_deref()) {
+            Some(name) => format!("{n} {}", name.replace('"', "")),
+            None => format!("{n}"),
+        };
+        let _ = writeln!(m, "  n{n}[\"{label}\"]", label = label);
+    }
+    for e in edges {
+        let arrow = if e.indirect { "-.->" } else { "-->" };
+        let _ = writeln!(m, "  n{} {arrow} n{}", e.from, e.to);
+    }
+    m
+}
+
+/// A layered inline-SVG drawing of the call graph: longest-path layering
+/// (cycles bounded), columns left→right, nodes stacked within a column, edges
+/// as bezier curves. Self-contained, no JS.
+fn render_callgraph_svg(s: &mut String, r: &AnalysisResult, nodes: &[u32], edges: &[DiagramEdge]) {
+    use std::collections::BTreeMap;
+
+    // ── Longest-path layering. layer[n] = longest directed path (in the node
+    // set) ending at n; cycles are naturally bounded by the iteration cap, so
+    // a back-edge simply doesn't push its target further right. ──
+    let mut layer: BTreeMap<u32, u32> = nodes.iter().map(|&n| (n, 0u32)).collect();
+    for _ in 0..nodes.len() {
+        let mut changed = false;
+        for e in edges {
+            if e.from == e.to {
+                continue; // self-loop: no layer effect
+            }
+            let want = layer[&e.from] + 1;
+            if let Some(l) = layer.get_mut(&e.to)
+                && *l < want
+            {
+                *l = want;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Group nodes by layer (column); order within a column by func index.
+    let mut columns: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for &n in nodes {
+        columns.entry(layer[&n]).or_default().push(n);
+    }
+
+    // Geometry.
+    const COL_W: u32 = 200;
+    const ROW_H: u32 = 44;
+    const BOX_W: u32 = 160;
+    const BOX_H: u32 = 26;
+    const MARGIN: u32 = 16;
+    let n_cols = columns.keys().max().copied().unwrap_or(0) + 1;
+    let max_rows = columns.values().map(|c| c.len()).max().unwrap_or(1) as u32;
+    let width = MARGIN * 2 + n_cols * COL_W;
+    let height = MARGIN * 2 + max_rows.max(1) * ROW_H;
+
+    // Node centre coordinates.
+    let mut pos: BTreeMap<u32, (u32, u32)> = BTreeMap::new();
+    for (&col, members) in &columns {
+        for (row, &n) in members.iter().enumerate() {
+            let x = MARGIN + col * COL_W;
+            let y = MARGIN + row as u32 * ROW_H;
+            pos.insert(n, (x, y));
+        }
+    }
+
+    let _ = write!(
+        s,
+        "<svg class=\"cg\" viewBox=\"0 0 {width} {height}\" width=\"{width}\" \
+         height=\"{height}\" role=\"img\" aria-label=\"call graph\">",
+    );
+    // Edges first (under nodes). Bezier from right-mid of source to left-mid of
+    // target; a back/level edge (target not strictly to the right) still draws.
+    for e in edges {
+        let (Some(&(fx, fy)), Some(&(tx, ty))) = (pos.get(&e.from), pos.get(&e.to)) else {
+            continue;
+        };
+        let (x1, y1) = (fx + BOX_W, fy + BOX_H / 2);
+        let (x2, y2) = (tx, ty + BOX_H / 2);
+        let mx = (x1 + x2) / 2;
+        let mut cls = String::from("e");
+        if e.indirect {
+            cls.push_str(" ind");
+        }
+        if e.unsound {
+            cls.push_str(" uns");
+        }
+        let _ = write!(
+            s,
+            "<path class=\"{cls}\" d=\"M{x1},{y1} C{mx},{y1} {mx},{y2} {x2},{y2}\"/>",
+        );
+    }
+    // Nodes.
+    for &n in nodes {
+        let (x, y) = pos[&n];
+        let meta = fn_meta(r, n);
+        let mut cls = String::from("nd");
+        if meta.map(|m| m.imported).unwrap_or(false) {
+            cls.push_str(" imp");
+        }
+        if meta.map(|m| !m.exports.is_empty()).unwrap_or(false) {
+            cls.push_str(" exp");
+        }
+        let label = match meta.and_then(|m| m.name.as_deref()) {
+            Some(name) => format!("{n} {name}"),
+            None => format!("{n}"),
+        };
+        let shown = truncate_label(&label, 20);
+        let _ = write!(
+            s,
+            "<g class=\"{cls}\"><title>{}</title>\
+             <rect x=\"{x}\" y=\"{y}\" width=\"{BOX_W}\" height=\"{BOX_H}\" rx=\"4\"/>\
+             <text x=\"{tx}\" y=\"{ty}\">{}</text></g>",
+            esc(&label),
+            esc(&shown),
+            tx = x + 8,
+            ty = y + BOX_H / 2 + 4,
+        );
+    }
+    s.push_str("</svg>");
+}
+
+/// Truncate a label to `max` chars with an ellipsis (the full name stays in the
+/// SVG `<title>` tooltip).
+fn truncate_label(label: &str, max: usize) -> String {
+    if label.chars().count() <= max {
+        label.to_string()
+    } else {
+        let mut out: String = label.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
 }
 
 fn render_diagnostics(s: &mut String, diags: &[Diagnostic]) {
@@ -469,6 +687,18 @@ const STYLE: &str = "<style>\
     h3.fn-points{font-size:14px;margin:22px 0 4px;scroll-margin-top:8px}\
     tr[id^=\"fn-\"]{scroll-margin-top:8px}\
     .backref{font-size:11px;font-weight:400;text-decoration:none;color:var(--muted)}\
+    svg.cg{max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px;\
+    background:#fff;margin:6px 0}\
+    svg.cg .nd rect{fill:#fafafa;stroke:#bbb}\
+    svg.cg .nd.imp rect{fill:#eef4ff;stroke:#cdd9f0}\
+    svg.cg .nd.exp rect{stroke:#0a7d33;stroke-width:1.5}\
+    svg.cg .nd text{font:12px ui-monospace,Menlo,monospace;fill:var(--fg)}\
+    svg.cg .e{fill:none;stroke:#999;stroke-width:1.3}\
+    svg.cg .e.ind{stroke-dasharray:5 4}\
+    svg.cg .e.uns{stroke:var(--err);stroke-width:1.6}\
+    pre.mermaid-src{background:var(--code);padding:10px;border-radius:4px;overflow:auto;\
+    font-size:12px;white-space:pre}\
+    details{margin:6px 0}summary{cursor:pointer;color:var(--muted);font-size:13px}\
     .cards{list-style:none;padding:0;display:grid;gap:12px;max-width:640px}\
     .cards li{border:1px solid var(--line);border-radius:6px;padding:14px 16px}\
     .cards a{font-size:16px;text-decoration:none}.cards a:hover{text-decoration:underline}\
@@ -619,6 +849,42 @@ mod tests {
             html.contains("id=\"pts-1\""),
             "per-function points group anchored"
         );
+    }
+
+    #[test]
+    fn renders_callgraph_diagram_svg_and_mermaid() {
+        // FEAT-028: $compute calls $helper → one resolved edge. The diagram is
+        // small, so we get inline SVG + a Mermaid source block.
+        let r = analyze_wat(
+            "(module (func $compute (export \"run\") (result i32) call $helper i32.const 7) \
+             (func $helper nop))",
+        );
+        let html = render_html(&r, "diagram");
+        assert!(
+            html.contains("Call-graph diagram"),
+            "diagram section present"
+        );
+        // Inline SVG, self-contained (no <script>, no external src=).
+        assert!(html.contains("<svg class=\"cg\""), "inline SVG drawn");
+        assert!(!html.contains("<script"), "no JavaScript");
+        assert!(!html.contains("src=\"http"), "no external assets");
+        // Nodes carry the resolved names; the edge is in the Mermaid source.
+        assert!(html.contains("Mermaid source"), "mermaid export present");
+        assert!(html.contains("graph LR"), "mermaid graph definition");
+        assert!(
+            html.contains("--&gt;"),
+            "a direct edge in the (escaped) mermaid source"
+        );
+    }
+
+    #[test]
+    fn callgraph_diagram_handles_no_resolved_edges() {
+        // A lone function with no calls → no edges → an honest note, no SVG,
+        // no panic.
+        let r = analyze_wat("(module (func (export \"run\") nop))");
+        let html = render_html(&r, "noedges");
+        assert!(html.contains("No call edges.") || html.contains("No resolved call edges"));
+        assert!(html.ends_with("</html>"));
     }
 
     #[test]

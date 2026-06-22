@@ -22,7 +22,7 @@ path = "src/main.rs"
 # The only dependency: the published analyzer library. scry-viz is a plain
 # `std` host tool, so it can read the `AnalysisResult` plain-Rust types and
 # render them — no WIT, no component, no wasmtime.
-scry-sai-core = { path = "../scry-analyze-core", version = "1.16.0" }
+scry-sai-core = { path = "../scry-analyze-core", version = "1.17.0" }
 # Assemble `.wat` inputs to module bytes (so the CLI accepts both .wat and
 # .wasm); host-only, same dep the test harness uses.
 wat = { workspace = true }

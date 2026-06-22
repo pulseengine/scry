@@ -22,7 +22,10 @@ assets) with:
   frame · worst-case stack · program-point count. Rows are anchored.
 - **Call graph** — caller · pc · `call`/`call_indirect` · resolved targets ·
   soundness tag. Caller and targets are **named links** (`1 compute →
-  2 helper`) that jump to the function's row.
+  2 helper`) that jump to the function's row. Plus a **diagram**: an inline SVG
+  (zero-JS, layered layout, named nodes, edges styled by direct/indirect/
+  soundness) for small graphs, and the **Mermaid source** in a `<details>`
+  block for any size (paste into GitHub / mermaid.live).
 - **Diagnostics** — severity · `fn:pc` · message.
 - **Program points** — **grouped per function** under an anchored heading
   (`func 1 · compute`): for each visited `pc`, the abstract `locals` *and* the

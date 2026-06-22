@@ -1434,6 +1434,41 @@ artifacts:
       - type: traces-to
         target: G-005
 
+  - id: FEAT-028
+    type: feature
+    title: "v1.x — Call-graph diagram in scry-viz (inline SVG + Mermaid source)"
+    status: proposed
+    description: >
+      The FEAT-024 slice-2 call-graph diagram. Render the call graph visually,
+      two faithful projections of the same edges (nothing inferred):
+        * an inline **SVG** drawn at build time (zero-JS, self-contained, works
+          from `file://` — the scry-viz posture), with a longest-path layered
+          layout (columns left→right, cycles bounded), named nodes (FEAT-027),
+          import/export node styling, and edge styling matching the table's
+          soundness column (direct solid, `call_indirect` dashed, unsound-
+          fallback red). Rendered only when the node count is small enough to
+          lay out cleanly (a fixed cap);
+        * the **Mermaid `graph LR` source** in a `<details>` block, for any size
+          — pasteable into any Mermaid renderer (GitHub, mermaid.live), the
+          large-graph path when the inline SVG is skipped.
+      No JavaScript, no external assets — consistent with REQ-013. An indirect
+      site with no resolved target contributes no edge (and is noted).
+    tags: [capability, visualization, call-graph, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a module whose call graph is within the node cap, When scry-viz renders it, Then the page contains an inline SVG of the call graph with named nodes and edges styled by direct/indirect/soundness — and no <script> tag or external asset reference."
+        - "Given any module, When scry-viz renders it, Then a Mermaid `graph LR` source for the call graph is emitted (used as the sole diagram above the node cap); a graph with no resolved edges renders an honest note rather than an empty/!broken diagram."
+    links:
+      - type: satisfies
+        target: REQ-013
+      - type: depends-on
+        target: FEAT-024
+      - type: depends-on
+        target: FEAT-027
+      - type: traces-to
+        target: G-005
+
   # ──────────────────────────────────────────────────────────────────────
   # Safety goal for the v2.0 qualification milestone.
   # ──────────────────────────────────────────────────────────────────────

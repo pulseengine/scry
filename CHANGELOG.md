@@ -7,6 +7,32 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.17.0] — 2026-06-22
+
+Headline: **a call-graph diagram in the dashboard (FEAT-028)** — the FEAT-024
+slice-2 visualization, self-contained and zero-JS.
+
+### Added — FEAT-028 (REQ-013)
+
+- `scry-viz` renders the call graph as a **diagram**, two faithful projections
+  of the same edges:
+  - an **inline SVG** drawn at build time (no JavaScript, no external assets,
+    works from `file://`) with a longest-path layered layout (columns
+    left→right, cycles bounded), **named nodes** (FEAT-027), import/export node
+    styling, and edges styled to match the table's soundness column — direct
+    solid, `call_indirect` dashed, unsound-fallback red. Drawn when the graph
+    is within a node cap;
+  - the **Mermaid `graph LR` source** in a `<details>` block for any size —
+    pasteable into GitHub / mermaid.live; the sole diagram above the cap.
+- A graph with no resolved edges renders an honest note (e.g. all indirect
+  sites unresolved) rather than an empty/broken diagram.
+
+### Posture
+
+- Still a faithful rendering and still self-contained: the diagram draws only
+  the analyzer's resolved edges, infers nothing, and adds no JS or external
+  asset (consistent with the FEAT-024 / FEAT-026 dashboard).
+
 ## [1.16.0] — 2026-06-21
 
 Headline: **human-readable function names + structure in the analysis output
