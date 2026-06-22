@@ -1397,6 +1397,43 @@ artifacts:
       - type: traces-to
         target: G-005
 
+  - id: FEAT-027
+    type: feature
+    title: "v1.x — Human-readable function metadata (names + kind) on AnalysisResult, surfaced in scry-viz"
+    status: proposed
+    description: >
+      Resolve every function index to human-readable metadata so consumers can
+      show `$compute` instead of `func 1`. A library capability (helps synth's
+      footprint report too), surfaced in the visualization (FEAT-024).
+
+      Core (`scry-sai-core`): an additive `AnalysisResult.function_meta:
+      Vec<FunctionMeta>` (one per index, imports + defined, sorted). Each
+      `FunctionMeta` carries a best-effort `name` resolved in priority order —
+      custom `name` section → export name → import `module.field` → `None` — an
+      `imported` flag, and the `exports` names. Parsed from the `name` custom
+      section (best-effort; malformed entries skipped) plus the import/export
+      sections already read. Library-only (no WIT mirror change).
+
+      Viz rework (`scry-viz`): the Functions table gains name + kind badges
+      (import / export "x" / defined) + a per-function program-point count;
+      rows are anchored. The call graph resolves caller/target indices to named
+      links (`1 compute → 2 helper`). The program points are grouped into
+      per-function anchored subsections ("where they sit") instead of one flat
+      table. Names are HTML-escaped like all other untrusted text.
+    tags: [capability, visualization, interop, readability, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a module with a name section / exports / imports, When scry analyzes it, Then AnalysisResult.function_meta has one entry per function index (imports + defined, sorted) whose name resolves in priority order name-section → export → import, with imported flag and export names; a module with none yields name = None."
+        - "Given that metadata, When scry-viz renders it, Then function rows show the name + kind badges, the call graph shows named links to anchored function rows, and program points are grouped per function — and every rendered name is HTML-escaped."
+    links:
+      - type: satisfies
+        target: REQ-013
+      - type: depends-on
+        target: FEAT-024
+      - type: traces-to
+        target: G-005
+
   # ──────────────────────────────────────────────────────────────────────
   # Safety goal for the v2.0 qualification milestone.
   # ──────────────────────────────────────────────────────────────────────

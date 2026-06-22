@@ -7,6 +7,35 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.16.0] — 2026-06-21
+
+Headline: **human-readable function names + structure in the analysis output
+and the dashboard (FEAT-027).** `func 42` becomes `$compute` / `"run"` /
+`env.malloc`, and the dashboard groups invariants by function with cross-links.
+
+### Added — FEAT-027 (REQ-013)
+
+- **Core (`scry-sai-core`):** `AnalysisResult.function_meta: Vec<FunctionMeta>`
+  — one entry per function index (imports + defined, sorted), each with a
+  best-effort `name` (resolved **custom `name` section → export name → import
+  `module.field` → `None`**), an `imported` flag, and `exports` names. Parsed
+  from the wasm `name` custom section (best-effort; malformed entries skipped)
+  plus the import/export sections. A library win for any consumer (synth's
+  footprint report reads `$compute`, not `func 42`). Library-only — the WIT
+  mirror is unchanged; the wasm wrapper ignores the field.
+- **Viz (`scry-sai-viz`):** the Functions table gains **name** + **kind badges**
+  (import / `export "run"` / defined) + a per-function **program-point count**;
+  rows are anchored. The **call graph** resolves caller/target indices to named
+  links (`1 compute → 2 helper`) that jump to the function's row. **Program
+  points are grouped into per-function anchored subsections** ("where they
+  sit") instead of one flat table. All names are HTML-escaped.
+
+### Posture
+
+- Additive 1.x field (SemVer-compatible). The viz remains a faithful rendering;
+  names are a verbatim projection of the `name`/export/import sections, never
+  inferred.
+
 ## [1.15.0] — 2026-06-21
 
 Headline: **the scry verification dashboard is published to GitHub Pages
