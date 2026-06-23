@@ -1469,6 +1469,104 @@ artifacts:
       - type: traces-to
         target: G-005
 
+  - id: FEAT-029
+    type: feature
+    title: "v1.x — Demangle function names + long-name handling in scry-viz"
+    status: proposed
+    description: >
+      Make the wasm `name`-section symbols readable in the visualization.
+      Compiler-emitted names are mangled (scry's own module: 1242 legacy `_ZN…`
+      + 803 v0 `_R…`); scry-viz now DECODES them for display — Rust legacy and
+      v0 via rustc-demangle (hash stripped), Itanium C++ (`_Z…`) via
+      cpp_demangle — and shows a small language tag (`rust`/`c++`) ONLY when a
+      demangler accepted the symbol (a plain/C name is left as-is and gets no
+      language guess). Demangling is deterministic decoding, not inference; the
+      exact raw symbol is always preserved on hover, so nothing is hidden.
+
+      Long names (demangled C++/Rust get long) are handled in place: a CSS
+      ellipsis (`.nm`) shortens the name in tables/headings with the full
+      demangled name + raw symbol available via the `title` hover; short names
+      are unaffected. In the SVG diagram the box shows a truncated name with the
+      full form in the SVG `<title>`. Presentation-only — `scry-sai-core`'s
+      `function_meta.name` stays the raw symbol (a consumer demangles if it
+      wants), keeping the no_std core dependency-free.
+    tags: [capability, visualization, readability, demangle, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a function whose name-section symbol is Rust (legacy `_ZN…E` or v0 `_R…`) or Itanium C++ (`_Z…`), When scry-viz renders it, Then the demangled (hash-stripped) name is shown with a language tag and the raw symbol preserved on hover; a plain/un-mangled name is shown unchanged with no language tag."
+        - "Given a long (demangled) name, When scry-viz renders it in a table or heading, Then it is shortened in place (CSS ellipsis) with the complete name available on hover — and every demangled name is HTML-escaped."
+    links:
+      - type: satisfies
+        target: REQ-013
+      - type: depends-on
+        target: FEAT-027
+      - type: traces-to
+        target: G-005
+
+  - id: FEAT-030
+    type: feature
+    title: "v1.x — Render taint findings + component provenance in scry-viz"
+    status: proposed
+    description: >
+      Surface the two `AnalysisResult` sections scry-viz previously dropped
+      (a clean-room/field-report finding, pulseengine.eu#95): the taint
+      (noninterference) findings (FEAT-009) and the component-provenance origin
+      map (FEAT-002). Each is a faithful, HTML-escaped projection. A taint
+      finding shows func:pc, flow kind (explicit/implicit), source→sink security
+      labels (High/Low), and message; provenance shows the meld fusion origin
+      map (fused func → component id → original func). Both are rendered ONLY
+      when present (the CLI runs with no taint policy and most modules carry no
+      provenance section), so the common page stays uncluttered while the data
+      is surfaced whenever it exists.
+    tags: [capability, visualization, taint, provenance, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given an AnalysisResult with taint findings, When scry-viz renders it, Then a Taint-findings section lists each finding (func:pc, explicit/implicit, High→Low labels, message), HTML-escaped; given none, no section is emitted."
+        - "Given an AnalysisResult with component provenance, When scry-viz renders it, Then a Provenance section lists the fusion origin map; given no provenance, no section is emitted."
+    links:
+      - type: satisfies
+        target: REQ-013
+      - type: depends-on
+        target: FEAT-024
+      - type: traces-to
+        target: FEAT-009
+      - type: traces-to
+        target: FEAT-002
+      - type: traces-to
+        target: G-005
+
+  - id: FEAT-031
+    type: feature
+    title: "v1.x — Gated self-analysis robustness check (FEAT-025 slice-2)"
+    status: proposed
+    description: >
+      Promote the self-analysis dogfood (FEAT-025) from an artifact to a LIVE
+      GATE. A `scry-viz check <module>` subcommand runs structural
+      well-formedness checks on the `AnalysisResult` — invariants the analyzer
+      must always satisfy regardless of input: no inverted `[lo,hi]` interval
+      (in locals / operand stack / function-summary results / region offsets),
+      a 64-hex `module_sha256`, gapless index-ordered `function_meta`, and a
+      sorted `reachable_from_exports` — and exits non-zero on any violation.
+      Wired into CI (the MC/DC job, which already builds scry's own
+      `scry_mcdc.wasm`) and the release publish-pages step, so a structural
+      regression on a real, large, compiler-emitted module turns the build red.
+      This is STRUCTURAL validation (a scry-bug tripwire), explicitly NOT a
+      soundness oracle — soundness remains the host tests' and proofs' job.
+    tags: [capability, dogfood, ci, robustness, v1.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given scry's own compiled module, When CI runs `scry-viz check` on it, Then the analysis-result passes the structural well-formedness checks (build green); an injected violation (e.g. an inverted interval) is detected and exits non-zero."
+    links:
+      - type: depends-on
+        target: FEAT-024
+      - type: depends-on
+        target: FEAT-025
+      - type: traces-to
+        target: G-005
+
   # ──────────────────────────────────────────────────────────────────────
   # Safety goal for the v2.0 qualification milestone.
   # ──────────────────────────────────────────────────────────────────────

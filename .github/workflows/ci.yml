@@ -307,6 +307,15 @@ jobs:
       # robustness oracle — a panic / error analyzing a real, large,
       # compiler-emitted module turns the build red, where the tiny fixtures
       # cannot reach.
+      # FEAT-031 (FEAT-025 slice-2): a LIVE robustness GATE — analyze scry's own
+      # module and assert the result is structurally well-formed (no inverted
+      # interval, 64-hex sha, gapless function metadata, sorted reachable set).
+      # A violation is a scry bug and turns the build red (exit 5). This runs
+      # before the render so a malformed result fails loudly, not silently.
+      - name: Dogfood gate — scry-viz check on scry's own module (FEAT-031)
+        run: |
+          cargo run --release -p scry-sai-viz -- check \
+            crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm
       - name: Dogfood — scry-viz on scry's own module (FEAT-025)
         run: |
           cargo run --release -p scry-sai-viz -- \
