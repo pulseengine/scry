@@ -450,11 +450,16 @@ struct DiagramEdge {
 fn mermaid_source(r: &AnalysisResult, nodes: &[u32], edges: &[DiagramEdge]) -> String {
     let mut m = String::from("graph LR\n");
     for &n in nodes {
-        // Mermaid labels go in quotes; use the demangled name and drop any
-        // quotes/newlines to keep the `["…"]` label well-formed (the whole
-        // block is additionally HTML-escaped before it enters the <pre>).
+        // Mermaid labels go in quotes; use the demangled name and sanitize the
+        // few chars that break the `["…"]` label — drop quotes/newlines and map
+        // square brackets (common in demangled types like `[u8; 4]`, which
+        // would prematurely close the label) to parens. The whole block is
+        // additionally HTML-escaped before it enters the <pre>.
         let label = match fn_meta(r, n).and_then(|x| x.name.as_deref()) {
-            Some(name) => format!("{n} {}", demangle(name).display.replace(['"', '\n'], "")),
+            Some(name) => {
+                let d = demangle(name).display.replace(['"', '\n'], "");
+                format!("{n} {}", d.replace('[', "(").replace(']', ")"))
+            }
             None => format!("{n}"),
         };
         let _ = writeln!(m, "  n{n}[\"{label}\"]", label = label);
