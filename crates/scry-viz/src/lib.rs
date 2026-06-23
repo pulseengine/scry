@@ -31,7 +31,7 @@ use core::fmt::Write as _;
 
 use scry_analyze_core::{
     AbstractValue, AnalysisResult, Diagnostic, DiagnosticSeverity, FunctionMeta, FunctionStack,
-    Interval, Region, SoundnessTag, StackBound,
+    Interval, Region, SecurityLabel, SoundnessTag, StackBound, TaintFindingKind,
 };
 
 /// FEAT-027: metadata for one function index, if scry resolved any.
@@ -39,11 +39,80 @@ fn fn_meta(r: &AnalysisResult, idx: u32) -> Option<&FunctionMeta> {
     r.function_meta.iter().find(|m| m.func_index == idx)
 }
 
+/// FEAT-029: a name resolved for display — the demangled (human-readable) form,
+/// the exact raw symbol, and a best-guess source language. Demangling is
+/// deterministic *decoding*; the language is only a guess, so it's set ONLY
+/// when a demangler actually accepted the symbol, and `raw` is always kept so
+/// the hover can show the exact source string (nothing is hidden).
+struct Shown {
+    display: String,
+    raw: String,
+    lang: Option<&'static str>,
+}
+
+/// Demangle a wasm-`name`-section symbol: Rust legacy (`_ZN…E`) and v0 (`_R…`)
+/// via rustc-demangle (hash stripped with the `{:#}` formatter), Itanium C++
+/// (`_Z…`) via cpp_demangle. A plain/C name matches neither and is returned
+/// unchanged with no language.
+fn demangle(raw: &str) -> Shown {
+    if let Ok(d) = rustc_demangle::try_demangle(raw) {
+        return Shown {
+            display: format!("{d:#}"),
+            raw: raw.to_string(),
+            lang: Some("rust"),
+        };
+    }
+    if let Ok(sym) = cpp_demangle::Symbol::new(raw)
+        && let Ok(d) = sym.demangle()
+    {
+        return Shown {
+            display: d,
+            raw: raw.to_string(),
+            lang: Some("c++"),
+        };
+    }
+    Shown {
+        display: raw.to_string(),
+        raw: raw.to_string(),
+        lang: None,
+    }
+}
+
+/// FEAT-029: render a name for a table cell / heading — the demangled text in a
+/// CSS-ellipsized span whose `title` (hover) carries the full demangled name
+/// and, when it differs, the raw mangled symbol. Everything HTML-escaped, so a
+/// long name is shortened in place with the complete form one hover away.
+fn name_span(sh: &Shown) -> String {
+    let title = if sh.display != sh.raw {
+        format!("{}\n[symbol] {}", sh.display, sh.raw)
+    } else {
+        sh.display.clone()
+    };
+    format!(
+        "<span class=\"nm\" title=\"{}\">{}</span>",
+        esc(&title),
+        esc(&sh.display),
+    )
+}
+
+/// A small language tag (`rust` / `c++`) shown only when demangling identified
+/// the source language. Empty otherwise — we do not guess a language for an
+/// un-mangled (e.g. C / hand-written) name.
+fn lang_badge(sh: &Shown) -> String {
+    match sh.lang {
+        Some(l) => format!("<span class=\"badge lang\">{l}</span> "),
+        None => String::new(),
+    }
+}
+
 /// A function reference as a link to its row in the Functions table, showing
-/// the resolved name when there is one: `42 $compute` (or just `42`).
+/// the demangled name when there is one: `42 compute` (or just `42`).
 fn fn_link(r: &AnalysisResult, idx: u32) -> String {
     match fn_meta(r, idx).and_then(|m| m.name.as_deref()) {
-        Some(n) => format!("<a href=\"#fn-{idx}\">{idx} <code>{}</code></a>", esc(n)),
+        Some(n) => format!(
+            "<a href=\"#fn-{idx}\">{idx} {}</a>",
+            name_span(&demangle(n))
+        ),
         None => format!("<a href=\"#fn-{idx}\">{idx}</a>"),
     }
 }
@@ -87,6 +156,8 @@ pub fn render_html(result: &AnalysisResult, title: &str) -> String {
     render_functions(&mut s, result);
     render_call_graph(&mut s, result);
     render_diagnostics(&mut s, &result.diagnostics);
+    render_taint(&mut s, result);
+    render_provenance(&mut s, result);
     render_points(&mut s, result);
 
     s.push_str(
@@ -231,10 +302,14 @@ fn render_functions(s: &mut String, r: &AnalysisResult) {
         let maxs = stack
             .map(|f| stack_bound(&f.max_stack))
             .unwrap_or_else(|| "?".into());
-        let name = match meta.and_then(|m| m.name.as_deref()) {
-            Some(n) => format!("<code>{}</code>", esc(n)),
+        // FEAT-029: demangle for display; the raw symbol stays on hover, and a
+        // language tag rides in the kind column when a demangler identified it.
+        let shown = meta.and_then(|m| m.name.as_deref()).map(demangle);
+        let name = match &shown {
+            Some(sh) => name_span(sh),
             None => "<span class=\"muted\">—</span>".to_string(),
         };
+        let lang = shown.as_ref().map(lang_badge).unwrap_or_default();
         let n_points = r
             .invariants
             .points
@@ -248,8 +323,9 @@ fn render_functions(s: &mut String, r: &AnalysisResult) {
         };
         let _ = write!(
             s,
-            "<tr id=\"fn-{idx}\"><td>{idx}</td><td>{name}</td><td>{}</td><td>{}</td>\
+            "<tr id=\"fn-{idx}\"><td>{idx}</td><td>{name}</td><td>{}{}</td><td>{}</td>\
              <td>{}</td><td>{params}</td><td>{frame}</td><td>{maxs}</td><td>{points_cell}</td></tr>",
+            lang,
             kind_badges(meta),
             yesno(reachable),
             yesno(recursive),
@@ -374,10 +450,16 @@ struct DiagramEdge {
 fn mermaid_source(r: &AnalysisResult, nodes: &[u32], edges: &[DiagramEdge]) -> String {
     let mut m = String::from("graph LR\n");
     for &n in nodes {
-        // Mermaid labels go in quotes; drop any quotes in the name to keep the
-        // label well-formed (the whole block is additionally HTML-escaped).
+        // Mermaid labels go in quotes; use the demangled name and sanitize the
+        // few chars that break the `["…"]` label — drop quotes/newlines and map
+        // square brackets (common in demangled types like `[u8; 4]`, which
+        // would prematurely close the label) to parens. The whole block is
+        // additionally HTML-escaped before it enters the <pre>.
         let label = match fn_meta(r, n).and_then(|x| x.name.as_deref()) {
-            Some(name) => format!("{n} {}", name.replace('"', "")),
+            Some(name) => {
+                let d = demangle(name).display.replace(['"', '\n'], "");
+                format!("{n} {}", d.replace('[', "(").replace(']', ")"))
+            }
             None => format!("{n}"),
         };
         let _ = writeln!(m, "  n{n}[\"{label}\"]", label = label);
@@ -482,9 +564,19 @@ fn render_callgraph_svg(s: &mut String, r: &AnalysisResult, nodes: &[u32], edges
         if meta.map(|m| !m.exports.is_empty()).unwrap_or(false) {
             cls.push_str(" exp");
         }
-        let label = match meta.and_then(|m| m.name.as_deref()) {
-            Some(name) => format!("{n} {name}"),
-            None => format!("{n}"),
+        // FEAT-029: box shows the (truncated) demangled name; the SVG <title>
+        // hover carries the full demangled name plus the raw symbol.
+        let (label, title) = match meta.and_then(|m| m.name.as_deref()) {
+            Some(name) => {
+                let sh = demangle(name);
+                let title = if sh.display != sh.raw {
+                    format!("{n} {}\n[symbol] {}", sh.display, sh.raw)
+                } else {
+                    format!("{n} {}", sh.display)
+                };
+                (format!("{n} {}", sh.display), title)
+            }
+            None => (format!("{n}"), format!("{n}")),
         };
         let shown = truncate_label(&label, 20);
         let _ = write!(
@@ -492,7 +584,7 @@ fn render_callgraph_svg(s: &mut String, r: &AnalysisResult, nodes: &[u32], edges
             "<g class=\"{cls}\"><title>{}</title>\
              <rect x=\"{x}\" y=\"{y}\" width=\"{BOX_W}\" height=\"{BOX_H}\" rx=\"4\"/>\
              <text x=\"{tx}\" y=\"{ty}\">{}</text></g>",
-            esc(&label),
+            esc(&title),
             esc(&shown),
             tx = x + 8,
             ty = y + BOX_H / 2 + 4,
@@ -538,6 +630,76 @@ fn render_diagnostics(s: &mut String, diags: &[Diagnostic]) {
     s.push_str("</ul></section>");
 }
 
+/// FEAT-030: taint (noninterference) findings. Rendered only when there ARE
+/// findings — the scry-viz CLI runs with no taint policy, so the common case is
+/// empty and a section would be noise; when present, each finding is a faithful
+/// projection (escaped). A finding means a High (secret-dependent) value
+/// reached a Low (public) sink.
+fn render_taint(s: &mut String, r: &AnalysisResult) {
+    if r.taint_findings.is_empty() {
+        return;
+    }
+    s.push_str("<section><h2>Taint findings (noninterference)</h2>");
+    s.push_str(
+        "<table><thead><tr><th>func</th><th>pc</th><th>kind</th>\
+         <th>source → sink</th><th>message</th></tr></thead><tbody>",
+    );
+    for f in &r.taint_findings {
+        let kind = match f.kind {
+            TaintFindingKind::HighResultExplicit => "explicit flow",
+            TaintFindingKind::HighResultImplicit => "implicit flow",
+        };
+        let _ = write!(
+            s,
+            "<tr><td>{}</td><td>{}</td><td><span class=\"badge err\">{kind}</span></td>\
+             <td>{} → {}</td><td>{}</td></tr>",
+            fn_link(r, f.func_index),
+            f.pc,
+            label(&f.source_label),
+            label(&f.sink_label),
+            esc(&f.message),
+        );
+    }
+    s.push_str("</tbody></table></section>");
+}
+
+/// A security label (`High`/`Low`) as a small styled span.
+fn label(l: &SecurityLabel) -> &'static str {
+    match l {
+        SecurityLabel::High => "<span class=\"warn\">High</span>",
+        SecurityLabel::Low => "<span class=\"ok\">Low</span>",
+    }
+}
+
+/// FEAT-030: component provenance (FEAT-002) — the meld fusion origin map.
+/// Rendered only when a `component-provenance` custom section was present and
+/// decoded; absent for a plain Core Wasm module, so no section is emitted then.
+fn render_provenance(s: &mut String, r: &AnalysisResult) {
+    let Some(prov) = &r.provenance else { return };
+    if prov.origins.is_empty() {
+        return;
+    }
+    s.push_str("<section><h2>Component provenance</h2>");
+    s.push_str(
+        "<p class=\"muted\">meld fusion origin map: each fused function traced \
+         to its source component and original index.</p>",
+    );
+    s.push_str(
+        "<table><thead><tr><th>fused func</th><th>component</th>\
+         <th>original func</th></tr></thead><tbody>",
+    );
+    for o in &prov.origins {
+        let _ = write!(
+            s,
+            "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+            fn_link(r, o.fused_func_index),
+            o.component_id,
+            o.orig_func_index,
+        );
+    }
+    s.push_str("</tbody></table></section>");
+}
+
 fn render_points(s: &mut String, r: &AnalysisResult) {
     let points = &r.invariants.points;
     s.push_str("<section><h2>Program points</h2>");
@@ -553,7 +715,7 @@ fn render_points(s: &mut String, r: &AnalysisResult) {
     func_indices.dedup();
     for idx in func_indices {
         let heading = match fn_meta(r, idx).and_then(|m| m.name.as_deref()) {
-            Some(n) => format!("func {idx} · <code>{}</code>", esc(n)),
+            Some(n) => format!("func {idx} · {}", name_span(&demangle(n))),
             None => format!("func {idx}"),
         };
         let _ = write!(
@@ -598,6 +760,78 @@ fn render_points(s: &mut String, r: &AnalysisResult) {
         s.push_str("</tbody></table>");
     }
     s.push_str("</section>");
+}
+
+// ── FEAT-031: well-formedness oracle ───────────────────────────────────────
+
+/// The interval inside an [`AbstractValue`], if it carries one.
+fn interval_of(v: &AbstractValue) -> Option<&Interval> {
+    match v {
+        AbstractValue::I32Interval(iv) | AbstractValue::I64Interval(iv) => Some(iv),
+        AbstractValue::RegionPointer(Region { offset, .. }) => Some(offset),
+        AbstractValue::Unknown => None,
+    }
+}
+
+/// FEAT-031: structural well-formedness checks on an `AnalysisResult` —
+/// invariants the analyzer must ALWAYS satisfy regardless of input. Returns the
+/// list of violations (empty ⇒ well-formed). `scry-viz check` runs this on
+/// scry's OWN compiled module in CI as a robustness gate: a violation is a scry
+/// bug, and fails the build. This is structural validation (e.g. no inverted
+/// `[lo,hi]` interval), NOT a soundness oracle — soundness is the host tests'
+/// and proofs' job.
+pub fn check_wellformed(r: &AnalysisResult) -> Vec<String> {
+    let mut v = Vec::new();
+    if r.invariants.schema.is_empty() {
+        v.push("invariants.schema is empty".to_string());
+    }
+    let sha = &r.invariants.module_sha256;
+    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        v.push(format!("module_sha256 is not 64 hex chars: {sha:?}"));
+    }
+    let check_iv = |whr: String, val: &AbstractValue, out: &mut Vec<String>| {
+        if let Some(iv) = interval_of(val)
+            && iv.lo > iv.hi
+        {
+            out.push(format!("{whr}: inverted interval [{}, {}]", iv.lo, iv.hi));
+        }
+    };
+    for p in &r.invariants.points {
+        for l in &p.locals {
+            check_iv(
+                format!("fn{} pc{} L{}", p.func_index, p.pc, l.local_index),
+                &l.value,
+                &mut v,
+            );
+        }
+        for (i, sv) in p.operand_stack.iter().enumerate() {
+            check_iv(
+                format!("fn{} pc{} stack{i}", p.func_index, p.pc),
+                sv,
+                &mut v,
+            );
+        }
+    }
+    for fs in &r.function_summaries {
+        for (i, sv) in fs.result_summary.iter().enumerate() {
+            check_iv(format!("fn{} result{i}", fs.func_index), sv, &mut v);
+        }
+    }
+    // FEAT-027 metadata must be index-ordered and gapless.
+    for (i, m) in r.function_meta.iter().enumerate() {
+        if m.func_index as usize != i {
+            v.push(format!(
+                "function_meta not gapless/sorted at position {i}: func_index {}",
+                m.func_index
+            ));
+            break;
+        }
+    }
+    // FEAT-022: reachable set is documented sorted ascending.
+    if !r.reachable_from_exports.is_sorted() {
+        v.push("reachable_from_exports is not sorted ascending".to_string());
+    }
+    v
 }
 
 // ── value formatting ─────────────────────────────────────────────────────
@@ -684,6 +918,12 @@ const STYLE: &str = "<style>\
     border:1px solid var(--line);white-space:nowrap}\
     .badge.import{background:#eef4ff;border-color:#cdd9f0}\
     .badge.export{background:#eafaf0;border-color:#c5e8d2}\
+    .badge.lang{background:#f3eefe;border-color:#ddd0f5}\
+    .badge.err{background:#fdecef;border-color:#f3c2cc;color:var(--err)}\
+    .nm{display:inline-block;max-width:42ch;overflow:hidden;text-overflow:ellipsis;\
+    white-space:nowrap;vertical-align:bottom;font-family:ui-monospace,Menlo,monospace;\
+    font-size:12px}\
+    td .nm{max-width:38ch}h3 .nm{max-width:60ch}\
     h3.fn-points{font-size:14px;margin:22px 0 4px;scroll-margin-top:8px}\
     tr[id^=\"fn-\"]{scroll-margin-top:8px}\
     .backref{font-size:11px;font-weight:400;text-decoration:none;color:var(--muted)}\
@@ -888,6 +1128,72 @@ mod tests {
     }
 
     #[test]
+    fn demangles_rust_legacy_v0_and_leaves_plain() {
+        // FEAT-029: name-section symbols (modelled via quoted wat ids) are
+        // demangled for display; a plain name is left as-is with no language.
+        let r = analyze_wat(
+            "(module \
+             (func $\"_ZN9scry_mcdc5drive17h16e8a19d4dbffa6cE\" (export \"a\") nop) \
+             (func $\"_RNvNtCsi9YzqDQQz2q_5alloc3fmt6format\" (export \"b\") nop) \
+             (func $calloc (export \"c\") nop))",
+        );
+        let html = render_html(&r, "demangle");
+        // Rust legacy `_ZN…E` → `scry_mcdc::drive` (hash stripped from the
+        // DISPLAY — the display text ends at the name, no `…17h<hash>` glued
+        // on; the raw symbol with the hash is kept only on hover, below).
+        assert!(html.contains("scry_mcdc::drive"), "rust legacy demangled");
+        assert!(
+            html.contains("scry_mcdc::drive</span>"),
+            "display ends at the demangled name (hash stripped)"
+        );
+        // Rust v0 `_R…` → `alloc::fmt::format`.
+        assert!(html.contains("alloc::fmt::format"), "rust v0 demangled");
+        // A language tag appears for the demangled ones.
+        assert!(html.contains("badge lang\">rust"), "rust language tag");
+        // Plain C-style name is unchanged (and not tagged with a language).
+        assert!(html.contains("calloc"), "plain name preserved");
+        // The raw symbol is preserved on hover (title carries `[symbol] …`).
+        assert!(
+            html.contains("[symbol] _ZN9scry_mcdc5drive"),
+            "raw symbol kept on hover"
+        );
+    }
+
+    #[test]
+    fn demangled_generic_name_is_escaped() {
+        // A Rust generic demangles to a name containing `<…>`; it must be
+        // HTML-escaped wherever shown.
+        let r = analyze_wat(
+            "(module (func \
+             $\"_ZN4core3ptr54drop_in_place$LT$scry_analyze_core..AnalysisResult$GT$17h40256ad9d7a94464E\" \
+             (export \"d\") nop))",
+        );
+        let html = render_html(&r, "generic");
+        assert!(
+            html.contains("drop_in_place&lt;"),
+            "demangled generic angle-brackets escaped"
+        );
+        assert!(!html.contains("drop_in_place<scry"), "no raw < emitted");
+    }
+
+    #[test]
+    fn long_name_uses_ellipsis_class_with_hover() {
+        // Long demangled names are shortened in place (CSS .nm ellipsis) with
+        // the full form in the title hover.
+        let r = analyze_wat(
+            "(module (func \
+             $\"_ZN4core3ptr54drop_in_place$LT$scry_analyze_core..AnalysisResult$GT$17h40256ad9d7a94464E\" \
+             (export \"d\") nop))",
+        );
+        let html = render_html(&r, "long");
+        assert!(
+            html.contains("<span class=\"nm\""),
+            "name uses the ellipsizable .nm span"
+        );
+        assert!(html.contains("title=\""), "full name available on hover");
+    }
+
+    #[test]
     fn function_names_html_escaped() {
         // A name with HTML metacharacters must be escaped wherever it's shown.
         // (wat allows arbitrary quoted ids.)
@@ -895,6 +1201,93 @@ mod tests {
         let html = render_html(&r, "esc");
         assert!(!html.contains("<x>"), "raw name not injected");
         assert!(html.contains("&lt;x&gt;"), "name escaped");
+    }
+
+    #[test]
+    fn renders_taint_findings_when_present() {
+        // FEAT-030: with a taint policy (High param 0 → Low result 0), a
+        // leaking function produces a finding the viz now surfaces.
+        let bytes = wat::parse_str(
+            "(module (func (export \"leak\") (param i32) (result i32) local.get 0))",
+        )
+        .unwrap();
+        let cfg = scry_analyze_core::AnalysisConfig {
+            widening_threshold: Some(3),
+            emit_diagnostics: true,
+            taint_policy: Some(scry_analyze_core::TaintPolicy {
+                high_params: alloc_vec(0),
+                low_results: alloc_vec(0),
+            }),
+        };
+        let r = scry_analyze_core::analyze(bytes, cfg).unwrap();
+        assert!(!r.taint_findings.is_empty(), "policy must yield a finding");
+        let html = render_html(&r, "taint");
+        assert!(html.contains("Taint findings"), "taint section present");
+        assert!(html.contains("explicit flow"), "finding kind shown");
+        assert!(html.contains(">High<"), "source label shown");
+        assert!(html.contains(">Low<"), "sink label shown");
+    }
+
+    fn alloc_vec(x: u32) -> Vec<u32> {
+        vec![x]
+    }
+
+    #[test]
+    fn no_taint_or_provenance_section_when_absent() {
+        // FEAT-030: the common case (no taint policy, plain Core Wasm) shows
+        // neither section — they are surfaced only when present, not as clutter.
+        let r = analyze_wat("(module (func (export \"run\") nop))");
+        let html = render_html(&r, "plain");
+        assert!(
+            !html.contains("Taint findings"),
+            "no taint section when empty"
+        );
+        assert!(
+            !html.contains("Component provenance"),
+            "no provenance section when absent"
+        );
+    }
+
+    #[test]
+    fn check_wellformed_passes_on_real_module() {
+        // FEAT-031: a normally-analyzed module is well-formed — the gate must
+        // not false-positive.
+        for fx in [
+            "fixture-11-var-bound.wat",
+            "fixture-18-operand-stack.wat",
+            "fixture-19-named-functions.wat",
+        ] {
+            let r = analyze_fixture(fx);
+            let v = check_wellformed(&r);
+            assert!(v.is_empty(), "{fx} should be well-formed, got {v:?}");
+        }
+    }
+
+    fn analyze_fixture(name: &str) -> AnalysisResult {
+        let path = format!(
+            "{}/../scry-analyzer/test-fixtures/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let bytes = wat::parse_file(&path).expect("assemble fixture");
+        analyze(bytes, AnalysisConfig::default()).expect("analyze")
+    }
+
+    #[test]
+    fn check_wellformed_flags_an_inverted_interval() {
+        // Inject an impossible interval [5,1] and confirm the gate catches it.
+        let mut r = analyze_wat("(module (func (export \"run\") (result i32) i32.const 7))");
+        let bad = scry_analyze_core::AbstractValue::I32Interval(scry_analyze_core::Interval {
+            lo: 5,
+            hi: 1,
+        });
+        // Attach it to a program point's operand stack.
+        assert!(!r.invariants.points.is_empty());
+        r.invariants.points[0].operand_stack.push(bad);
+        let v = check_wellformed(&r);
+        assert!(
+            v.iter().any(|m| m.contains("inverted interval [5, 1]")),
+            "gate must flag the inverted interval, got {v:?}"
+        );
     }
 
     #[test]

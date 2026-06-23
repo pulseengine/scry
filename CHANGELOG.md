@@ -7,6 +7,49 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.18.0] — 2026-06-23
+
+Headline: **readable demangled names + long-name handling in the dashboard
+(FEAT-029)**, plus two follow-ups — **taint/provenance rendering (FEAT-030)**
+and a **gated self-analysis robustness check (FEAT-031)**.
+
+### Added — FEAT-029 (REQ-013): demangling + long names
+
+- scry-viz now **demangles** the wasm `name`-section symbols for display:
+  Rust legacy (`_ZN…E`) and v0 (`_R…`) via `rustc-demangle` (hash stripped),
+  Itanium C++ (`_Z…`) via `cpp_demangle`. A `rust`/`c++` **language tag** is
+  shown only when a demangler accepted the symbol; a plain/C name is left
+  unchanged and gets no language guess. (scry's own module: `_ZN4core3ptr…
+  drop_in_place$LT$…$GT$17h…E` now reads `core::ptr::drop_in_place<…>`.)
+- Demangling is deterministic *decoding*, not inference — the **raw symbol is
+  always preserved on hover**, so nothing is hidden.
+- **Long names** are shortened in place (CSS ellipsis) with the full demangled
+  name + raw symbol on the `title` hover; short names are unaffected. The core
+  `function_meta.name` stays the raw symbol (presentation-only change).
+
+### Added — FEAT-030 (REQ-013): taint + provenance
+
+- scry-viz renders the two `AnalysisResult` sections it previously dropped,
+  **only when present**: taint (noninterference) findings (func:pc · flow kind ·
+  High→Low labels · message) and the component-provenance fusion origin map.
+  Both faithful, HTML-escaped projections.
+
+### Added — FEAT-031: gated self-analysis robustness check
+
+- A `scry-viz check <module>` subcommand runs structural well-formedness checks
+  on the `AnalysisResult` (no inverted `[lo,hi]` interval; 64-hex sha; gapless
+  `function_meta`; sorted `reachable_from_exports`) and exits non-zero on a
+  violation. Wired into CI (the MC/DC job, on scry's own module) and the
+  release publish-pages step — promoting the FEAT-025 dogfood from an artifact
+  to a **live gate**. Structural validation (a scry-bug tripwire), not a
+  soundness oracle.
+
+### Posture
+
+- All three stay faithful renderings / presentation-only: demangling and the
+  taint/provenance sections add no analysis and infer nothing; the check is
+  structural. No JavaScript, no external assets (scry-viz invariant intact).
+
 ## [1.17.0] — 2026-06-22
 
 Headline: **a call-graph diagram in the dashboard (FEAT-028)** — the FEAT-024

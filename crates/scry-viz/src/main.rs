@@ -15,6 +15,11 @@ use scry_analyze_core::{AnalysisConfig, analyze};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `scry-viz check <module>` is a well-formedness gate (its own exit code,
+    // no file output), so it's dispatched before the file-writing forms.
+    if args.first().map(String::as_str) == Some("check") {
+        return run_check(&args[1..]);
+    }
     // Subcommand dispatch: `scry-viz index ...` builds a landing page; the
     // bare form `scry-viz <input> ...` renders one analysis.
     let result = match args.first().map(String::as_str) {
@@ -30,6 +35,59 @@ fn main() -> ExitCode {
             eprintln!("scry-viz: {}", e.msg);
             ExitCode::from(e.code)
         }
+    }
+}
+
+/// `scry-viz check <input.wasm|input.wat>` — FEAT-031 well-formedness gate.
+/// Analyzes the module and runs `scry_viz::check_wellformed`; prints the
+/// violations and exits non-zero (5) if any, else prints an OK line and exits
+/// 0. Used in CI as a robustness gate on scry's own compiled module.
+fn run_check(args: &[String]) -> ExitCode {
+    let path = match args.iter().find(|a| !a.starts_with('-')) {
+        Some(p) => PathBuf::from(p),
+        None => {
+            eprintln!("scry-viz: usage: scry-viz check <input.wasm|input.wat>");
+            return ExitCode::from(2);
+        }
+    };
+    let bytes = match read_module(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("scry-viz: {}", e.msg);
+            return ExitCode::from(e.code);
+        }
+    };
+    let result = match analyze(
+        bytes,
+        AnalysisConfig {
+            emit_diagnostics: true,
+            ..Default::default()
+        },
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("scry-viz check: analysis failed: {e:?}");
+            return ExitCode::from(3);
+        }
+    };
+    let violations = scry_viz::check_wellformed(&result);
+    if violations.is_empty() {
+        eprintln!(
+            "scry-viz check: OK — {} functions, {} program points, {} call edges well-formed",
+            result.function_meta.len(),
+            result.invariants.points.len(),
+            result.call_graph.len(),
+        );
+        ExitCode::SUCCESS
+    } else {
+        eprintln!(
+            "scry-viz check: {} well-formedness violation(s):",
+            violations.len()
+        );
+        for v in &violations {
+            eprintln!("  - {v}");
+        }
+        ExitCode::from(5)
     }
 }
 

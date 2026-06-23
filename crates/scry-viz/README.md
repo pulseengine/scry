@@ -17,9 +17,15 @@ assets) with:
 - **Summary** — module SHA-256, schema, worst-case shadow-stack bound,
   stack-pointer global, and headline counts.
 - **Functions** — per function: **name** (resolved from the wasm `name`
-  section / export / import) · **kind** badges (import · `export "run"` ·
-  defined) · reachable-from-exports? · recursive? · params · shadow-stack
-  frame · worst-case stack · program-point count. Rows are anchored.
+  section / export / import, and **demangled** for Rust `_ZN…`/`_R…` and C++
+  `_Z…` with a `rust`/`c++` language tag — raw symbol on hover) · **kind**
+  badges (import · `export "run"` · defined) · reachable-from-exports? ·
+  recursive? · params · shadow-stack frame · worst-case stack · program-point
+  count. Rows are anchored; long names are ellipsized with the full name on
+  hover.
+- **Taint findings / Provenance** — shown only when present: noninterference
+  findings (func:pc · explicit/implicit · High→Low · message) and the meld
+  component-provenance fusion origin map.
 - **Call graph** — caller · pc · `call`/`call_indirect` · resolved targets ·
   soundness tag. Caller and targets are **named links** (`1 compute →
   2 helper`) that jump to the function's row. Plus a **diagram**: an inline SVG
@@ -44,6 +50,10 @@ scry-viz module.wasm --title "my firmware"
 # Build a landing page linking the dashboard views present in a site dir
 # (the analogue of `witness-viz pages-index`):
 scry-viz index --site-dir dist --title "scry — verification dashboard"
+
+# Structural well-formedness gate (no inverted intervals, gapless metadata,
+# …) — exits non-zero on a violation. Used in CI on scry's own module.
+scry-viz check module.wasm
 ```
 
 scry uses this to publish a verification dashboard to GitHub Pages on every

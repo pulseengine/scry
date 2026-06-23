@@ -399,6 +399,9 @@ jobs:
       - name: Render scry-viz self-analysis (scry on scry)
         run: |
           set -euo pipefail
+          # FEAT-031 gate first: a malformed self-analysis fails the deploy.
+          cargo run --release -p scry-sai-viz -- check \
+            crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm
           cargo run --release -p scry-sai-viz -- \
             crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm \
             -o "$GITHUB_WORKSPACE/dist/self-analysis.html" \
