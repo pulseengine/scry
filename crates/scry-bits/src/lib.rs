@@ -105,6 +105,41 @@ fn checked_lcm(a: u64, b: u64) -> Option<u64> {
     (a / g).checked_mul(b)
 }
 
+/// `(a * b) mod m`, overflow-free via `u128`.
+#[inline]
+fn mul_mod(a: u64, b: u64, m: u64) -> u64 {
+    debug_assert!(m >= 1);
+    (((a as u128) * (b as u128)) % (m as u128)) as u64
+}
+
+/// Modular inverse of `a` mod `m` (requires `gcd(a, m) == 1`), via the extended
+/// Euclidean algorithm. Returns a value in `[0, m)`. For `m == 1` returns 0
+/// (every element is ≡ 0). Used by the closed-form CRT combine in [`Cong::meet`]
+/// — O(log m), replacing a linear residue search that was O(2^k) on the large
+/// power-of-two moduli the known-bits reduction produces.
+#[inline]
+fn mod_inverse(a: u64, m: u64) -> u64 {
+    if m <= 1 {
+        return 0;
+    }
+    // Extended Euclid over signed i128 to track Bézout coefficients.
+    let (mut old_r, mut r) = (a as i128, m as i128);
+    let (mut old_s, mut s) = (1i128, 0i128);
+    while r != 0 {
+        let q = old_r / r;
+        let nr = old_r - q * r;
+        old_r = r;
+        r = nr;
+        let ns = old_s - q * s;
+        old_s = s;
+        s = ns;
+    }
+    // gcd(a, m) == old_r should be 1 for a valid inverse; the caller guarantees
+    // coprimality. Normalize the coefficient into [0, m).
+    let m_i = m as i128;
+    (((old_s % m_i) + m_i) % m_i) as u64
+}
+
 // ─────────────────────────── known-bits ───────────────────────────
 
 /// Per-bit known-value lattice (LLVM `KnownBits`).
@@ -380,12 +415,20 @@ impl Cong {
                 }
                 match checked_lcm(m1, m2) {
                     Some(l) => {
-                        // Search the residue in [0, l) congruent to both. l/m1
-                        // ≤ m2 steps; cheap for the small moduli we track.
-                        let mut x = r1;
-                        while x % m2 != r2 {
-                            x += m1;
-                        }
+                        // Closed-form CRT combine (O(log), overflow-free). The
+                        // unique residue in [0, l) congruent to r1 (mod m1) and
+                        // r2 (mod m2): write x = r1 + m1·t with
+                        //   t ≡ ((r2−r1)/g) · (m1/g)^{-1}  (mod m2/g).
+                        // A prior linear search here was O(l/m1) = O(2^k) on the
+                        // large power-of-two moduli the known-bits reduction
+                        // feeds in — a non-termination hazard (clean-room).
+                        let m2g = m2 / g;
+                        // (r2 − r1) mod m2, non-negative; divisible by g.
+                        let diff_mod = ((r2 % m2) + m2 - (r1 % m2)) % m2;
+                        let diff_g = (diff_mod / g) % m2g;
+                        let inv = mod_inverse((m1 / g) % m2g, m2g);
+                        let t = mul_mod(diff_g, inv, m2g);
+                        let x = ((r1 % l) + mul_mod(m1 % l, t % l, l)) % l;
                         Cong::new(l, x)
                     }
                     None => {
@@ -1309,6 +1352,61 @@ mod tests {
                     assert!(x + y < 256, "guard claimed wrap-free but {x}+{y} wraps");
                 }
             }
+        }
+    }
+
+    /// Clean-room regression: `Cong::meet` must be the EXACT intersection and
+    /// must not loop on large moduli. Exhaustive γ-exactness over all modulus
+    /// pairs in 1..=40 against ground truth, plus a singleton×big check.
+    #[test]
+    fn cong_meet_is_exact_intersection() {
+        let gt_intersect = |a: Cong, b: Cong, hi: u64| -> Vec<u64> {
+            (0..hi)
+                .filter(|&x| a.contains(x) && b.contains(x))
+                .collect()
+        };
+        for m1 in 1u64..=24 {
+            for r1 in 0..m1 {
+                for m2 in 1u64..=24 {
+                    for r2 in 0..m2 {
+                        let a = Cong::new(m1, r1);
+                        let b = Cong::new(m2, r2);
+                        let m = a.meet(&b);
+                        // ground truth over a window covering lcm(m1,m2) ≤ 600.
+                        let hi = 600u64;
+                        let expect = gt_intersect(a, b, hi);
+                        for x in 0..hi {
+                            assert_eq!(
+                                m.contains(x),
+                                expect.binary_search(&x).is_ok(),
+                                "meet not exact at x={x}: ({m1},{r1})⊓({m2},{r2})={m:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Clean-room regression (non-termination): a large power-of-two modulus
+    /// met with a singleton (the shape `reduce` produces after a bitwise op on a
+    /// wide value) must resolve in O(log), not O(2^k). If `meet` regressed to a
+    /// linear search this test would hang.
+    #[test]
+    fn cong_meet_large_modulus_terminates() {
+        // ⊤ ⊓ (≡ 0xFFFFFFFFFF mod 2^40) — the i64-OR-constant case that hung.
+        let big = Cong::new(1u64 << 40, 0xFF_FFFF_FFFF);
+        let m = Cong::top().meet(&big);
+        assert_eq!(m, big, "⊤ ⊓ X = X");
+        // a non-trivial CRT combine with a large modulus.
+        let r = Cong::new(1u64 << 40, 3).meet(&Cong::new(7, 5));
+        // result modulus = lcm(2^40, 7); residue ≡ 3 (mod 2^40) and ≡ 5 (mod 7).
+        if let Cong::Mod { m: mm, r: rr } = r {
+            assert_eq!(mm, (1u64 << 40) * 7);
+            assert_eq!(rr % (1u64 << 40), 3);
+            assert_eq!(rr % 7, 5);
+        } else {
+            panic!("expected a Mod, got {r:?}");
         }
     }
 

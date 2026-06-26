@@ -5503,6 +5503,27 @@ mod tests {
         }
     }
 
+    /// FEAT-037 NON-TERMINATION REGRESSION (clean-room): a zero-init i64 local
+    /// OR'd with a wide (40-bit) constant drives `reduce` to meet ⊤ with a
+    /// 2^40-modulus congruence. A prior linear residue search in `Cong::meet`
+    /// made this O(2^40) — `analyze()` hung. The closed-form CRT combine must
+    /// make it return promptly (and soundly).
+    #[test]
+    fn feat037_wide_or_does_not_hang() {
+        let r = analyze_default(
+            "(module (func (local i64) \
+               local.get 0 i64.const 0xFFFFFFFFFF i64.or local.set 0))",
+        );
+        // 0 | 0xFFFFFFFFFF = 0xFFFFFFFFFF exactly: low 40 bits known-1.
+        let f = r
+            .bit_facts
+            .iter()
+            .find(|f| f.local_index == 0)
+            .expect("bit fact for local 0");
+        assert_eq!(f.width, 64);
+        assert_eq!(f.known_ones, 0xFF_FFFF_FFFF, "low 40 bits known-1");
+    }
+
     /// FEAT-034: scry determines its OWN fusion premises (verify-not-trust):
     /// bounded_memory = no `memory.grow`; closed_world = no functional imports.
     #[test]
