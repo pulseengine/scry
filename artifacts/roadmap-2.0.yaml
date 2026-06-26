@@ -1621,6 +1621,39 @@ artifacts:
       - type: traces-to
         target: G-005
 
+  - id: FEAT-033
+    type: feature
+    title: "v2.x — ASPICE V-model verification spine (scry#59): close the right side of the V"
+    status: accepted
+    description: >
+      Close the verification-mapping gap (scry#59): scry's requirements had no
+      `verifies` backlinks — verification existed only in code (111 native
+      tests, 12 Rocq proofs, the witness MC/DC gate, host tests, clean-room),
+      invisible to the traceability graph. Root cause: the `dev` preset emits a
+      `requirement-verification` rule but ships no artifact type that can source
+      a `verifies` link, so the rule was unsatisfiable for `dev` requirements.
+
+      Resolution (house pattern, mirroring meld/spar's dev+aspice schemas): add
+      the Automotive-SPICE v4.0 preset and a PARALLEL V-model spine in
+      `artifacts/aspice-vmodel.yaml` — stakeholder-req (SYS.1) → system-req
+      (SYS.2) → sw-req (SWE.1), with sys-verification (SYS.5) and
+      sw-verification (SWE.6) measures that NAME the real tests / Rocq proofs /
+      MC-DC gate / host tests discharging each requirement. The dev REQ/FEAT/DD
+      roadmap stays intact for design-intent tracking; the sw-reqs are the
+      authoritative verified requirements. No fabricated DAL/ASIL — ASPICE is a
+      process model, so the evidence is honest (real, passing oracles only).
+    tags: [capability, traceability, aspice, verification, v2.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given the ASPICE V-model, When `rivet validate` runs, Then every sw-req derives from a system-req (← stakeholder-req) and is verified by at least one sw-verification, and every system-req by a sys-verification — the right side of the V is closed."
+        - "Given each sw-verification, When read, Then its description names a verification measure that actually exists in the repo (a test function, a proofs/rocq/*.v file, the MC/DC gate, or a host test) and genuinely discharges the linked sw-req — no fabricated evidence."
+    links:
+      - type: satisfies
+        target: REQ-005
+      - type: traces-to
+        target: G-005
+
   # ──────────────────────────────────────────────────────────────────────
   # Safety goal for the v2.0 qualification milestone.
   # ──────────────────────────────────────────────────────────────────────

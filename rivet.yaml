@@ -17,6 +17,7 @@ project:
     - research
     - research-ext     # local — adds references-paper / addresses-finding / evaluates-tech
     - safety-case
+    - aspice
 
 sources:
   - path: artifacts

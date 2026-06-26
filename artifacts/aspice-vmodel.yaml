@@ -1,0 +1,576 @@
+# ─────────────────────────────────────────────────────────────────────────
+# ASPICE v4.0 V-model traceability (scry#59) — the "right side of the V".
+#
+# Parallel to the dev-style roadmap (REQ-* / FEAT-* / DD-*, which tracks design
+# intent), this is the Automotive-SPICE requirement→verification spine that
+# carries scry's VERIFICATION evidence: stakeholder-req (SYS.1) → system-req
+# (SYS.2) → sw-req (SWE.1), with sys-verification (SYS.5) and sw-verification
+# (SWE.6) measures naming the REAL tests / Rocq proofs / MC-DC gate / host
+# tests / clean-room that discharge each requirement. Mirrors the meld/spar
+# house pattern (dev + aspice schemas side by side). The sw-reqs restate the
+# dev the dev requirement..013 as software requirements; the verification mapping is the
+# authoritative one (the dev REQ-* carry no verifies link by construction).
+# ─────────────────────────────────────────────────────────────────────────
+artifacts:
+
+  # ── SYS.1 Stakeholder requirements ──────────────────────────────────────
+  - id: STK-1
+    type: stakeholder-req
+    title: "PulseEngine needs sound static analysis of fused Wasm modules"
+    status: accepted
+    description: >
+      The PulseEngine pipeline needs a sound abstract-interpretation pass over
+      the fused Core Wasm modules meld emits — the third DO-333 technique class
+      (alongside Kani bounded model checking and Verus/Rocq deductive proof) —
+      that over-approximates reachable behavior without ever under-reporting.
+    tags: [aspice, mission]
+    fields:
+      priority: must
+      source: "PulseEngine roadmap; DO-333 technique-class coverage"
+
+  - id: STK-2
+    type: stakeholder-req
+    title: "Downstream tools need machine-consumable, sound analysis outputs"
+    status: accepted
+    description: >
+      Downstream consumers (synth's footprint proof, loom's optimizer) need
+      scry's results as sound, over-approximate, machine-readable facts —
+      call graph, reachability, shadow-stack bound, operand stack, provenance —
+      they can build proofs on without re-deriving them.
+    tags: [aspice, interop]
+    fields:
+      priority: must
+      source: "synth#383 / VCR-MEM-001; loom optimizer"
+
+  - id: STK-3
+    type: stakeholder-req
+    title: "Safety-critical adoption needs attestable, traceable assurance"
+    status: accepted
+    description: >
+      For use in safety-critical domains, scry's analysis must carry assurance
+      evidence — mechanized soundness proofs, structural (MC/DC) coverage, and
+      a signed/traceable attestation chain — not just pass tests.
+    tags: [aspice, assurance]
+    fields:
+      priority: must
+      source: "ISO 26262-8 §11 / DO-178C §11.20 expectations"
+
+  # ── SYS.2 System requirements ───────────────────────────────────────────
+  - id: SYS-1
+    type: system-req
+    title: "Sound over-approximation of Core Wasm behavior"
+    status: accepted
+    description: >
+      scry shall over-approximate the reachable behaviors of a Core Wasm module
+      (interval, region-memory, octagon domains) such that every concrete
+      execution is covered by the reported abstract state — never an
+      under-approximation.
+    tags: [aspice, soundness]
+    fields:
+      req-type: functional
+      verification-criteria: "Concrete executions ⊆ reported abstract intervals; mechanized γ-soundness."
+    links:
+      - type: derives-from
+        target: STK-1
+
+  - id: SYS-2
+    type: system-req
+    title: "Lift analysis to the Component Model and scale to fused modules"
+    status: accepted
+    description: >
+      scry shall analyze fused multi-component Wasm (meld output) — call graph,
+      function summaries, component provenance — and scale to real
+      compiler-emitted modules.
+    tags: [aspice, component-model, scale]
+    fields:
+      req-type: functional
+      verification-criteria: "Analyzes its own compiled module; provenance round-trips."
+    links:
+      - type: derives-from
+        target: STK-1
+
+  - id: SYS-3
+    type: system-req
+    title: "Emit sound machine-consumable outputs for downstream consumers"
+    status: accepted
+    description: >
+      scry shall surface its analysis as sound, over-approximate, documented
+      outputs — call graph + reachability, shadow-stack bound, per-program-point
+      invariants incl. operand stack, fusion provenance — with a stated
+      soundness contract, consumable as a library and inspectable as a static
+      visualization.
+    tags: [aspice, interop, outputs]
+    fields:
+      req-type: interface
+      verification-criteria: "Each output matches its documented schema/contract; over-approximation holds."
+    links:
+      - type: derives-from
+        target: STK-2
+
+  - id: SYS-4
+    type: system-req
+    title: "Ship a self-contained analyzer reusable across front-ends"
+    status: accepted
+    description: >
+      The shipped scry artifact shall embed and execute its analyzer
+      self-containedly, with the analysis logic reusable independently of the
+      Wasm front-end (a pure library core).
+    tags: [aspice, deployment]
+    fields:
+      req-type: functional
+      verification-criteria: "Composed component runs analyze() live; core builds/runs standalone."
+    links:
+      - type: derives-from
+        target: STK-1
+
+  - id: SYS-5
+    type: system-req
+    title: "Carry mechanized + structural assurance evidence"
+    status: accepted
+    description: >
+      scry shall carry assurance evidence: mechanized soundness proofs (Rocq),
+      structural MC/DC coverage of the analyzer's decision logic, and a signed,
+      traceable attestation chain.
+    tags: [aspice, assurance]
+    fields:
+      req-type: safety
+      verification-criteria: "Admit-free proofs compile; MC/DC gate green; release artifacts signed."
+    links:
+      - type: derives-from
+        target: STK-3
+
+  # ── SYS.5 System verification measures ──────────────────────────────────
+  - id: SYSV-1
+    type: sys-verification
+    title: "Verification of SYS-1: soundness oracle over the analyzer"
+    status: implemented
+    description: >
+      Host-side soundness oracle: each fixture is run abstractly (scry) and
+      concretely (wasmtime), asserting concrete results ⊆ abstract intervals
+      over the host fixture corpus (crates/scry-host-tests/tests/soundness.rs).
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SYS-1
+
+  - id: SYSV-2
+    type: sys-verification
+    title: "Verification of SYS-2: self-analysis on a real fused module"
+    status: implemented
+    description: >
+      The dogfood gate runs scry on its own compiled module (scry_mcdc.wasm,
+      548 funcs / 4326 program points) and `scry-viz check` asserts structural
+      well-formedness — CI `MC/DC` job (.github/workflows/ci.yml).
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SYS-2
+
+  - id: SYSV-3
+    type: sys-verification
+    title: "Verification of SYS-3: output contract validation"
+    status: implemented
+    description: >
+      The invariant/output shape is validated against the published JSON
+      schema (crates/scry-host-tests/tests/contract.rs against
+      contracts/scry-invariants-v1.schema.json).
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SYS-3
+
+  - id: SYSV-4
+    type: sys-verification
+    title: "Verification of SYS-4: live self-contained execution"
+    status: implemented
+    description: >
+      `feat013_live_analyze_gate` (no-skip) loads the bazel-composed
+      `//:scry` component and runs `analyze()` live; the core also builds and
+      tests standalone (`cargo test -p scry-sai-core`).
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SYS-4
+
+  - id: SYSV-5
+    type: sys-verification
+    title: "Verification of SYS-5: proofs + MC/DC + signed release"
+    status: implemented
+    description: >
+      Admit-free Rocq proofs (proofs/rocq/*.v) gated in CI; the witness MC/DC
+      gate (crates/scry-mcdc/mcdc-gate.sh); cosign keyless + SLSA provenance on
+      every release asset (.github/workflows/release.yml).
+    tags: [aspice]
+    fields:
+      method: formal-verification
+    links:
+      - type: verifies
+        target: SYS-5
+
+  # ── SWE.1 Software requirements (mirror dev the dev requirement..013) ────────────────
+  - id: SR-1
+    type: sw-req
+    title: "Sound abstract-interpretation pass over the Wasm Core Model"
+    status: accepted
+    description: "scry provides a sound interval/region/octagon pass over Core Wasm."
+    tags: [aspice]
+    fields:
+      req-type: functional
+      verification-criteria: "Concrete ⊆ abstract on the fixture corpus."
+    links:
+      - type: derives-from
+        target: SYS-1
+
+  - id: SR-2
+    type: sw-req
+    title: "Soundness stated and mechanically proven against Wasm semantics"
+    status: accepted
+    description: "Domain soundness is mechanized in Rocq, admit-free."
+    tags: [aspice]
+    fields:
+      req-type: safety
+      verification-criteria: "γ-soundness proofs compile with no admits/axioms."
+    links:
+      - type: derives-from
+        target: SYS-1
+
+  - id: SR-3
+    type: sw-req
+    title: "Extend the analysis to the Wasm Component Model (provenance)"
+    status: accepted
+    description: "Component-level attribution via the meld component-provenance section."
+    tags: [aspice]
+    fields:
+      req-type: functional
+      verification-criteria: "Provenance decodes + projects soundly."
+    links:
+      - type: derives-from
+        target: SYS-2
+
+  - id: SR-4
+    type: sw-req
+    title: "Surface invariants as machine-consumable annotations"
+    status: accepted
+    description: "Analysis results are emitted in a stable, documented schema for downstream tools."
+    tags: [aspice]
+    fields:
+      req-type: interface
+      verification-criteria: "Serialized result validates against the v1 JSON schema."
+    links:
+      - type: derives-from
+        target: SYS-3
+
+  - id: SR-5
+    type: sw-req
+    title: "AI results attestable end-to-end and traceable"
+    status: accepted
+    description: "Results are signed (sigil/cosign) and traceable in rivet."
+    tags: [aspice]
+    fields:
+      req-type: safety
+      verification-criteria: "Release assets carry cosign sigs + SLSA provenance; rivet trace closed."
+    links:
+      - type: derives-from
+        target: SYS-5
+
+  - id: SR-6
+    type: sw-req
+    title: "Analyzer reusable independently of the Wasm front-end"
+    status: accepted
+    description: "The analysis core is a standalone library (scry-sai-core), front-end-independent."
+    tags: [aspice]
+    fields:
+      req-type: functional
+      verification-criteria: "Core crate builds + tests natively, no component deps."
+    links:
+      - type: derives-from
+        target: SYS-4
+
+  - id: SR-7
+    type: sw-req
+    title: "Scale to fused multi-component Wasm modules"
+    status: accepted
+    description: "Call-graph/summary analysis over large fused modules."
+    tags: [aspice]
+    fields:
+      req-type: performance
+      verification-criteria: "Analyzes its own 5.9 MB module without panic; call graph non-empty."
+    links:
+      - type: derives-from
+        target: SYS-2
+
+  - id: SR-8
+    type: sw-req
+    title: "Sound call graphs in the presence of call_indirect"
+    status: accepted
+    description: "call_indirect resolved to a sound over-approximate target set."
+    tags: [aspice]
+    fields:
+      req-type: functional
+      verification-criteria: "resolved_targets ⊇ concrete callees; soundness tag honest."
+    links:
+      - type: derives-from
+        target: SYS-3
+
+  - id: SR-9
+    type: sw-req
+    title: "Shipped artifact embeds and executes its analyzer"
+    status: accepted
+    description: "The composed component runs analyze() live, no skip."
+    tags: [aspice]
+    fields:
+      req-type: functional
+      verification-criteria: "Live analyze() gate passes against the composed component."
+    links:
+      - type: derives-from
+        target: SYS-4
+
+  - id: SR-10
+    type: sw-req
+    title: "Decision logic carries MC/DC coverage evidence"
+    status: accepted
+    description: "The analyzer's real decisions carry structural MC/DC coverage."
+    tags: [aspice]
+    fields:
+      req-type: safety
+      verification-criteria: "witness MC/DC gate green at/above the proved-condition floor."
+    links:
+      - type: derives-from
+        target: SYS-5
+
+  - id: SR-11
+    type: sw-req
+    title: "Sound call-graph + reachability output (SCRY-001)"
+    status: accepted
+    description: "reachable_from_exports is a sound superset; recursion flagged."
+    tags: [aspice]
+    fields:
+      req-type: interface
+      verification-criteria: "Reachable superset proven (Reachable.v); fixture-17 includes/excludes correctly."
+    links:
+      - type: derives-from
+        target: SYS-3
+
+  - id: SR-12
+    type: sw-req
+    title: "Sound abstract operand-stack at each program point"
+    status: accepted
+    description: "Per-pc operand stack surfaced, sound over the interval domain."
+    tags: [aspice]
+    fields:
+      req-type: interface
+      verification-criteria: "Constant on stack shown as singleton; empty-at-havoc; order preserved."
+    links:
+      - type: derives-from
+        target: SYS-3
+
+  - id: SR-13
+    type: sw-req
+    title: "Analysis output inspectable as a static visualization"
+    status: accepted
+    description: "scry-viz renders a self-contained static dashboard of the AnalysisResult."
+    tags: [aspice]
+    fields:
+      req-type: interface
+      verification-criteria: "Faithful projection; no JS/external asset; escaped."
+    links:
+      - type: derives-from
+        target: SYS-3
+
+  # ── SWE.6 Software verification measures (map to REAL evidence) ──────────
+  - id: SWV-1
+    type: sw-verification
+    title: "Verification of SR-1: soundness on the fixture corpus"
+    status: implemented
+    description: >
+      Verifies SR-1 via: host soundness oracle (scry-host-tests/tests/soundness.rs,
+      concrete ⊆ abstract over the fixture corpus) + native interval/octagon unit
+      tests in scry-analyze-core.
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SR-1
+
+  - id: SWV-2
+    type: sw-verification
+    title: "Verification of SR-2: mechanized γ-soundness (Rocq)"
+    status: implemented
+    description: >
+      Verifies SR-2 via: admit-free Rocq proofs proofs/rocq/Soundness.v +
+      Lattice.v + Region.v + the octagon proofs (OctagonProject.v,
+      OctagonStrongClose.v), gated by the CI Rocq job.
+    tags: [aspice]
+    fields:
+      method: formal-verification
+    links:
+      - type: verifies
+        target: SR-2
+
+  - id: SWV-3
+    type: sw-verification
+    title: "Verification of SR-3: provenance decode/round-trip"
+    status: implemented
+    description: >
+      Verifies SR-3 via: scry-provenance SCPV v3 unit tests (round-trip +
+      strict-reject) + scry-host-tests/tests/provenance.rs (real wasm
+      custom-section round-trip + projection).
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SR-3
+
+  - id: SWV-4
+    type: sw-verification
+    title: "Verification of SR-4: output schema contract"
+    status: implemented
+    description: >
+      Verifies SR-4 via: scry-host-tests/tests/contract.rs validating a
+      representative AnalysisResult against contracts/scry-invariants-v1.schema.json.
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SR-4
+
+  - id: SWV-5
+    type: sw-verification
+    title: "Verification of SR-5: signed, traceable release"
+    status: implemented
+    description: >
+      Verifies SR-5 via: cosign keyless signatures + SLSA build-provenance
+      attestation on every release asset (.github/workflows/release.yml) and
+      the rivet traceability graph (this V-model).
+    tags: [aspice]
+    fields:
+      method: review
+    links:
+      - type: verifies
+        target: SR-5
+
+  - id: SWV-6
+    type: sw-verification
+    title: "Verification of SR-6: standalone core crate"
+    status: implemented
+    description: >
+      Verifies SR-6 via: `cargo test -p scry-sai-core` (the analyzer core builds
+      and its unit tests pass natively, no wasm/component dependency).
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SR-6
+
+  - id: SWV-7
+    type: sw-verification
+    title: "Verification of SR-7: self-analysis robustness on a large module"
+    status: implemented
+    description: >
+      Verifies SR-7 via: the dogfood — `scry-viz check` analyzes
+      scry's own scry_mcdc.wasm (548 funcs) with no panic and well-formed output
+      (CI MC/DC job).
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SR-7
+
+  - id: SWV-8
+    type: sw-verification
+    title: "Verification of SR-8: sound call_indirect resolution"
+    status: implemented
+    description: >
+      Verifies SR-8 via: Rocq proofs/rocq/CallGraph.v (resolution soundness) +
+      fixture-04-call-indirect + native call-graph tests in scry-analyze-core.
+    tags: [aspice]
+    fields:
+      method: formal-verification
+    links:
+      - type: verifies
+        target: SR-8
+
+  - id: SWV-9
+    type: sw-verification
+    title: "Verification of SR-9: live composed-component execution"
+    status: implemented
+    description: >
+      Verifies SR-9 via: `feat013_live_analyze_gate` (no-skip host test) running
+      analyze() against the bazel-built `//:scry` component.
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SR-9
+
+  - id: SWV-10
+    type: sw-verification
+    title: "Verification of SR-10: MC/DC structural coverage"
+    status: implemented
+    description: >
+      Verifies SR-10 via: the witness MC/DC gate (crates/scry-mcdc/mcdc-gate.sh,
+      CI `MC/DC` job) measuring decision coverage of the real analyzer over the
+      fixture corpus, gated at the proved-condition floor.
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SR-10
+
+  - id: SWV-11
+    type: sw-verification
+    title: "Verification of SR-11: reachable-from-exports superset"
+    status: implemented
+    description: >
+      Verifies SR-11 via: Rocq proofs/rocq/Reachable.v (concrete reach ⊆ abstract
+      reach) + fixture-17-reachability + native feat022_reachable_from_exports.
+    tags: [aspice]
+    fields:
+      method: formal-verification
+    links:
+      - type: verifies
+        target: SR-11
+
+  - id: SWV-12
+    type: sw-verification
+    title: "Verification of SR-12: operand-stack invariants"
+    status: implemented
+    description: >
+      Verifies SR-12 via: native feat023_operand_stack_constants + fixture-18
+      (singleton constant on stack top, depth/order preserved, empty-at-havoc).
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SR-12
+
+  - id: SWV-13
+    type: sw-verification
+    title: "Verification of SR-13: faithful static visualization"
+    status: implemented
+    description: >
+      Verifies SR-13 via: scry-sai-viz lib tests (render_html faithful
+      projection, no-JS/no-external-asset, HTML-escaping) + the `scry-viz check`
+      dogfood gate.
+    tags: [aspice]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: SR-13

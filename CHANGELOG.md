@@ -7,6 +7,18 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Traceability — FEAT-033 (scry#59): ASPICE V-model verification spine
+
+- Added the Automotive-SPICE v4.0 schema (`aspice`) and a parallel V-model in
+  `artifacts/aspice-vmodel.yaml` — stakeholder-req → system-req → sw-req, with
+  sys-verification / sw-verification measures that name the **real** evidence
+  (native tests, Rocq proofs `proofs/rocq/*.v`, the witness MC/DC gate, host
+  tests) discharging each requirement. Closes the "right side of the V": every
+  software requirement now has a `verifies` backlink to a verification measure.
+  The dev REQ/FEAT/DD roadmap is unchanged (design-intent tracking); the
+  sw-reqs are the authoritative verified requirements. Artifacts-only — no code
+  or API change.
+
 ## [2.0.0] — 2026-06-26
 
 Headline: **`component-provenance` SCPV v3 — the meld→scry boundary reconciled,
