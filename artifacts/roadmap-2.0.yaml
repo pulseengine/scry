@@ -1654,6 +1654,107 @@ artifacts:
       - type: traces-to
         target: G-005
 
+  - id: FEAT-034
+    type: feature
+    title: "v2.x — Independently-verified fusion premises + meld cross-check (FEAT-032 slice-2 consumption)"
+    status: proposed
+    description: >
+      Consume the fusion premises (scry#63 / FEAT-032) the SOUND way:
+      VERIFY, don't TRUST. scry parses every op, so it independently determines
+      its own `bounded_memory` (no `memory.grow` anywhere → linear memory is
+      fixed) and a conservative `closed_world` (no functional imports at all →
+      no external caller it cannot see), and surfaces them on
+      `AnalysisResult.verified_premises` — facts a consumer (synth's footprint
+      proof, scry#5/#51) can rely on because scry proved them, not because meld
+      asserted them (meld stays out of scry's TCB).
+
+      Cross-check: when a meld `component-provenance` v3 section carries
+      `premises.bounded_memory = true` but scry OBSERVES `memory.grow`, scry
+      emits an UnsoundnessFallback diagnostic (a producer↔consumer disagreement
+      detector) and stays conservative. `closed_world` is only conservatively
+      verifiable at the core level (scry can't distinguish a cross-component
+      import from a WASI host import), so scry never refutes meld's
+      closed_world; it surfaces meld's claim (slice-1) and reports its own
+      provable `closed_world` separately.
+
+      Tightening (sound, premise-gated on scry's OWN verification): when scry
+      has verified `bounded_memory`, the default region's size is an EXACT bound
+      (not just the declared minimum), so an access provably past it is a
+      definite out-of-bounds rather than a conservative "cannot prove".
+    tags: [capability, interop, provenance, soundness, v2.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given any module, When scry analyzes it, Then AnalysisResult.verified_premises reports scry's own determination: bounded_memory = (no memory.grow), closed_world = (no functional imports) — derived by scry, independent of any meld premise."
+        - "Given a v3 provenance section asserting bounded_memory=true on a module that contains memory.grow, When scry analyzes it, Then scry emits a diagnostic flagging the meld↔scry disagreement and does not adopt the false premise."
+    links:
+      - type: traces-to
+        target: FEAT-032
+      - type: traces-to
+        target: G-005
+
+  - id: FEAT-035
+    type: feature
+    title: "v2.x — Align wasmparser/wasm-tools to 0.252 (dedup downstream trees, scry#62)"
+    status: proposed
+    description: >
+      Bump `wasmparser` 0.247 → 0.252 across the workspace so the dependency
+      tree dedups with downstream consumers (meld/synth) that have moved to
+      0.252. Maintenance/hygiene; risk is parser API drift, caught by the
+      existing build + soundness tests.
+    tags: [maintenance, dependencies, v2.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given the workspace on wasmparser 0.252, When the native + Bazel builds and the soundness/MC-DC gates run, Then all pass with no behavioral change to the analysis output."
+    links:
+      - type: traces-to
+        target: REQ-001
+
+  - id: FEAT-036
+    type: feature
+    title: "v2.x — Interprocedural range propagation (synth wishlist, scry#54)"
+    status: proposed
+    description: >
+      Narrow a callee's parameter invariants from the value ranges at its
+      call sites (a sound, monotone interprocedural pass over the existing
+      call graph + function summaries). Lets synth specialize on constant /
+      bounded arguments. Soundness-sensitive: must join over ALL call sites
+      (and ⊤ for any unresolved/indirect caller) so a param invariant is never
+      narrower than some reachable call permits.
+    tags: [capability, analysis, interop, v2.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a function called only with arguments in a bounded range, When scry analyzes the module, Then that function's emitted parameter invariants reflect the join of all call-site argument ranges (⊤ when any caller is unresolved) — sound over every reachable call."
+    links:
+      - type: traces-to
+        target: REQ-004
+      - type: traces-to
+        target: G-005
+
+  - id: FEAT-037
+    type: feature
+    title: "v2.x — Known-bits / congruence abstract domain (synth wishlist, scry#54)"
+    status: proposed
+    description: >
+      Add a known-bits (and/or congruence `a·k + b`) abstract domain capturing
+      alignment and low-bit patterns the interval domain misses — enabling
+      alignment-driven check elision and bit-level specialization for codegen
+      consumers. Largest investment: a new domain crate + transfer functions +
+      mechanized Rocq soundness, integrated into the Interp alongside interval +
+      octagon.
+    tags: [capability, domain, analysis, v2.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a value with a statically-known alignment/low-bit pattern, When scry analyzes the module, Then the known-bits domain reports it soundly (γ over-approximates the concrete value), with an admit-free Rocq soundness proof for the domain's lattice + transfer functions."
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: G-005
+
   # ──────────────────────────────────────────────────────────────────────
   # Safety goal for the v2.0 qualification milestone.
   # ──────────────────────────────────────────────────────────────────────
