@@ -1449,9 +1449,11 @@ pub fn analyze(
     // dispatch is possible and the recorded direct calls are provably the
     // complete caller set. Only then may we narrow. (A future slice can recover
     // precision in funcref-bearing modules with whole-table escape analysis.)
-    let any_ref_func = defined_funcs
-        .iter()
-        .any(|f| f.ops.iter().any(|op| matches!(op, Operator::RefFunc { .. })));
+    let any_ref_func = defined_funcs.iter().any(|f| {
+        f.ops
+            .iter()
+            .any(|op| matches!(op, Operator::RefFunc { .. }))
+    });
     let callers_fully_known = !module_has_table && !any_ref_func;
 
     let mut function_summaries: Vec<FunctionSummary> = Vec::with_capacity(defined_funcs.len());
