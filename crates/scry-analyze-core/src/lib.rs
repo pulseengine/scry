@@ -912,6 +912,12 @@ pub fn analyze(
     // address may be reachable indirectly (or by the host, via an exported or
     // imported table) — which the param-range gate cannot otherwise bound.
     let mut module_has_table: bool = false;
+    // FEAT-036 soundness: true if a `ref.func` appears OUTSIDE a function body —
+    // in a global's init expression or an element segment's items. Such a
+    // funcref to a defined function can escape (e.g. via an exported global) to
+    // a `call_ref`/host call the param-range gate cannot bound, and the
+    // body-only operator scan would miss it. (Third clean-room finding.)
+    let mut func_ref_taken_in_const: bool = false;
     // Active element segments targeting table 0 with a constant
     // i32 offset: (offset, [func indices]). Collected here, then
     // baked into the `FuncTable` after we know the table length.
@@ -1031,6 +1037,12 @@ pub fn analyze(
                     if g.ty.mutable && matches!(g.ty.content_type, wasmparser::ValType::I32) {
                         mutable_i32_globals.push(gidx);
                     }
+                    // FEAT-036 soundness: a `ref.func` in the init expr takes a
+                    // defined function's address (the global can be exported /
+                    // read by the host) — outside any function body.
+                    if const_expr_takes_func_ref(&g.init_expr) {
+                        func_ref_taken_in_const = true;
+                    }
                     gidx = gidx.saturating_add(1);
                 }
             }
@@ -1073,6 +1085,14 @@ pub fn analyze(
                     let element = entry.map_err(|e| {
                         AnalyzeError::InvalidModule(format!("element section: {e}"))
                     })?;
+                    // FEAT-036 soundness: any element segment that names defined
+                    // functions takes their addresses. Active segments imply a
+                    // table (already caught), but passive/declared segments need
+                    // no table, so flag the escape uniformly here. (Third
+                    // clean-room finding.)
+                    if element_items_take_func_ref(&element.items)? {
+                        func_ref_taken_in_const = true;
+                    }
                     match &element.kind {
                         wasmparser::ElementKind::Active {
                             table_index,
@@ -1443,12 +1463,14 @@ pub fn analyze(
     //
     // Root-cause-sound rule: a non-null funcref to a defined function can ONLY
     // come from a `ref.func` instruction or a table (element segments). If the
-    // module has NEITHER a table (declared or imported) NOR any `ref.func`,
-    // then no funcref to any defined function can exist anywhere — in code, in
-    // a table, in a global, or returned to the host — so NO indirect or host
-    // dispatch is possible and the recorded direct calls are provably the
-    // complete caller set. Only then may we narrow. (A future slice can recover
-    // precision in funcref-bearing modules with whole-table escape analysis.)
+    // module has NEITHER a table (declared or imported) NOR any `ref.func`
+    // ANYWHERE — function bodies (`any_funcref_escape`) AND the const positions
+    // a body scan misses: global init exprs and element-segment items
+    // (`func_ref_taken_in_const`) — then no funcref to any defined function can
+    // exist anywhere (code, table, global, or returned/handed to the host), so
+    // NO indirect or host dispatch is possible and the recorded direct calls
+    // are provably the complete caller set. Only then may we narrow. (A future
+    // slice can recover precision with whole-table / escape analysis.)
     // Defense-in-depth: besides the funcref-origin signals above, also bail on
     // the *presence* of any indirect-dispatch operator. In valid Wasm these
     // imply a table (so `module_has_table` already fires), but matching the ops
@@ -1467,7 +1489,7 @@ pub fn analyze(
             )
         })
     });
-    let callers_fully_known = !module_has_table && !any_funcref_escape;
+    let callers_fully_known = !module_has_table && !any_funcref_escape && !func_ref_taken_in_const;
 
     let mut function_summaries: Vec<FunctionSummary> = Vec::with_capacity(defined_funcs.len());
     for (defined, func) in defined_funcs.iter().enumerate() {
@@ -3733,6 +3755,39 @@ fn const_i32_offset(offset_expr: &wasmparser::ConstExpr<'_>) -> Option<i64> {
     }
 }
 
+/// FEAT-036 soundness: does a constant expression (a global init or an
+/// element-segment offset/item) contain a `ref.func`? Such an expression takes
+/// a defined function's address OUTSIDE any function body — the body-only
+/// operator scan misses it, so the param-range gate must account for it here.
+fn const_expr_takes_func_ref(expr: &wasmparser::ConstExpr<'_>) -> bool {
+    expr.get_operators_reader()
+        .into_iter()
+        .any(|op| matches!(op, Ok(Operator::RefFunc { .. })))
+}
+
+/// FEAT-036 soundness: does an element segment name any defined function (and
+/// thereby take its address)? `Functions` items are bare func indices;
+/// `Expressions` items may carry `ref.func`. A malformed segment is treated as
+/// taking a reference (conservative — never under-reports an escape).
+fn element_items_take_func_ref(items: &wasmparser::ElementItems<'_>) -> Result<bool, AnalyzeError> {
+    match items {
+        wasmparser::ElementItems::Functions(funcs) => {
+            Ok(funcs.clone().into_iter().next().is_some())
+        }
+        wasmparser::ElementItems::Expressions(_, exprs) => {
+            for expr in exprs.clone() {
+                let expr = expr.map_err(|e| {
+                    AnalyzeError::InvalidModule(format!("element expression item: {e}"))
+                })?;
+                if const_expr_takes_func_ref(&expr) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+    }
+}
+
 /// Handle a direct `Call { function_index }` (FEAT-006 graph +
 /// FEAT-007 effect). Records a trivially-sound single-target
 /// call-graph edge, then applies the callee's abstract summary to the
@@ -5355,6 +5410,33 @@ mod tests {
             matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
             "a function whose address is taken via ref.func can be called \
              indirectly with unknown args ⇒ params must be ⊤, got {:?}",
+            callee.param_ranges
+        );
+    }
+
+    /// FEAT-036 SOUNDNESS REGRESSION (clean-room counterexample #3): a `ref.func`
+    /// in a GLOBAL init expression takes a defined function's address with NO
+    /// table and NO `ref.func` in any function BODY — so a body-only scan misses
+    /// it. The exported global hands func 0's reference to the host, which can
+    /// `call_ref` it with arbitrary args. Must force ⊤; without the fix func 0
+    /// narrows to the single direct call [7,7].
+    #[test]
+    fn feat036_global_init_ref_func_forces_top() {
+        let r = analyze_default(
+            "(module \
+             (func (param i32) (result i32) local.get 0) \
+             (global (export \"g\") funcref (ref.func 0)) \
+             (func (export \"direct\") (result i32) i32.const 7 call 0))",
+        );
+        let callee = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .expect("callee summary");
+        assert!(
+            matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
+            "a function whose address is taken in a global init expr escapes to \
+             the host ⇒ params must be ⊤, got {:?}",
             callee.param_ranges
         );
     }

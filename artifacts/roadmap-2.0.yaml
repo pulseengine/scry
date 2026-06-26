@@ -1727,7 +1727,7 @@ artifacts:
       phase: phase-2
       acceptance-criteria:
         - "Given a function called only with arguments in a bounded range, When scry analyzes the module, Then that function's emitted parameter invariants reflect the join of all call-site argument ranges (⊤ when any caller is unresolved) — sound over every reachable call."
-        - "Given a module that bears a funcref container (declares/imports any table, or uses any ref.func — the only origins of a funcref to a defined function), When scry analyzes it, Then EVERY function's parameter ranges are ⊤ — scry never narrows a parameter on direct-call evidence alone while an unmodelled indirect or host caller could exist. (Three clean-room soundness findings: under-reported table targets, exported funcref table, and edge-less return_call_indirect/call_ref; covered by feat036_indirect_call_forces_top, feat036_exported_table_forces_top, feat036_ref_func_forces_top.)"
+        - "Given a module that bears a funcref container (declares/imports any table, or uses any ref.func in a function body, a global init expr, or an element-segment item — the only origins of a funcref to a defined function), When scry analyzes it, Then EVERY function's parameter ranges are ⊤ — scry never narrows a parameter on direct-call evidence alone while an unmodelled indirect or host caller could exist. (Four clean-room soundness findings across three adversarial passes: under-reported table targets, exported funcref table, edge-less return_call_indirect/call_ref, and ref.func in a global init expr; covered by feat036_indirect_call_forces_top, feat036_exported_table_forces_top, feat036_ref_func_forces_top, feat036_global_init_ref_func_forces_top.)"
     links:
       - type: traces-to
         target: REQ-004
