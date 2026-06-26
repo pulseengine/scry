@@ -147,7 +147,7 @@ artifacts:
     description: >
       Host-side soundness oracle: each fixture is run abstractly (scry) and
       concretely (wasmtime), asserting concrete results ⊆ abstract intervals
-      (crates/scry-host-tests/tests/soundness.rs, fixtures 01–18).
+      over the host fixture corpus (crates/scry-host-tests/tests/soundness.rs).
     tags: [aspice]
     fields:
       method: automated-test
@@ -392,7 +392,7 @@ artifacts:
     status: implemented
     description: >
       Verifies SR-1 via: host soundness oracle (scry-host-tests/tests/soundness.rs,
-      fixtures 01–18, concrete ⊆ abstract) + native interval/region/octagon unit
+      concrete ⊆ abstract over the fixture corpus) + native interval/octagon unit
       tests in scry-analyze-core.
     tags: [aspice]
     fields:
