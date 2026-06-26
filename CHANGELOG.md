@@ -7,6 +7,61 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-06-26
+
+Headline: **interprocedural parameter ranges (FEAT-036, synth#54).** Each
+function's parameters now carry the join of the argument values observed across
+its call sites — a sound interprocedural fact for downstream specialization.
+
+### Added — FEAT-036 (traces REQ-004)
+
+- `CallEdge.arg_ranges: Vec<AbstractValue>` — the abstract arguments at each
+  call site, in parameter order (populated for direct calls; empty for
+  `call_indirect` / signature-unknown imports).
+- `FunctionSummary.param_ranges: Vec<AbstractValue>` — per parameter, the join
+  of `arg_ranges` over every **direct** call site reaching the function. Sound
+  by construction: it is `Unknown` (⊤) for every parameter of a function that is
+  **exported or the start function** (external entry points whose arguments scry
+  cannot bound), and — conservatively — for **every** function in a module that
+  bears a **funcref container** (declares/imports any table, or uses any
+  `ref.func` in a body, a global init expr, or an element-segment item; see
+  soundness note). Otherwise it is the over-approximate incoming value across
+  all calls (e.g. a function called with `5` and `10` gets `[5, 10]`), never
+  narrower than some reachable call permits.
+- Both fields are library-only (read off the `scry-sai-core` `AnalysisResult`);
+  the WIT mirror and the frozen v1 JSON contract are unchanged.
+
+### Posture
+
+- Additive fields (SemVer-minor). Sound: the join over all accounted callers is
+  an over-approximation; the ⊤ fallback for any unaccounted (external /
+  indirect) caller means scry never claims a parameter range that excludes a
+  reachable argument.
+- **Soundness note (four clean-room findings across three adversarial passes,
+  all fixed before merge).** Successive clean-room passes refuted weaker gates.
+  (1) An edge-based gate that only ⊤'d functions appearing in a resolved
+  indirect-edge target set missed functions reachable through a table whose
+  contents scry under-reports (passive/declared element segments, runtime
+  `table.init`/`set`, non-constant indices). (2) An *exported funcref table*
+  lets the **host** `call_indirect` a defined function even when the module has
+  no `call_indirect` of its own. (3) `return_call_indirect` / `call_ref` are
+  unsupported ops that scrub to ⊤ and record **no** call-graph edge, so any
+  edge-based test misses them. (4) A `ref.func` in a **global init expression**
+  (or an element-segment item) takes a defined function's address with **no
+  table and no `ref.func` in any function body** — a body-only scan misses it,
+  and the resulting funcref escapes through, e.g., an exported global. The root
+  cause is uniform: a non-null funcref to a defined function can only originate
+  from a `ref.func` (in code *or* a const position) or a table. The final
+  **root-cause-sound** rule narrows `param_ranges` *only* when the module has
+  **no table (declared or imported), no `ref.func` anywhere (function bodies,
+  global init exprs, or element-segment items), and no indirect-dispatch op** —
+  in which case no funcref to any defined function can exist anywhere, so no
+  indirect or host dispatch is possible and the recorded direct calls are
+  provably the complete caller set. A future slice can recover precision in
+  funcref-bearing modules with whole-table / escape analysis. Covered by
+  `feat036_indirect_call_forces_top`, `feat036_exported_table_forces_top`,
+  `feat036_ref_func_forces_top`, and `feat036_global_init_ref_func_forces_top`.
+
 ## [2.1.1] — 2026-06-26
 
 ### Changed — FEAT-035 (scry#62)

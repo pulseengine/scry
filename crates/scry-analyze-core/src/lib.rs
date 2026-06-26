@@ -208,6 +208,12 @@ pub struct CallEdge {
     pub indirect: bool,
     pub resolved_targets: Vec<u32>,
     pub soundness: SoundnessTag,
+    /// FEAT-036: the abstract argument values at this call site, in parameter
+    /// declaration order (param 0 first) — the operand-stack slots the call
+    /// consumes. Populated for direct calls (empty for `call_indirect` and for
+    /// calls to a signature-unknown import). A library-only field — the WIT
+    /// `call-edge` mirror does not carry it.
+    pub arg_ranges: Vec<AbstractValue>,
 }
 
 /// Mirror of WIT `function-summary` (FEAT-007). Per-function abstract
@@ -219,6 +225,20 @@ pub struct FunctionSummary {
     pub result_summary: Vec<AbstractValue>,
     pub context_sensitive: bool,
     pub recursive: bool,
+    /// FEAT-036: interprocedural parameter ranges — the join, per parameter, of
+    /// the argument values observed at every call site reaching this function.
+    /// SOUND only when scry has accounted for ALL callers, so it is `Unknown`
+    /// (⊤) for every parameter of a function that is exported, the start
+    /// function, or — conservatively — defined in any module that bears a
+    /// funcref container: one that declares/imports ANY table OR uses any
+    /// `ref.func`. (A funcref to a defined function can only originate from a
+    /// table or a `ref.func`; with neither present, no indirect or host
+    /// dispatch is possible, so the recorded direct calls are the complete
+    /// caller set.) Otherwise each entry is the join over all direct call
+    /// sites — an over-approximation of the parameter's incoming value across
+    /// every reachable call (never narrower than some reachable call permits).
+    /// Library-only.
+    pub param_ranges: Vec<AbstractValue>,
 }
 
 /// Mirror of WIT `component-origin` (FEAT-002 / DD-002). One fused-module
@@ -428,7 +448,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "2.1.1";
+const SCRY_VERSION: &str = "2.2.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -886,6 +906,18 @@ pub fn analyze(
     let mut table0_is_funcref: bool = false;
     let mut table0_max: Option<u64> = None;
     let mut table_section_seen: bool = false;
+    // FEAT-036 soundness: true if the module declares OR imports ANY table
+    // (of any element type). A table is the only funcref container besides a
+    // `ref.func` instruction, so its mere presence means a defined function's
+    // address may be reachable indirectly (or by the host, via an exported or
+    // imported table) — which the param-range gate cannot otherwise bound.
+    let mut module_has_table: bool = false;
+    // FEAT-036 soundness: true if a `ref.func` appears OUTSIDE a function body —
+    // in a global's init expression or an element segment's items. Such a
+    // funcref to a defined function can escape (e.g. via an exported global) to
+    // a `call_ref`/host call the param-range gate cannot bound, and the
+    // body-only operator scan would miss it. (Third clean-room finding.)
+    let mut func_ref_taken_in_const: bool = false;
     // Active element segments targeting table 0 with a constant
     // i32 offset: (offset, [func indices]). Collected here, then
     // baked into the `FuncTable` after we know the table length.
@@ -939,6 +971,11 @@ pub fn analyze(
                         // FEAT-027: imported funcs occupy the low indices in
                         // import order; record "module.field" as a fallback name.
                         import_func_meta.push(alloc::format!("{}.{}", imp.module, imp.name));
+                    }
+                    // FEAT-036 soundness: an imported table is host-controlled —
+                    // the host can dispatch through it with arbitrary arguments.
+                    if matches!(imp.ty, wasmparser::TypeRef::Table(_)) {
+                        module_has_table = true;
                     }
                 }
             }
@@ -1000,6 +1037,12 @@ pub fn analyze(
                     if g.ty.mutable && matches!(g.ty.content_type, wasmparser::ValType::I32) {
                         mutable_i32_globals.push(gidx);
                     }
+                    // FEAT-036 soundness: a `ref.func` in the init expr takes a
+                    // defined function's address (the global can be exported /
+                    // read by the host) — outside any function body.
+                    if const_expr_takes_func_ref(&g.init_expr) {
+                        func_ref_taken_in_const = true;
+                    }
                     gidx = gidx.saturating_add(1);
                 }
             }
@@ -1013,6 +1056,9 @@ pub fn analyze(
                 for entry in reader {
                     let table = entry
                         .map_err(|e| AnalyzeError::InvalidModule(format!("table section: {e}")))?;
+                    // FEAT-036 soundness: any declared table (any element type)
+                    // is a potential funcref container / indirect-dispatch root.
+                    module_has_table = true;
                     if first {
                         table_section_seen = true;
                         // `initial` / `maximum` are `u64` in the
@@ -1039,6 +1085,14 @@ pub fn analyze(
                     let element = entry.map_err(|e| {
                         AnalyzeError::InvalidModule(format!("element section: {e}"))
                     })?;
+                    // FEAT-036 soundness: any element segment that names defined
+                    // functions takes their addresses. Active segments imply a
+                    // table (already caught), but passive/declared segments need
+                    // no table, so flag the escape uniformly here. (Third
+                    // clean-room finding.)
+                    if element_items_take_func_ref(&element.items)? {
+                        func_ref_taken_in_const = true;
+                    }
                     match &element.kind {
                         wasmparser::ElementKind::Active {
                             table_index,
@@ -1391,15 +1445,86 @@ pub fn analyze(
     // ───────────────────────────────────────────────────────────
     // Assemble the per-function-summary output records (FEAT-007).
     // ───────────────────────────────────────────────────────────
+    // FEAT-036: interprocedural parameter ranges. A function's params are sound
+    // to narrow ONLY when scry has accounted for EVERY caller. The join over the
+    // recorded DIRECT call sites is the complete caller set iff there is NO
+    // other way to reach the function with an argument scry did not capture.
+    //
+    // The external / unseen entry points are:
+    //   * exports and the start function — invoked by the host with unknown
+    //     args (gated per-function below); and
+    //   * ANY indirect dispatch. scry cannot soundly enumerate indirect
+    //     targets: its static table model under-reports them (passive/declared
+    //     element segments, runtime `table.init`/`set`, non-constant indices),
+    //     and several dispatch ops (`return_call_indirect`, `call_ref`) are
+    //     unsupported — they scrub to ⊤ and record NO call-graph edge, so an
+    //     edge-based test misses them entirely. A host holding an exported (or
+    //     imported) table can likewise `call_indirect` with arbitrary args.
+    //
+    // Root-cause-sound rule: a non-null funcref to a defined function can ONLY
+    // come from a `ref.func` instruction or a table (element segments). If the
+    // module has NEITHER a table (declared or imported) NOR any `ref.func`
+    // ANYWHERE — function bodies (`any_funcref_escape`) AND the const positions
+    // a body scan misses: global init exprs and element-segment items
+    // (`func_ref_taken_in_const`) — then no funcref to any defined function can
+    // exist anywhere (code, table, global, or returned/handed to the host), so
+    // NO indirect or host dispatch is possible and the recorded direct calls
+    // are provably the complete caller set. Only then may we narrow. (A future
+    // slice can recover precision with whole-table / escape analysis.)
+    // Defense-in-depth: besides the funcref-origin signals above, also bail on
+    // the *presence* of any indirect-dispatch operator. In valid Wasm these
+    // imply a table (so `module_has_table` already fires), but matching the ops
+    // directly makes the gate robust to malformed input and to dispatch ops the
+    // value interpreter does not model (`return_call_indirect`, `call_ref` fall
+    // through to the scrub-to-⊤ arm and record no call-graph edge) — exactly the
+    // class of "an op slipped through" the clean-room kept surfacing.
+    let any_funcref_escape = defined_funcs.iter().any(|f| {
+        f.ops.iter().any(|op| {
+            matches!(
+                op,
+                Operator::RefFunc { .. }
+                    | Operator::CallIndirect { .. }
+                    | Operator::ReturnCallIndirect { .. }
+                    | Operator::CallRef { .. }
+            )
+        })
+    });
+    let callers_fully_known = !module_has_table && !any_funcref_escape && !func_ref_taken_in_const;
+
     let mut function_summaries: Vec<FunctionSummary> = Vec::with_capacity(defined_funcs.len());
     for (defined, func) in defined_funcs.iter().enumerate() {
         if let Some(entry) = summaries.get(defined).and_then(|s| s.as_ref()) {
+            let abs = func.abs_index;
+            let n = func.params.len();
+            let top_params = || (0..n).map(|_| AbstractValue::Unknown).collect::<Vec<_>>();
+            let param_ranges = if n == 0
+                || !callers_fully_known
+                || exported_funcs.contains(&abs)
+                || start_func == Some(abs)
+            {
+                top_params()
+            } else {
+                // Join arguments over every direct call site reaching `abs`.
+                let mut acc: Option<Vec<AbstractValue>> = None;
+                for e in &call_graph {
+                    if !e.indirect && e.resolved_targets.contains(&abs) && e.arg_ranges.len() == n {
+                        acc = Some(match acc {
+                            Some(a) => join_locals(&a, &e.arg_ranges),
+                            None => e.arg_ranges.iter().map(clone_value).collect(),
+                        });
+                    }
+                }
+                // No direct caller found (dead / unreached): nothing constrains
+                // the params, so ⊤ — never invent a tighter range.
+                acc.unwrap_or_else(top_params)
+            };
             function_summaries.push(FunctionSummary {
-                func_index: func.abs_index,
-                param_count: func.params.len() as u32,
+                func_index: abs,
+                param_count: n as u32,
                 result_summary: entry.result_summary.iter().map(clone_value).collect(),
                 context_sensitive: entry.context_sensitive,
                 recursive: entry.recursive,
+                param_ranges,
             });
         }
     }
@@ -3630,6 +3755,39 @@ fn const_i32_offset(offset_expr: &wasmparser::ConstExpr<'_>) -> Option<i64> {
     }
 }
 
+/// FEAT-036 soundness: does a constant expression (a global init or an
+/// element-segment offset/item) contain a `ref.func`? Such an expression takes
+/// a defined function's address OUTSIDE any function body — the body-only
+/// operator scan misses it, so the param-range gate must account for it here.
+fn const_expr_takes_func_ref(expr: &wasmparser::ConstExpr<'_>) -> bool {
+    expr.get_operators_reader()
+        .into_iter()
+        .any(|op| matches!(op, Ok(Operator::RefFunc { .. })))
+}
+
+/// FEAT-036 soundness: does an element segment name any defined function (and
+/// thereby take its address)? `Functions` items are bare func indices;
+/// `Expressions` items may carry `ref.func`. A malformed segment is treated as
+/// taking a reference (conservative — never under-reports an escape).
+fn element_items_take_func_ref(items: &wasmparser::ElementItems<'_>) -> Result<bool, AnalyzeError> {
+    match items {
+        wasmparser::ElementItems::Functions(funcs) => {
+            Ok(funcs.clone().into_iter().next().is_some())
+        }
+        wasmparser::ElementItems::Expressions(_, exprs) => {
+            for expr in exprs.clone() {
+                let expr = expr.map_err(|e| {
+                    AnalyzeError::InvalidModule(format!("element expression item: {e}"))
+                })?;
+                if const_expr_takes_func_ref(&expr) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+    }
+}
+
 /// Handle a direct `Call { function_index }` (FEAT-006 graph +
 /// FEAT-007 effect). Records a trivially-sound single-target
 /// call-graph edge, then applies the callee's abstract summary to the
@@ -3665,19 +3823,23 @@ fn handle_call(
     callee_func_index: u32,
     depth: u32,
 ) -> Result<(), AnalyzeError> {
-    call_graph.push(CallEdge {
-        caller_func: func_index,
-        pc,
-        indirect: false,
-        resolved_targets: alloc::vec![callee_func_index],
-        soundness: SoundnessTag::Sound,
-    });
-
+    // The call edge is recorded in each branch below, once the argument
+    // values are known (FEAT-036: `arg_ranges`). For a signature-unknown
+    // import the args can't be popped, so the edge carries empty `arg_ranges`.
+    //
     // Resolve the callee's signature. If unknown (import / unrecorded
     // type), keep v0.4's behaviour: leave the operand stack untouched
     // (sound for the straight-line core — see `apply_call_stack_effect`
     // doc), record the edge, emit the diagnostic, done.
     let Some((param_tys, _result_tys)) = module_ctx.signature_of_func(callee_func_index) else {
+        call_graph.push(CallEdge {
+            caller_func: func_index,
+            pc,
+            indirect: false,
+            resolved_targets: alloc::vec![callee_func_index],
+            soundness: SoundnessTag::Sound,
+            arg_ranges: Vec::new(),
+        });
         if emit_diagnostics {
             diagnostics.push(Diagnostic {
                 severity: DiagnosticSeverity::Info,
@@ -3699,6 +3861,16 @@ fn handle_call(
         args.push(ctx.operand_stack.pop().unwrap_or(AbstractValue::Unknown));
     }
     args.reverse(); // now in declaration order (param 0 first)
+
+    // FEAT-036: record the edge carrying the abstract arguments at this site.
+    call_graph.push(CallEdge {
+        caller_func: func_index,
+        pc,
+        indirect: false,
+        resolved_targets: alloc::vec![callee_func_index],
+        soundness: SoundnessTag::Sound,
+        arg_ranges: args.clone(),
+    });
 
     let summary = module_ctx.summary_by_abs(callee_func_index);
     let callee = module_ctx.defined_by_abs(callee_func_index);
@@ -3916,6 +4088,10 @@ fn emit_call_indirect_edge(
         // are sound; an over-approximation is still sound (it never
         // drops a concretely reachable target).
         soundness: SoundnessTag::Sound,
+        // FEAT-036: indirect-call arguments are not harvested (and any
+        // indirectly-reachable callee is forced to ⊤ params anyway), so leave
+        // empty.
+        arg_ranges: Vec::new(),
     });
 
     if emit_diagnostics {
@@ -5092,6 +5268,177 @@ mod tests {
                 break;
             }
         }
+    }
+
+    /// FEAT-036: a non-exported, only-directly-called function's parameter
+    /// ranges are the JOIN of the arguments at every call site.
+    #[test]
+    fn feat036_interproc_param_ranges() {
+        // $callee (func 0) is called with 5 and with 10; not exported / not
+        // indirect → params bounded by the join 5 ⊔ 10 = [5, 10].
+        let r = analyze_default(
+            "(module \
+             (func (param i32) (result i32) local.get 0) \
+             (func (export \"a\") (result i32) i32.const 5 call 0) \
+             (func (export \"b\") (result i32) i32.const 10 call 0))",
+        );
+        let callee = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .expect("callee summary");
+        assert_eq!(callee.param_count, 1);
+        assert!(
+            matches!(
+                callee.param_ranges.first(),
+                Some(AbstractValue::I32Interval(iv)) if iv.lo == 5 && iv.hi == 10
+            ),
+            "param range must be the join of call-site args [5,10], got {:?}",
+            callee.param_ranges
+        );
+    }
+
+    /// FEAT-036 soundness: an EXPORTED function has unknown external arguments,
+    /// so its parameter ranges must be ⊤ — never narrowed.
+    #[test]
+    fn feat036_exported_params_are_top() {
+        let r =
+            analyze_default("(module (func (export \"f\") (param i32) (result i32) local.get 0))");
+        let f = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .unwrap();
+        assert!(
+            matches!(f.param_ranges.first(), Some(AbstractValue::Unknown)),
+            "exported function params must be ⊤ (unknown external args), got {:?}",
+            f.param_ranges
+        );
+    }
+
+    /// FEAT-036 SOUNDNESS REGRESSION (clean-room finding): a function called
+    /// directly with a constant, in a module that ALSO contains a
+    /// `call_indirect` (and therefore a table), must keep ⊤ params. scry's
+    /// static table model under-reports indirect targets, so the directly-
+    /// called function could ALSO be reached indirectly with an unbounded
+    /// argument. The gate forces every param to ⊤ as soon as the module bears
+    /// a funcref container. Without this, `param_ranges` would narrow $callee
+    /// to the single direct-call constant [7,7] — an UNSOUND under-approx.
+    #[test]
+    fn feat036_indirect_call_forces_top() {
+        // func 0 ($callee): called directly with 7 below.
+        // func 2 (exported "ind"): contains a `call_indirect` — and the module
+        // declares a table — so callers are not fully known → no narrowing.
+        let r = analyze_default(
+            "(module \
+             (type $t (func (param i32) (result i32))) \
+             (table 1 funcref) \
+             (func (param i32) (result i32) local.get 0) \
+             (func (export \"direct\") (result i32) i32.const 7 call 0) \
+             (func (export \"ind\") (param i32) (result i32) \
+               local.get 0 \
+               local.get 0 \
+               call_indirect (type $t)))",
+        );
+        // sanity: the module really did produce an indirect edge.
+        assert!(
+            r.call_graph.iter().any(|e| e.indirect),
+            "fixture must contain a call_indirect edge"
+        );
+        let callee = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .expect("callee summary");
+        assert_eq!(callee.param_count, 1);
+        assert!(
+            matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
+            "a module bearing a funcref table must leave ALL param ranges ⊤ \
+             (the directly-called func could be an unseen indirect target), \
+             got {:?}",
+            callee.param_ranges
+        );
+    }
+
+    /// FEAT-036 SOUNDNESS REGRESSION (clean-room counterexample #1): an EXPORTED
+    /// funcref table lets the HOST `call_indirect` a defined function with
+    /// arbitrary arguments, even though the module itself has NO `call_indirect`
+    /// (so an edge-based gate sees nothing). The table's mere presence must
+    /// force ⊤. Without the fix, func 0 narrows to the single direct call [42].
+    #[test]
+    fn feat036_exported_table_forces_top() {
+        let r = analyze_default(
+            "(module \
+             (table (export \"t\") 1 funcref) \
+             (elem (i32.const 0) 0) \
+             (func (param i32) (result i32) local.get 0) \
+             (func (export \"run\") (result i32) i32.const 42 call 0))",
+        );
+        let callee = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .expect("callee summary");
+        assert!(
+            matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
+            "a function in an exported funcref table is host-reachable with \
+             unknown args ⇒ params must be ⊤, got {:?}",
+            callee.param_ranges
+        );
+    }
+
+    /// FEAT-036 SOUNDNESS REGRESSION (clean-room counterexample #2 generalized):
+    /// a `ref.func` materializes a callable reference to a defined function that
+    /// can escape (to a table, a global, the host, or a `call_ref`) beyond the
+    /// direct call sites scry recorded. Its presence must force ⊤ even with no
+    /// table-section table. Here func 0 is called directly with 7 and also has
+    /// its address taken via `ref.func`.
+    #[test]
+    fn feat036_ref_func_forces_top() {
+        let r = analyze_default(
+            "(module \
+             (func (param i32) (result i32) local.get 0) \
+             (func (export \"take\") (result funcref) ref.func 0) \
+             (func (export \"direct\") (result i32) i32.const 7 call 0))",
+        );
+        let callee = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .expect("callee summary");
+        assert!(
+            matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
+            "a function whose address is taken via ref.func can be called \
+             indirectly with unknown args ⇒ params must be ⊤, got {:?}",
+            callee.param_ranges
+        );
+    }
+
+    /// FEAT-036 SOUNDNESS REGRESSION (clean-room counterexample #3): a `ref.func`
+    /// in a GLOBAL init expression takes a defined function's address with NO
+    /// table and NO `ref.func` in any function BODY — so a body-only scan misses
+    /// it. The exported global hands func 0's reference to the host, which can
+    /// `call_ref` it with arbitrary args. Must force ⊤; without the fix func 0
+    /// narrows to the single direct call [7,7].
+    #[test]
+    fn feat036_global_init_ref_func_forces_top() {
+        let r = analyze_default(
+            "(module \
+             (func (param i32) (result i32) local.get 0) \
+             (global (export \"g\") funcref (ref.func 0)) \
+             (func (export \"direct\") (result i32) i32.const 7 call 0))",
+        );
+        let callee = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .expect("callee summary");
+        assert!(
+            matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
+            "a function whose address is taken in a global init expr escapes to \
+             the host ⇒ params must be ⊤, got {:?}",
+            callee.param_ranges
+        );
     }
 
     /// FEAT-021 slice-2b: the self-measuring fixture (two mutable i32 globals:
