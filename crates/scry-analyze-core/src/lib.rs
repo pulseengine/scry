@@ -229,12 +229,14 @@ pub struct FunctionSummary {
     /// the argument values observed at every call site reaching this function.
     /// SOUND only when scry has accounted for ALL callers, so it is `Unknown`
     /// (⊤) for every parameter of a function that is exported, the start
-    /// function, or — conservatively — defined in a module that contains ANY
-    /// `call_indirect` (scry's static table model under-reports indirect
-    /// targets, so it cannot prove a function is not an indirect callee).
-    /// Otherwise each entry is the join over all direct call sites — an
-    /// over-approximation of the parameter's incoming value across every
-    /// reachable call (never narrower than some reachable call permits).
+    /// function, or — conservatively — defined in any module that bears a
+    /// funcref container: one that declares/imports ANY table OR uses any
+    /// `ref.func`. (A funcref to a defined function can only originate from a
+    /// table or a `ref.func`; with neither present, no indirect or host
+    /// dispatch is possible, so the recorded direct calls are the complete
+    /// caller set.) Otherwise each entry is the join over all direct call
+    /// sites — an over-approximation of the parameter's incoming value across
+    /// every reachable call (never narrower than some reachable call permits).
     /// Library-only.
     pub param_ranges: Vec<AbstractValue>,
 }
@@ -904,6 +906,12 @@ pub fn analyze(
     let mut table0_is_funcref: bool = false;
     let mut table0_max: Option<u64> = None;
     let mut table_section_seen: bool = false;
+    // FEAT-036 soundness: true if the module declares OR imports ANY table
+    // (of any element type). A table is the only funcref container besides a
+    // `ref.func` instruction, so its mere presence means a defined function's
+    // address may be reachable indirectly (or by the host, via an exported or
+    // imported table) — which the param-range gate cannot otherwise bound.
+    let mut module_has_table: bool = false;
     // Active element segments targeting table 0 with a constant
     // i32 offset: (offset, [func indices]). Collected here, then
     // baked into the `FuncTable` after we know the table length.
@@ -957,6 +965,11 @@ pub fn analyze(
                         // FEAT-027: imported funcs occupy the low indices in
                         // import order; record "module.field" as a fallback name.
                         import_func_meta.push(alloc::format!("{}.{}", imp.module, imp.name));
+                    }
+                    // FEAT-036 soundness: an imported table is host-controlled —
+                    // the host can dispatch through it with arbitrary arguments.
+                    if matches!(imp.ty, wasmparser::TypeRef::Table(_)) {
+                        module_has_table = true;
                     }
                 }
             }
@@ -1031,6 +1044,9 @@ pub fn analyze(
                 for entry in reader {
                     let table = entry
                         .map_err(|e| AnalyzeError::InvalidModule(format!("table section: {e}")))?;
+                    // FEAT-036 soundness: any declared table (any element type)
+                    // is a potential funcref container / indirect-dispatch root.
+                    module_has_table = true;
                     if first {
                         table_section_seen = true;
                         // `initial` / `maximum` are `u64` in the
@@ -1410,20 +1426,33 @@ pub fn analyze(
     // Assemble the per-function-summary output records (FEAT-007).
     // ───────────────────────────────────────────────────────────
     // FEAT-036: interprocedural parameter ranges. A function's params are sound
-    // to narrow ONLY when scry has accounted for EVERY caller. The join over
-    // direct call sites is complete iff there is NO other way to reach the
-    // function with an argument scry did not capture. The external/unseen entry
-    // points are: exports and the start function (called with unknown args),
-    // and — critically — ANY `call_indirect` in the module. scry's static table
-    // model under-reports indirect targets (passive/declared element segments,
-    // runtime `table.init`/`set`, non-constant offsets all leave the resolved
-    // target set incomplete), so it cannot prove a function is NOT an indirect
-    // callee. Conservative-but-sound slice-1: if the module contains any
-    // indirect call at all, every function's params are ⊤. (A future slice can
-    // narrow this with whole-table-mutation analysis.) In an indirect-call-free
-    // module, the only callers are the direct call sites Phase 2 recorded, so
-    // the join over them is a sound over-approximation of every reachable call.
-    let any_indirect_call = call_graph.iter().any(|e| e.indirect);
+    // to narrow ONLY when scry has accounted for EVERY caller. The join over the
+    // recorded DIRECT call sites is the complete caller set iff there is NO
+    // other way to reach the function with an argument scry did not capture.
+    //
+    // The external / unseen entry points are:
+    //   * exports and the start function — invoked by the host with unknown
+    //     args (gated per-function below); and
+    //   * ANY indirect dispatch. scry cannot soundly enumerate indirect
+    //     targets: its static table model under-reports them (passive/declared
+    //     element segments, runtime `table.init`/`set`, non-constant indices),
+    //     and several dispatch ops (`return_call_indirect`, `call_ref`) are
+    //     unsupported — they scrub to ⊤ and record NO call-graph edge, so an
+    //     edge-based test misses them entirely. A host holding an exported (or
+    //     imported) table can likewise `call_indirect` with arbitrary args.
+    //
+    // Root-cause-sound rule: a non-null funcref to a defined function can ONLY
+    // come from a `ref.func` instruction or a table (element segments). If the
+    // module has NEITHER a table (declared or imported) NOR any `ref.func`,
+    // then no funcref to any defined function can exist anywhere — in code, in
+    // a table, in a global, or returned to the host — so NO indirect or host
+    // dispatch is possible and the recorded direct calls are provably the
+    // complete caller set. Only then may we narrow. (A future slice can recover
+    // precision in funcref-bearing modules with whole-table escape analysis.)
+    let any_ref_func = defined_funcs
+        .iter()
+        .any(|f| f.ops.iter().any(|op| matches!(op, Operator::RefFunc { .. })));
+    let callers_fully_known = !module_has_table && !any_ref_func;
 
     let mut function_summaries: Vec<FunctionSummary> = Vec::with_capacity(defined_funcs.len());
     for (defined, func) in defined_funcs.iter().enumerate() {
@@ -1432,7 +1461,7 @@ pub fn analyze(
             let n = func.params.len();
             let top_params = || (0..n).map(|_| AbstractValue::Unknown).collect::<Vec<_>>();
             let param_ranges = if n == 0
-                || any_indirect_call
+                || !callers_fully_known
                 || exported_funcs.contains(&abs)
                 || start_func == Some(abs)
             {
@@ -5219,19 +5248,17 @@ mod tests {
 
     /// FEAT-036 SOUNDNESS REGRESSION (clean-room finding): a function called
     /// directly with a constant, in a module that ALSO contains a
-    /// `call_indirect`, must keep ⊤ params. scry's static table model
-    /// under-reports indirect targets (passive/declared element segments and
-    /// runtime table mutation leave the resolved target set incomplete), so the
-    /// directly-called function could ALSO be reached indirectly with an
-    /// unbounded argument. The conservative gate forces every param to ⊤ as
-    /// soon as the module has any indirect call. Without this, `param_ranges`
-    /// would narrow $callee to the single direct-call constant [7,7] — an
-    /// UNSOUND under-approximation.
+    /// `call_indirect` (and therefore a table), must keep ⊤ params. scry's
+    /// static table model under-reports indirect targets, so the directly-
+    /// called function could ALSO be reached indirectly with an unbounded
+    /// argument. The gate forces every param to ⊤ as soon as the module bears
+    /// a funcref container. Without this, `param_ranges` would narrow $callee
+    /// to the single direct-call constant [7,7] — an UNSOUND under-approx.
     #[test]
     fn feat036_indirect_call_forces_top() {
         // func 0 ($callee): called directly with 7 below.
-        // func 1 (exported "run"): contains a `call_indirect`, so the module is
-        // not indirect-call-free → no function may be narrowed.
+        // func 2 (exported "ind"): contains a `call_indirect` — and the module
+        // declares a table — so callers are not fully known → no narrowing.
         let r = analyze_default(
             "(module \
              (type $t (func (param i32) (result i32))) \
@@ -5256,9 +5283,63 @@ mod tests {
         assert_eq!(callee.param_count, 1);
         assert!(
             matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
-            "a module with any call_indirect must leave ALL param ranges ⊤ \
+            "a module bearing a funcref table must leave ALL param ranges ⊤ \
              (the directly-called func could be an unseen indirect target), \
              got {:?}",
+            callee.param_ranges
+        );
+    }
+
+    /// FEAT-036 SOUNDNESS REGRESSION (clean-room counterexample #1): an EXPORTED
+    /// funcref table lets the HOST `call_indirect` a defined function with
+    /// arbitrary arguments, even though the module itself has NO `call_indirect`
+    /// (so an edge-based gate sees nothing). The table's mere presence must
+    /// force ⊤. Without the fix, func 0 narrows to the single direct call [42].
+    #[test]
+    fn feat036_exported_table_forces_top() {
+        let r = analyze_default(
+            "(module \
+             (table (export \"t\") 1 funcref) \
+             (elem (i32.const 0) 0) \
+             (func (param i32) (result i32) local.get 0) \
+             (func (export \"run\") (result i32) i32.const 42 call 0))",
+        );
+        let callee = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .expect("callee summary");
+        assert!(
+            matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
+            "a function in an exported funcref table is host-reachable with \
+             unknown args ⇒ params must be ⊤, got {:?}",
+            callee.param_ranges
+        );
+    }
+
+    /// FEAT-036 SOUNDNESS REGRESSION (clean-room counterexample #2 generalized):
+    /// a `ref.func` materializes a callable reference to a defined function that
+    /// can escape (to a table, a global, the host, or a `call_ref`) beyond the
+    /// direct call sites scry recorded. Its presence must force ⊤ even with no
+    /// table-section table. Here func 0 is called directly with 7 and also has
+    /// its address taken via `ref.func`.
+    #[test]
+    fn feat036_ref_func_forces_top() {
+        let r = analyze_default(
+            "(module \
+             (func (param i32) (result i32) local.get 0) \
+             (func (export \"take\") (result funcref) ref.func 0) \
+             (func (export \"direct\") (result i32) i32.const 7 call 0))",
+        );
+        let callee = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .expect("callee summary");
+        assert!(
+            matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
+            "a function whose address is taken via ref.func can be called \
+             indirectly with unknown args ⇒ params must be ⊤, got {:?}",
             callee.param_ranges
         );
     }
