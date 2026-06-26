@@ -1727,6 +1727,7 @@ artifacts:
       phase: phase-2
       acceptance-criteria:
         - "Given a function called only with arguments in a bounded range, When scry analyzes the module, Then that function's emitted parameter invariants reflect the join of all call-site argument ranges (⊤ when any caller is unresolved) — sound over every reachable call."
+        - "Given a module that contains any call_indirect (whose target set scry's static table model may under-report), When scry analyzes it, Then EVERY function's parameter ranges are ⊤ — scry never narrows a parameter on direct-call evidence alone while an unmodelled indirect caller could exist. (Clean-room soundness finding; covered by feat036_indirect_call_forces_top.)"
     links:
       - type: traces-to
         target: REQ-004

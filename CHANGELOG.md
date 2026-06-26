@@ -21,12 +21,11 @@ its call sites — a sound interprocedural fact for downstream specialization.
 - `FunctionSummary.param_ranges: Vec<AbstractValue>` — per parameter, the join
   of `arg_ranges` over every **direct** call site reaching the function. Sound
   by construction: it is `Unknown` (⊤) for every parameter of a function that is
-  **exported, the start function, or reachable via `call_indirect`** (external /
-  over-approximate entry points whose arguments scry cannot bound), and ⊤ if any
-  indirect edge is unsound — so a `param_ranges` entry is never narrower than
-  some reachable call permits. Otherwise it is the over-approximate incoming
-  value across all calls (e.g. a function called with `5` and `10` gets
-  `[5, 10]`).
+  **exported or the start function** (external entry points whose arguments scry
+  cannot bound), and — conservatively — for **every** function in a module that
+  contains **any `call_indirect`** (see soundness note). Otherwise it is the
+  over-approximate incoming value across all calls (e.g. a function called with
+  `5` and `10` gets `[5, 10]`), never narrower than some reachable call permits.
 - Both fields are library-only (read off the `scry-sai-core` `AnalysisResult`);
   the WIT mirror and the frozen v1 JSON contract are unchanged.
 
@@ -36,6 +35,16 @@ its call sites — a sound interprocedural fact for downstream specialization.
   an over-approximation; the ⊤ fallback for any unaccounted (external /
   indirect) caller means scry never claims a parameter range that excludes a
   reachable argument.
+- **Soundness note (clean-room finding, fixed before merge).** scry's static
+  table model under-reports `call_indirect` targets — passive/declared element
+  segments, runtime `table.init`/`table.set`, and non-constant dispatch indices
+  all leave the resolved target set incomplete, so scry cannot prove a function
+  is *not* an indirect callee. The conservative rule is therefore the whole-
+  module bail: if the module contains **any** indirect call, every function's
+  `param_ranges` is ⊤. Narrowing happens only in indirect-call-free modules,
+  where the recorded direct call sites are provably the complete caller set. A
+  future slice can recover precision with whole-table-mutation analysis. Covered
+  by `feat036_indirect_call_forces_top`.
 
 ## [2.1.1] — 2026-06-26
 

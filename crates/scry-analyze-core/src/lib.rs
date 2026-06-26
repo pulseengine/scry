@@ -229,10 +229,13 @@ pub struct FunctionSummary {
     /// the argument values observed at every call site reaching this function.
     /// SOUND only when scry has accounted for ALL callers, so it is `Unknown`
     /// (⊤) for every parameter of a function that is exported, the start
-    /// function, or reachable by any `call_indirect` (external/over-approximate
-    /// entry whose arguments scry cannot bound). Otherwise each entry is the
-    /// join over all direct call sites — an over-approximation of the
-    /// parameter's incoming value across every reachable call. Library-only.
+    /// function, or — conservatively — defined in a module that contains ANY
+    /// `call_indirect` (scry's static table model under-reports indirect
+    /// targets, so it cannot prove a function is not an indirect callee).
+    /// Otherwise each entry is the join over all direct call sites — an
+    /// over-approximation of the parameter's incoming value across every
+    /// reachable call (never narrower than some reachable call permits).
+    /// Library-only.
     pub param_ranges: Vec<AbstractValue>,
 }
 
@@ -1407,24 +1410,20 @@ pub fn analyze(
     // Assemble the per-function-summary output records (FEAT-007).
     // ───────────────────────────────────────────────────────────
     // FEAT-036: interprocedural parameter ranges. A function's params are sound
-    // to narrow ONLY when scry has accounted for EVERY caller. The over-approx
-    // / external entry points whose arguments scry cannot bound are: exports,
-    // the start function, and any function reachable via `call_indirect` (its
-    // index appears in some indirect edge's resolved-target superset). If any
-    // indirect edge is unsound (an under-approximation), any function could be
-    // an unseen indirect target, so we bail to ⊤ for everything. Otherwise a
-    // function's params are the join of the arguments over all DIRECT call
-    // sites reaching it — a sound over-approximation of every reachable call.
-    let mut indirect_targets: Vec<u32> = Vec::new();
-    let mut any_unsound_edge = false;
-    for e in &call_graph {
-        if e.indirect {
-            indirect_targets.extend_from_slice(&e.resolved_targets);
-        }
-        if e.soundness == SoundnessTag::UnsoundFallback {
-            any_unsound_edge = true;
-        }
-    }
+    // to narrow ONLY when scry has accounted for EVERY caller. The join over
+    // direct call sites is complete iff there is NO other way to reach the
+    // function with an argument scry did not capture. The external/unseen entry
+    // points are: exports and the start function (called with unknown args),
+    // and — critically — ANY `call_indirect` in the module. scry's static table
+    // model under-reports indirect targets (passive/declared element segments,
+    // runtime `table.init`/`set`, non-constant offsets all leave the resolved
+    // target set incomplete), so it cannot prove a function is NOT an indirect
+    // callee. Conservative-but-sound slice-1: if the module contains any
+    // indirect call at all, every function's params are ⊤. (A future slice can
+    // narrow this with whole-table-mutation analysis.) In an indirect-call-free
+    // module, the only callers are the direct call sites Phase 2 recorded, so
+    // the join over them is a sound over-approximation of every reachable call.
+    let any_indirect_call = call_graph.iter().any(|e| e.indirect);
 
     let mut function_summaries: Vec<FunctionSummary> = Vec::with_capacity(defined_funcs.len());
     for (defined, func) in defined_funcs.iter().enumerate() {
@@ -1433,10 +1432,9 @@ pub fn analyze(
             let n = func.params.len();
             let top_params = || (0..n).map(|_| AbstractValue::Unknown).collect::<Vec<_>>();
             let param_ranges = if n == 0
-                || any_unsound_edge
+                || any_indirect_call
                 || exported_funcs.contains(&abs)
                 || start_func == Some(abs)
-                || indirect_targets.contains(&abs)
             {
                 top_params()
             } else {
@@ -5216,6 +5214,52 @@ mod tests {
             matches!(f.param_ranges.first(), Some(AbstractValue::Unknown)),
             "exported function params must be ⊤ (unknown external args), got {:?}",
             f.param_ranges
+        );
+    }
+
+    /// FEAT-036 SOUNDNESS REGRESSION (clean-room finding): a function called
+    /// directly with a constant, in a module that ALSO contains a
+    /// `call_indirect`, must keep ⊤ params. scry's static table model
+    /// under-reports indirect targets (passive/declared element segments and
+    /// runtime table mutation leave the resolved target set incomplete), so the
+    /// directly-called function could ALSO be reached indirectly with an
+    /// unbounded argument. The conservative gate forces every param to ⊤ as
+    /// soon as the module has any indirect call. Without this, `param_ranges`
+    /// would narrow $callee to the single direct-call constant [7,7] — an
+    /// UNSOUND under-approximation.
+    #[test]
+    fn feat036_indirect_call_forces_top() {
+        // func 0 ($callee): called directly with 7 below.
+        // func 1 (exported "run"): contains a `call_indirect`, so the module is
+        // not indirect-call-free → no function may be narrowed.
+        let r = analyze_default(
+            "(module \
+             (type $t (func (param i32) (result i32))) \
+             (table 1 funcref) \
+             (func (param i32) (result i32) local.get 0) \
+             (func (export \"direct\") (result i32) i32.const 7 call 0) \
+             (func (export \"ind\") (param i32) (result i32) \
+               local.get 0 \
+               local.get 0 \
+               call_indirect (type $t)))",
+        );
+        // sanity: the module really did produce an indirect edge.
+        assert!(
+            r.call_graph.iter().any(|e| e.indirect),
+            "fixture must contain a call_indirect edge"
+        );
+        let callee = r
+            .function_summaries
+            .iter()
+            .find(|f| f.func_index == 0)
+            .expect("callee summary");
+        assert_eq!(callee.param_count, 1);
+        assert!(
+            matches!(callee.param_ranges.first(), Some(AbstractValue::Unknown)),
+            "a module with any call_indirect must leave ALL param ranges ⊤ \
+             (the directly-called func could be an unseen indirect target), \
+             got {:?}",
+            callee.param_ranges
         );
     }
 
