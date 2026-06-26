@@ -57,7 +57,7 @@ default-members = [
 # on crates.io matches the release artifacts. The crates.io publish workflow
 # asserts the pushed `v*` tag equals this version, so a release bump must move
 # both in lockstep (and the internal path-dep `version = "..."` fields below).
-version = "1.18.0"
+version = "2.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pulseengine/scry"

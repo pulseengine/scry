@@ -1567,6 +1567,60 @@ artifacts:
       - type: traces-to
         target: G-005
 
+  - id: FEAT-032
+    type: feature
+    title: "v2.0 — component-provenance SCPV v3: canonical binary format + fusion premises (scry#63 / meld#313)"
+    status: proposed
+    description: >
+      Reconcile and extend the meld→scry `component-provenance` boundary
+      (DD-002). FINDING that gated scry#63: the boundary had never connected —
+      meld emitted JSON v2 (string component_id, fused_module_sha256,
+      code_range), scry decoded a custom binary `SCPV` v1 (u32 component_id);
+      mutually undecodable, so scry rejected every real meld section
+      (BadMagic → conservative None). avrabe ratified **binary-canonical SCPV
+      v3**: scry's strict `no_std` binary stays the canonical wire shape (keeps
+      the DO-333 trusted decoder lean — no JSON parser in the trusted base) and
+      grows meld's richer schema; meld#313 swaps its section encoder JSON→binary
+      to match.
+
+      SCPV v3 (scry-provenance): fixed header carries the two **fusion premises**
+      meld knows by construction — `bounded_memory` (no memory.grow → fixed
+      linear memory) and `closed_world` (cross-component imports internalised) —
+      plus a `fused_module_sha256` binding; per-entry a length-prefixed UTF-8
+      `component_id` and an optional `code_range`. Strict decoder: hard-error on
+      bad magic / unknown version / malformed flag / bad UTF-8 / truncation /
+      trailing bytes (never a partial parse). Surfaced on
+      `AnalysisResult.provenance` (premises + sha + origins) for a library
+      consumer; mirrored in the WIT (`component-origin.component-id: string`,
+      `code-range`, `fusion-premises`) + the JSON-schema contract.
+
+      BREAKING (⇒ v2.0): the reshape retypes `component_id` (u32→string) and
+      changes `decode()`'s return type on the published `scry-sai-provenance` /
+      `scry-sai-core` APIs. synth's consumed surface (call-graph / stack /
+      reachability / operand-stack) is untouched, so it is a smooth 2.0 for
+      synth (heads-up on #51/#54).
+
+      slice-1 (this issue): the format + decode + surface premises on the
+      result. slice-2 (separate, soundness-laden): CONSUME the premises to
+      tighten analysis — bounded_memory drops grow-reachability widening (scry#5),
+      closed_world tightens reachable_from_exports (scry#51).
+    tags: [capability, interop, provenance, meld-boundary, breaking, v2.0]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a `SCPV` v3 `component-provenance` payload, When scry-provenance decodes it, Then it round-trips losslessly (premises in the header, sha binding, UTF-8 component ids, optional code ranges) and the strict decoder hard-errors on every malformed shape rather than partial-parsing."
+        - "Given a fused module carrying a v3 section, When scry analyzes it, Then AnalysisResult.provenance carries the fusion premises + module hash + origins; a non-v3 (or absent) section yields none with a diagnostic, never a crash."
+        - "Kill-criterion: a v1/v2 section, or any malformed v3 payload, is a hard decode error (Warning + provenance=none), never a silent partial parse or a wrong attribution."
+    links:
+      - type: satisfies
+        target: REQ-008
+      - type: traces-to
+        target: DD-002
+      - type: traces-to
+        target: FEAT-002
+      - type: traces-to
+        target: G-005
+
   # ──────────────────────────────────────────────────────────────────────
   # Safety goal for the v2.0 qualification milestone.
   # ──────────────────────────────────────────────────────────────────────

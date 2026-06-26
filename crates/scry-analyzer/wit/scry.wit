@@ -267,31 +267,58 @@ interface analyzer {
     /// function-origin map of DD-002 variant (b.1) — resource/handle
     /// shapes are NOT carried here (scry derives those from the
     /// original component sources directly).
+    /// A function body's byte span in the fused module (FEAT-032 / v3),
+    /// for DWARF address remapping. Optional per origin.
+    record code-range {
+        start: u32,
+        end: u32,
+    }
+
     record component-origin {
         /// Index of the function in the fused Core Wasm module. This is
         /// the same index scry's `program-point.func-index` and
         /// `call-edge.caller-func` are keyed by, so projecting an
         /// invariant onto its origin is a join on this field.
         fused-func-index: u32,
-        /// Opaque identifier of the originating component in the
-        /// composition graph. Only equality is meaningful.
-        component-id: u32,
+        /// Identifier of the originating component in the composition
+        /// graph (meld's string id; FEAT-032 / v3). Only equality /
+        /// labelling is meaningful.
+        component-id: string,
         /// Index of the function within its originating component,
         /// before fusion.
         orig-func-index: u32,
+        /// Byte span of the function body in the fused module, if meld
+        /// recorded it (FEAT-032 / v3).
+        code-range: option<code-range>,
     }
 
-    /// The decoded `component-provenance` custom section (FEAT-002):
-    /// the function-origin map meld emitted for a fused module. Present
-    /// on `analysis-result.provenance` only when the analyzed module
-    /// actually carried a well-formed section; a module with no section
-    /// (e.g. a single un-fused component, or any v0.1-style Core Wasm
-    /// input) yields `none`, and a malformed section is reported via a
-    /// `diagnostic` and also yields `none` (never a partial parse).
+    /// The fusion premises meld asserts by construction (FEAT-032 /
+    /// scry#63) — facts scry cannot soundly assume on its own but that
+    /// hold after fusion. A consumer may use them as sound analysis
+    /// assumptions.
+    record fusion-premises {
+        /// No `memory.grow` in the fused core → fixed linear memory.
+        bounded-memory: bool,
+        /// All cross-component imports internalised → no external
+        /// mutation of fused state between components.
+        closed-world: bool,
+    }
+
+    /// The decoded `component-provenance` custom section (FEAT-002 /
+    /// FEAT-032). Present on `analysis-result.provenance` only when the
+    /// analyzed module carried a well-formed `SCPV` v3 section; a module
+    /// with no section yields `none`, and a malformed section is reported
+    /// via a `diagnostic` and also yields `none` (never a partial parse).
     record component-provenance {
+        /// Fusion premises meld asserts by construction (header of the
+        /// v3 section).
+        premises: fusion-premises,
+        /// SHA-256 of the fused module the section was emitted for (raw
+        /// 32 bytes), binding the section to its module.
+        fused-module-sha256: list<u8>,
         /// One entry per fused-module function meld recorded, in file
         /// order. The byte format is defined by the `scry-provenance`
-        /// crate (`SCPV` v1).
+        /// crate (`SCPV` v3).
         origins: list<component-origin>,
     }
 
