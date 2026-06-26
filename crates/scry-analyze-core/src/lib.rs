@@ -1449,12 +1449,25 @@ pub fn analyze(
     // dispatch is possible and the recorded direct calls are provably the
     // complete caller set. Only then may we narrow. (A future slice can recover
     // precision in funcref-bearing modules with whole-table escape analysis.)
-    let any_ref_func = defined_funcs.iter().any(|f| {
-        f.ops
-            .iter()
-            .any(|op| matches!(op, Operator::RefFunc { .. }))
+    // Defense-in-depth: besides the funcref-origin signals above, also bail on
+    // the *presence* of any indirect-dispatch operator. In valid Wasm these
+    // imply a table (so `module_has_table` already fires), but matching the ops
+    // directly makes the gate robust to malformed input and to dispatch ops the
+    // value interpreter does not model (`return_call_indirect`, `call_ref` fall
+    // through to the scrub-to-⊤ arm and record no call-graph edge) — exactly the
+    // class of "an op slipped through" the clean-room kept surfacing.
+    let any_funcref_escape = defined_funcs.iter().any(|f| {
+        f.ops.iter().any(|op| {
+            matches!(
+                op,
+                Operator::RefFunc { .. }
+                    | Operator::CallIndirect { .. }
+                    | Operator::ReturnCallIndirect { .. }
+                    | Operator::CallRef { .. }
+            )
+        })
     });
-    let callers_fully_known = !module_has_table && !any_ref_func;
+    let callers_fully_known = !module_has_table && !any_funcref_escape;
 
     let mut function_summaries: Vec<FunctionSummary> = Vec::with_capacity(defined_funcs.len());
     for (defined, func) in defined_funcs.iter().enumerate() {
