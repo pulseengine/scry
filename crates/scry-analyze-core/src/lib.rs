@@ -330,6 +330,16 @@ pub struct AnalysisResult {
     /// consumer (synth's footprint report, scry-viz) show `$compute_stack` in
     /// place of `func 42`. Library-only addition (not in the WIT mirror).
     pub function_meta: Vec<FunctionMeta>,
+    /// FEAT-034: fusion premises scry determined for ITSELF by inspecting the
+    /// module (verify-not-trust) — `bounded_memory` = no `memory.grow` anywhere
+    /// (linear memory is fixed), `closed_world` = no functional imports (no
+    /// external caller scry cannot see). These are scry's OWN sound facts,
+    /// independent of any meld-provided premise in `provenance.premises`; a
+    /// consumer can rely on them because scry proved them. When a meld v3
+    /// premise contradicts scry's verification (e.g. claims bounded_memory on a
+    /// module containing `memory.grow`), scry emits a diagnostic and keeps its
+    /// own (conservative) determination here.
+    pub verified_premises: FusionPremises,
 }
 
 /// FEAT-027: human-readable metadata for one function index.
@@ -418,7 +428,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "2.0.0";
+const SCRY_VERSION: &str = "2.1.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -1529,6 +1539,39 @@ pub fn analyze(
         &name_section,
     );
 
+    // FEAT-034: scry's OWN fusion premises (verify-not-trust). A syntactic
+    // scan — `memory.grow` anywhere ⇒ memory is not provably fixed; any
+    // functional import ⇒ scry cannot prove a closed world at the core level.
+    // These are sound because scry derived them, independent of meld's claim.
+    let saw_memory_grow = defined_funcs.iter().any(|f| {
+        f.ops
+            .iter()
+            .any(|op| matches!(op, Operator::MemoryGrow { .. }))
+    });
+    let verified_premises = FusionPremises {
+        bounded_memory: !saw_memory_grow,
+        closed_world: import_func_count == 0,
+    };
+    // Cross-check meld's asserted premise against scry's observation: a v3
+    // section claiming `bounded_memory` on a module that contains `memory.grow`
+    // is a producer↔consumer disagreement — flag it; scry keeps its own
+    // conservative determination (meld stays out of scry's TCB).
+    if config.emit_diagnostics
+        && let Some(section) = &provenance_section
+        && section.premises.bounded_memory
+        && saw_memory_grow
+    {
+        diagnostics.push(Diagnostic {
+            severity: DiagnosticSeverity::UnsoundnessFallback,
+            func_index: 0,
+            pc: 0,
+            message: "FEAT-034: meld component-provenance asserts bounded_memory but the fused \
+                 module contains memory.grow — premise rejected; scry uses its own \
+                 (unbounded) determination"
+                .to_string(),
+        });
+    }
+
     Ok(AnalysisResult {
         invariants,
         diagnostics,
@@ -1539,6 +1582,7 @@ pub fn analyze(
         stack_usage,
         reachable_from_exports,
         function_meta,
+        verified_premises,
     })
 }
 
@@ -4481,6 +4525,7 @@ mod tests {
             },
             reachable_from_exports: alloc::vec![],
             function_meta: alloc::vec![],
+            verified_premises: FusionPremises::default(),
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -4943,6 +4988,110 @@ mod tests {
         assert_eq!(res.function_meta.len(), 1);
         assert_eq!(res.function_meta[0].name, None, "no name source → None");
         assert!(!res.function_meta[0].imported);
+    }
+
+    fn analyze_default(src: &str) -> AnalysisResult {
+        analyze(
+            wat::parse_str(src).expect("assemble"),
+            AnalysisConfig::default(),
+        )
+        .expect("analyze")
+    }
+
+    /// FEAT-034: scry determines its OWN fusion premises (verify-not-trust):
+    /// bounded_memory = no `memory.grow`; closed_world = no functional imports.
+    #[test]
+    fn feat034_verified_premises() {
+        // memory.grow present → not bounded.
+        let g = analyze_default(
+            "(module (memory 1) (func (export \"g\") (result i32) i32.const 1 memory.grow))",
+        );
+        assert!(
+            !g.verified_premises.bounded_memory,
+            "memory.grow ⇒ not bounded"
+        );
+
+        // memory, no grow, no imports → bounded + closed.
+        let b = analyze_default("(module (memory 1) (func (export \"f\") nop))");
+        assert!(b.verified_premises.bounded_memory, "no grow ⇒ bounded");
+        assert!(
+            b.verified_premises.closed_world,
+            "no imports ⇒ closed world"
+        );
+
+        // a functional import → scry cannot prove closed world.
+        let i = analyze_default("(module (import \"env\" \"h\" (func)) (func (export \"f\") nop))");
+        assert!(
+            !i.verified_premises.closed_world,
+            "functional import ⇒ not provably closed"
+        );
+        assert!(
+            i.verified_premises.bounded_memory,
+            "no memory/grow ⇒ vacuously bounded"
+        );
+    }
+
+    /// FEAT-034: a meld v3 premise asserting bounded_memory on a module that
+    /// contains memory.grow is rejected with a disagreement diagnostic, and
+    /// scry keeps its own (unbounded) determination.
+    #[test]
+    fn feat034_rejects_false_bounded_memory_premise() {
+        // Module with memory.grow.
+        let mut module = wat::parse_str(
+            "(module (memory 1) (func (export \"g\") (result i32) i32.const 1 memory.grow))",
+        )
+        .expect("assemble");
+        // Append a component-provenance v3 section asserting bounded_memory=true.
+        let section = scry_provenance::ProvenanceSection {
+            premises: scry_provenance::FusionPremises {
+                bounded_memory: true,
+                closed_world: false,
+            },
+            fused_module_sha256: [0u8; 32],
+            origins: alloc::vec![],
+        };
+        let payload = scry_provenance::encode(&section);
+        let name = scry_provenance::SECTION_NAME.as_bytes();
+        let mut body = alloc::vec![];
+        write_uleb128(&mut body, name.len() as u64);
+        body.extend_from_slice(name);
+        body.extend_from_slice(&payload);
+        module.push(0x00); // custom section id
+        write_uleb128(&mut module, body.len() as u64);
+        module.extend_from_slice(&body);
+
+        let res = analyze(
+            module,
+            AnalysisConfig {
+                widening_threshold: Some(3),
+                emit_diagnostics: true,
+                taint_policy: None,
+            },
+        )
+        .expect("analyze");
+        // scry kept its own determination (not bounded), despite the premise.
+        assert!(!res.verified_premises.bounded_memory);
+        // and flagged the disagreement.
+        assert!(
+            res.diagnostics
+                .iter()
+                .any(|d| d.message.contains("premise rejected")),
+            "expected a bounded_memory disagreement diagnostic"
+        );
+    }
+
+    fn write_uleb128(out: &mut Vec<u8>, mut value: u64) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
     }
 
     /// FEAT-021 slice-2b: the self-measuring fixture (two mutable i32 globals:

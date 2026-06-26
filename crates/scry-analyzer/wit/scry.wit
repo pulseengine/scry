@@ -420,6 +420,11 @@ interface analyzer {
         /// Worst-case shadow-stack bound (FEAT-021): per-function frames and
         /// the module's `max-stack-bytes`.
         stack-usage: stack-usage,
+        /// Fusion premises scry verified for ITSELF by inspecting the module
+        /// (FEAT-034, verify-not-trust): `bounded-memory` = no `memory.grow`,
+        /// `closed-world` = no functional imports. scry's own sound facts,
+        /// independent of any meld-provided `provenance.premises`.
+        verified-premises: fusion-premises,
     }
 
     /// Reasons an analyze call can fail without producing a partial

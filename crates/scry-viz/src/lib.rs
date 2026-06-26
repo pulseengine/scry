@@ -248,6 +248,17 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
     kv(s, "call-graph edges", &r.call_graph.len().to_string());
     kv(s, "diagnostics", &r.diagnostics.len().to_string());
     kv(s, "program points", &points.to_string());
+    // FEAT-034: scry's own verified fusion premises (independent of meld).
+    let vp = &r.verified_premises;
+    kv(
+        s,
+        "verified premises",
+        &format!(
+            "bounded-memory: {} · closed-world: {}",
+            if vp.bounded_memory { "yes" } else { "no" },
+            if vp.closed_world { "yes" } else { "no" },
+        ),
+    );
     s.push_str("</dl></section>");
 }
 

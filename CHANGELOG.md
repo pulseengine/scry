@@ -7,6 +7,36 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-06-26
+
+Headline: **scry independently verifies the fusion premises and surfaces them
+(FEAT-034, scry#5/#51 slice-2).** The premise-consumption follow-on, done the
+sound way — *verify, don't trust*.
+
+### Added — FEAT-034 (traces FEAT-032)
+
+- `AnalysisResult.verified_premises: FusionPremises` — scry's OWN determination,
+  derived by inspecting the module (independent of any meld-provided premise):
+  `bounded_memory` = no `memory.grow` anywhere (linear memory is fixed),
+  `closed_world` = no functional imports (no external caller scry cannot see).
+  A consumer (synth's footprint proof) can rely on these because scry proved
+  them — meld stays out of scry's TCB. Mirrored in the WIT
+  (`analysis-result.verified-premises`); surfaced in the scry-viz summary.
+- **Cross-check:** when a meld `component-provenance` v3 section asserts
+  `bounded_memory = true` on a module that contains `memory.grow`, scry emits an
+  `UnsoundnessFallback` diagnostic (a producer↔consumer disagreement detector)
+  and keeps its own conservative determination.
+- `closed_world` is only conservatively verifiable at the core level (scry
+  can't distinguish a cross-component import from a WASI host import), so scry
+  never refutes meld's `closed_world`; it reports its own provable value and
+  leaves meld's claim surfaced in `provenance.premises`.
+
+### Posture
+
+- Additive field (SemVer-minor). Sound by construction: every `verified_premise`
+  is something scry verified itself; the meld premise is only ever a cross-check,
+  never a trusted assumption.
+
 ### Traceability — FEAT-033 (scry#59): ASPICE V-model verification spine
 
 - Added the Automotive-SPICE v4.0 schema (`aspice`) and a parallel V-model in

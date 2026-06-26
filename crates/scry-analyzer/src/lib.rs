@@ -116,6 +116,10 @@ fn result_to_wit(r: ac::AnalysisResult) -> wit::AnalysisResult {
             .map(taint_finding_to_wit)
             .collect(),
         stack_usage: stack_usage_to_wit(r.stack_usage),
+        verified_premises: wit::FusionPremises {
+            bounded_memory: r.verified_premises.bounded_memory,
+            closed_world: r.verified_premises.closed_world,
+        },
     }
 }
 
