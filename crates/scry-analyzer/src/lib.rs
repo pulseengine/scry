@@ -211,6 +211,11 @@ fn summary_to_wit(s: ac::FunctionSummary) -> wit::FunctionSummary {
 
 fn provenance_to_wit(p: ac::ComponentProvenance) -> wit::ComponentProvenance {
     wit::ComponentProvenance {
+        premises: wit::FusionPremises {
+            bounded_memory: p.premises.bounded_memory,
+            closed_world: p.premises.closed_world,
+        },
+        fused_module_sha256: p.fused_module_sha256.to_vec(),
         origins: p.origins.into_iter().map(origin_to_wit).collect(),
     }
 }
@@ -220,6 +225,10 @@ fn origin_to_wit(o: ac::ComponentOrigin) -> wit::ComponentOrigin {
         fused_func_index: o.fused_func_index,
         component_id: o.component_id,
         orig_func_index: o.orig_func_index,
+        code_range: o.code_range.map(|c| wit::CodeRange {
+            start: c.start,
+            end: c.end,
+        }),
     }
 }
 

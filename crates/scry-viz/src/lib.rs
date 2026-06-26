@@ -676,28 +676,58 @@ fn label(l: &SecurityLabel) -> &'static str {
 /// decoded; absent for a plain Core Wasm module, so no section is emitted then.
 fn render_provenance(s: &mut String, r: &AnalysisResult) {
     let Some(prov) = &r.provenance else { return };
+    s.push_str("<section><h2>Component provenance</h2>");
+    // FEAT-032: the fusion premises meld asserts by construction (v3 header).
+    let yn = |b: bool| {
+        if b {
+            "<span class=\"ok\">yes</span>"
+        } else {
+            "<span class=\"muted\">no</span>"
+        }
+    };
+    let _ = write!(
+        s,
+        "<dl><dt>fusion premises</dt><dd>bounded-memory: {} · closed-world: {}</dd>\
+         <dt>fused module sha256</dt><dd><code>{}</code></dd></dl>",
+        yn(prov.premises.bounded_memory),
+        yn(prov.premises.closed_world),
+        hex32(&prov.fused_module_sha256),
+    );
     if prov.origins.is_empty() {
+        s.push_str("<p class=\"empty\">No per-function origins.</p></section>");
         return;
     }
-    s.push_str("<section><h2>Component provenance</h2>");
     s.push_str(
         "<p class=\"muted\">meld fusion origin map: each fused function traced \
-         to its source component and original index.</p>",
+         to its source component, original index, and code range.</p>",
     );
     s.push_str(
         "<table><thead><tr><th>fused func</th><th>component</th>\
-         <th>original func</th></tr></thead><tbody>",
+         <th>original func</th><th>code range</th></tr></thead><tbody>",
     );
     for o in &prov.origins {
+        let cr = match &o.code_range {
+            Some(c) => format!("[{}, {})", c.start, c.end),
+            None => "<span class=\"muted\">—</span>".to_string(),
+        };
         let _ = write!(
             s,
-            "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+            "<tr><td>{}</td><td><code>{}</code></td><td>{}</td><td>{cr}</td></tr>",
             fn_link(r, o.fused_func_index),
-            o.component_id,
+            esc(&o.component_id),
             o.orig_func_index,
         );
     }
     s.push_str("</tbody></table></section>");
+}
+
+/// Lowercase hex of a 32-byte hash.
+fn hex32(b: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for byte in b {
+        let _ = write!(s, "{byte:02x}");
+    }
+    s
 }
 
 fn render_points(s: &mut String, r: &AnalysisResult) {

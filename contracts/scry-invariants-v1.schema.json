@@ -53,6 +53,11 @@
       "minimum": 0,
       "maximum": 4294967295
     },
+    "u8": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+    },
     "s64": {
       "type": "integer",
       "minimum": -9223372036854775808,
@@ -309,13 +314,40 @@
         }
       }
     },
+    "code-range": {
+      "type": "object",
+      "description": "WIT record `code-range` (FEAT-032 / SCPV v3): a function body's byte span in the fused module, for DWARF address remapping.",
+      "required": ["start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "$ref": "#/$defs/u32" },
+        "end": { "$ref": "#/$defs/u32" }
+      }
+    },
+    "fusion-premises": {
+      "type": "object",
+      "description": "WIT record `fusion-premises` (FEAT-032 / scry#63): facts meld asserts by construction after fusion, usable as sound analysis assumptions.",
+      "required": ["bounded-memory", "closed-world"],
+      "additionalProperties": false,
+      "properties": {
+        "bounded-memory": {
+          "type": "boolean",
+          "description": "No `memory.grow` in the fused core → fixed linear memory."
+        },
+        "closed-world": {
+          "type": "boolean",
+          "description": "All cross-component imports internalised → no external mutation between components."
+        }
+      }
+    },
     "component-origin": {
       "type": "object",
-      "description": "WIT record `component-origin` (FEAT-002 / DD-002): one fused-module function's origin. Decoded from meld's `component-provenance` custom section (binary format `SCPV` v1, defined by the scry-provenance crate).",
+      "description": "WIT record `component-origin` (FEAT-002 / FEAT-032 / DD-002): one fused-module function's origin. Decoded from meld's `component-provenance` custom section (binary format `SCPV` v3, defined by the scry-provenance crate).",
       "required": [
         "fused-func-index",
         "component-id",
-        "orig-func-index"
+        "orig-func-index",
+        "code-range"
       ],
       "additionalProperties": false,
       "properties": {
@@ -324,23 +356,38 @@
           "$ref": "#/$defs/u32"
         },
         "component-id": {
-          "description": "Opaque identifier of the originating component. Only equality is meaningful.",
-          "$ref": "#/$defs/u32"
+          "type": "string",
+          "description": "Identifier of the originating component (meld's string id, FEAT-032 / v3). Only equality / labelling is meaningful."
         },
         "orig-func-index": {
           "description": "Function index within the originating component, before fusion.",
           "$ref": "#/$defs/u32"
+        },
+        "code-range": {
+          "description": "Byte span of the function body in the fused module, if meld recorded it (FEAT-032 / v3); null otherwise.",
+          "oneOf": [{ "$ref": "#/$defs/code-range" }, { "type": "null" }]
         }
       }
     },
     "component-provenance": {
       "type": "object",
-      "description": "WIT record `component-provenance` (FEAT-002): the decoded function-origin map meld emitted for a fused module.",
+      "description": "WIT record `component-provenance` (FEAT-002 / FEAT-032): the decoded `SCPV` v3 section meld emitted for a fused module — fusion premises, module-binding hash, and function-origin map.",
       "required": [
+        "premises",
+        "fused-module-sha256",
         "origins"
       ],
       "additionalProperties": false,
       "properties": {
+        "premises": {
+          "description": "Fusion premises meld asserts by construction (v3 header).",
+          "$ref": "#/$defs/fusion-premises"
+        },
+        "fused-module-sha256": {
+          "type": "array",
+          "description": "SHA-256 of the fused module (32 raw bytes), binding the section to its module.",
+          "items": { "$ref": "#/$defs/u8" }
+        },
         "origins": {
           "type": "array",
           "description": "One entry per fused-module function meld recorded, in file order.",

@@ -7,6 +7,61 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-06-26
+
+Headline: **`component-provenance` SCPV v3 — the meld→scry boundary reconciled,
+plus fusion premises (FEAT-032, scry#63 / meld#313).** First major bump: the
+provenance wire format is reshaped, a breaking change to the published
+`scry-sai-provenance` / `scry-sai-core` APIs.
+
+### Why a major bump
+
+Investigating scry#63 surfaced that the meld→scry `component-provenance`
+boundary had **never connected**: meld emitted JSON v2 (string `component_id`,
+`fused_module_sha256`, `code_range`); scry decoded a custom binary `SCPV` v1
+(u32 `component_id`) — mutually undecodable, so scry rejected every real meld
+section (`BadMagic` → conservative `none`). avrabe ratified **binary-canonical
+SCPV v3**: scry's strict `no_std` binary stays the canonical wire shape (keeps
+the DO-333 trusted decoder lean — no JSON parser in the trusted base) and grows
+meld's richer schema; meld (#313) swaps its section encoder JSON→binary to match.
+
+### Changed — FEAT-032 (REQ-008 / DD-002), **breaking**
+
+- **`scry-sai-provenance`** decodes/encodes `SCPV` **v3**: a fixed header
+  carrying the two **fusion premises** meld knows by construction —
+  `bounded_memory` (no `memory.grow` → fixed linear memory) and `closed_world`
+  (cross-component imports internalised) — plus a `fused_module_sha256`
+  binding; per entry a length-prefixed UTF-8 `component_id` (was `u32`) and an
+  optional `code_range`. `decode()` now returns a `ProvenanceSection`
+  (premises + sha + origins). Strict: hard-errors on bad magic / unknown
+  version / malformed flag / bad UTF-8 / truncation / trailing bytes.
+- **`scry-sai-core`**: `AnalysisResult.provenance` (`ComponentProvenance`) now
+  carries `premises` + `fused_module_sha256`, and `ComponentOrigin` carries the
+  string `component_id` + optional `code_range`. Re-exports `FusionPremises` /
+  `CodeRange`.
+- **WIT** (`component-origin.component-id: string`, new `code-range` +
+  `fusion-premises` records, `component-provenance` gains `premises` +
+  `fused-module-sha256`) and the JSON-schema contract updated to match.
+
+### Compatibility
+
+- **synth's consumed surface is untouched** — `call_graph`,
+  `function_summaries`, `stack_usage`, `reachable_from_exports`, and the
+  per-program-point `operand_stack` are unchanged and remain additive-only. The
+  break is confined to the provenance types, which synth does not read; so 2.0
+  is a smooth bump for synth (heads-up on #51/#54).
+- Consuming the premises to *tighten* the analysis (bounded_memory drops
+  grow-reachability widening, closed_world tightens reachability) is a separate
+  follow-on slice (scry#5 / scry#51); this release lands the format + surfaces
+  the premises.
+
+### Falsification statement
+
+If scry decodes a non-v3 (v1/v2) or malformed `component-provenance` payload as
+anything other than a hard error (Warning + `provenance = none`) — i.e. a
+silent partial parse or a wrong attribution — this release's contract is false.
+The `scry-provenance` + `scry-host-tests` round-trip/rejection tests pin it.
+
 ## [1.18.0] — 2026-06-23
 
 Headline: **readable demangled names + long-name handling in the dashboard

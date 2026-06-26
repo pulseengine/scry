@@ -155,19 +155,37 @@ struct FunctionSummary {
     recursive: bool,
 }
 
-/// FEAT-002 — serde mirror of WIT `component-provenance` / `component-origin`.
+/// FEAT-002 / FEAT-032 — serde mirror of WIT `component-provenance` /
+/// `component-origin` / `fusion-premises` / `code-range` (SCPV v3).
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct ComponentProvenance {
+    premises: FusionPremises,
+    fused_module_sha256: Vec<u8>,
     origins: Vec<ComponentOrigin>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct FusionPremises {
+    bounded_memory: bool,
+    closed_world: bool,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct ComponentOrigin {
     fused_func_index: u32,
-    component_id: u32,
+    component_id: String,
     orig_func_index: u32,
+    code_range: Option<CodeRange>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct CodeRange {
+    start: u32,
+    end: u32,
 }
 
 // ── Schema location + representative value ───────────────────────────
@@ -293,19 +311,26 @@ fn representative_result() -> AnalysisResult {
                 recursive: true,
             },
         ],
-        // FEAT-002: a decoded component-provenance map attributing two
-        // fused functions to their originating components.
+        // FEAT-002 / FEAT-032: a decoded SCPV v3 component-provenance section —
+        // fusion premises + module hash + two attributed fused functions.
         provenance: Some(ComponentProvenance {
+            premises: FusionPremises {
+                bounded_memory: true,
+                closed_world: false,
+            },
+            fused_module_sha256: vec![0xab; 32],
             origins: vec![
                 ComponentOrigin {
                     fused_func_index: 0,
-                    component_id: 0,
+                    component_id: "lattice".to_string(),
                     orig_func_index: 0,
+                    code_range: Some(CodeRange { start: 0, end: 64 }),
                 },
                 ComponentOrigin {
                     fused_func_index: 3,
-                    component_id: 1,
+                    component_id: "analyzer".to_string(),
                     orig_func_index: 1,
+                    code_range: None,
                 },
             ],
         }),

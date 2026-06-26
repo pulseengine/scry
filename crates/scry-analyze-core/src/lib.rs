@@ -80,16 +80,17 @@ use alloc::vec::Vec;
 use sha2::{Digest, Sha256};
 use wasmparser::{Operator, Parser, Payload};
 
-// The pure meld<->scry boundary crate (DD-002 / FEAT-002): the binary
-// format of the `component-provenance` custom section plus the projection
-// lookup. Aliased to avoid colliding with the mirror `ComponentOrigin`
-// type below; conversion between the two is a trivial field copy where the
-// `provenance` field is built.
-use scry_provenance::ComponentOrigin as ProvOrigin;
-
+// The pure meld<->scry boundary crate (DD-002 / FEAT-002 / FEAT-032): the
+// binary format of the `component-provenance` v3 custom section plus the
+// projection lookup. `decode()` returns a `ProvenanceSection` (premises +
+// sha + origins); the `provenance` field below maps it into the mirror types.
 use scry_octagon::Octagon;
 
 pub use scry_interval::{Interval, Region};
+// FEAT-032 (scry#63): the fusion premises + code-range types travel with the
+// `component-provenance` v3 section; re-exported so a library consumer reads
+// them off `AnalysisResult.provenance` without depending on scry-provenance.
+pub use scry_provenance::{CodeRange, FusionPremises};
 /// Mirror of WIT `abstract-value`. The abstract value of one Wasm
 /// value-stack entry or local at a program point.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,17 +223,26 @@ pub struct FunctionSummary {
 
 /// Mirror of WIT `component-origin` (FEAT-002 / DD-002). One fused-module
 /// function's origin.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComponentOrigin {
     pub fused_func_index: u32,
-    pub component_id: u32,
+    /// meld's string id for the originating component (FEAT-032 / v3).
+    pub component_id: String,
     pub orig_func_index: u32,
+    /// Byte span of the function body in the fused module, if meld recorded it.
+    pub code_range: Option<CodeRange>,
 }
 
-/// Mirror of WIT `component-provenance` (FEAT-002). Decoded
-/// `component-provenance` custom section.
+/// Mirror of WIT `component-provenance` (FEAT-002 / FEAT-032). Decoded
+/// `component-provenance` v3 custom section: the fusion premises, the
+/// module-binding hash, and the function-origin table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComponentProvenance {
+    /// Fusion premises meld asserts by construction (scry#63). A consumer may
+    /// use these as sound analysis assumptions; absent ⇒ stay conservative.
+    pub premises: FusionPremises,
+    /// SHA-256 of the fused module the section was emitted for.
+    pub fused_module_sha256: [u8; 32],
     pub origins: Vec<ComponentOrigin>,
 }
 
@@ -408,7 +418,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "1.18.0";
+const SCRY_VERSION: &str = "2.0.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -883,7 +893,7 @@ pub fn analyze(
     // either no section (a single un-fused component, or any plain
     // Core Wasm input) or a section that failed to decode (reported
     // via a Warning diagnostic — never a partial parse).
-    let mut provenance_origins: Option<Vec<ProvOrigin>> = None;
+    let mut provenance_section: Option<scry_provenance::ProvenanceSection> = None;
 
     for payload in Parser::new(0).parse_all(&module_bytes) {
         let payload = payload.map_err(|e| {
@@ -1088,7 +1098,7 @@ pub fn analyze(
                 // dwarf, …) are ignored.
                 if reader.name() == scry_provenance::SECTION_NAME => {
                     match scry_provenance::decode(reader.data()) {
-                        Ok(origins) => provenance_origins = Some(origins),
+                        Ok(section) => provenance_section = Some(section),
                         Err(e) => {
                             if config.emit_diagnostics {
                                 diagnostics.push(Diagnostic {
@@ -1395,7 +1405,8 @@ pub fn analyze(
     // `analysis-result.provenance`; the richer handle-state /
     // capability-flow analysis is a later FEAT-002 slice.
     // ───────────────────────────────────────────────────────────
-    let provenance = provenance_origins.as_ref().map(|origins| {
+    let provenance = provenance_section.as_ref().map(|section| {
+        let origins = &section.origins;
         if config.emit_diagnostics {
             for func in &defined_funcs {
                 match scry_provenance::project(origins, func.abs_index) {
@@ -1423,12 +1434,15 @@ pub fn analyze(
             }
         }
         ComponentProvenance {
+            premises: section.premises,
+            fused_module_sha256: section.fused_module_sha256,
             origins: origins
                 .iter()
                 .map(|o| ComponentOrigin {
                     fused_func_index: o.fused_func_index,
-                    component_id: o.component_id,
+                    component_id: o.component_id.clone(),
                     orig_func_index: o.orig_func_index,
+                    code_range: o.code_range,
                 })
                 .collect(),
         }
