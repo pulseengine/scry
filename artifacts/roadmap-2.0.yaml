@@ -1696,7 +1696,7 @@ artifacts:
   - id: FEAT-035
     type: feature
     title: "v2.x — Align wasmparser/wasm-tools to 0.252 (dedup downstream trees, scry#62)"
-    status: proposed
+    status: accepted
     description: >
       Bump `wasmparser` 0.247 → 0.252 across the workspace so the dependency
       tree dedups with downstream consumers (meld/synth) that have moved to

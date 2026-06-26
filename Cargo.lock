@@ -1834,7 +1834,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scry-host-tests"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "jsonschema",
@@ -1843,7 +1843,7 @@ dependencies = [
  "scry-sai-taint",
  "serde",
  "serde_json",
- "wasmparser 0.247.0",
+ "wasmparser 0.252.0",
  "wasmtime",
  "wasmtime-wasi",
  "wat",
@@ -1851,31 +1851,31 @@ dependencies = [
 
 [[package]]
 name = "scry-sai-analyzer"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "scry-sai-core",
 ]
 
 [[package]]
 name = "scry-sai-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "scry-sai-interval",
  "scry-sai-octagon",
  "scry-sai-provenance",
  "scry-sai-taint",
  "sha2",
- "wasmparser 0.247.0",
+ "wasmparser 0.252.0",
  "wat",
 ]
 
 [[package]]
 name = "scry-sai-interval"
-version = "2.0.0"
+version = "2.1.0"
 
 [[package]]
 name = "scry-sai-lattice"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "bitflags",
  "scry-sai-octagon",
@@ -1884,19 +1884,19 @@ dependencies = [
 
 [[package]]
 name = "scry-sai-octagon"
-version = "2.0.0"
+version = "2.1.0"
 
 [[package]]
 name = "scry-sai-provenance"
-version = "2.0.0"
+version = "2.1.0"
 
 [[package]]
 name = "scry-sai-taint"
-version = "2.0.0"
+version = "2.1.0"
 
 [[package]]
 name = "scry-sai-viz"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "cpp_demangle 0.5.1",
  "rustc-demangle",
@@ -2531,15 +2531,6 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.247.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e6fb4c2bee46c5ea4d40f8cdb5c131725cd976718ec56f1c8e82fbde5fa2a80"
-dependencies = [
- "bitflags",
-]
-
-[[package]]
-name = "wasmparser"
 version = "0.248.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa4439c5eee9df71ee0c6efb37f63b1fcb1fec38f85f5142c54e7ed05d33091a"
@@ -2560,6 +2551,15 @@ dependencies = [
  "bitflags",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.252.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3eb099dcadcde5be9eef55e3a337128efd4e44b4c93122487e4d2e4e1c6627c"
+dependencies = [
+ "bitflags",
 ]
 
 [[package]]

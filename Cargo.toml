@@ -57,7 +57,7 @@ default-members = [
 # on crates.io matches the release artifacts. The crates.io publish workflow
 # asserts the pushed `v*` tag equals this version, so a release bump must move
 # both in lockstep (and the internal path-dep `version = "..."` fields below).
-version = "2.1.0"
+version = "2.1.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pulseengine/scry"
@@ -72,7 +72,7 @@ bitflags = "2"
 # default-features = false keeps the crate buildable under #![no_std]
 # inside the wasm32-wasip2 component (the std feature pulls in alloc
 # adapters we already provide via `extern crate alloc`).
-wasmparser = { version = "0.247", default-features = false }
+wasmparser = { version = "0.252", default-features = false }
 # SHA-256 of the input module bytes for `invariant-bundle.module-sha256`
 # (FEAT-001 AC#1). default-features = false drops the std default and
 # keeps the dep no_std-compatible.

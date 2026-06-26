@@ -7,6 +7,17 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.1] — 2026-06-26
+
+### Changed — FEAT-035 (scry#62)
+
+- Bumped `wasmparser` 0.247 → 0.252 across the workspace to dedup the
+  dependency tree with downstream consumers (meld/synth) on 0.252. No API
+  drift in scry's parse code and no behavioral change to the analysis output —
+  the full native suite (interval/region/octagon, provenance, operand-stack,
+  reachability, viz) passes unchanged; soundness/MC-DC gates green. Maintenance
+  only.
+
 ## [2.1.0] — 2026-06-26
 
 Headline: **scry independently verifies the fusion premises and surfaces them
