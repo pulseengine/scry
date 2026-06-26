@@ -1,0 +1,19 @@
+[package]
+name = "scry-sai-bits"
+description = "Pure known-bits × interval-guarded congruence reduced-product abstract domain for scry (FEAT-037, DD-017; LLVM-KnownBits + Granger-congruence over wrapping Wasm integers)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library, intentionally zero dependencies. The same source compiles
+# both #![no_std] (so it can back a future wasm-lattice WIT export, as the
+# octagon/interval crates do) and natively into scry-host-tests, so the
+# lattice laws + concretization soundness are mechanically falsifiable on
+# the native cargo path. Mirrors scry-sai-octagon / scry-sai-interval.
+[lib]
+name = "scry_bits"
+path = "src/lib.rs"
+
+[dependencies]

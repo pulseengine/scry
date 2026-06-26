@@ -24,6 +24,7 @@ rust_library(
         "@scry_crates//:wasmparser",
         "//crates/scry-interval:scry_interval",
         "//crates/scry-octagon:scry_octagon",
+        "//crates/scry-bits:scry_bits",
         "//crates/scry-provenance:scry_provenance",
         "//crates/scry-taint:scry_taint",
     ],

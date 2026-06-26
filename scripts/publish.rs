@@ -29,8 +29,8 @@ use std::thread;
 use std::time::Duration;
 
 /// Publish order: leaves first, then their consumer. Hand-curated to match the
-/// dependency graph (the four pure domain crates have zero internal deps;
-/// `scry-sai-core` depends on all four). Each entry is `(directory, crate)`:
+/// dependency graph (the pure domain crates have zero internal deps;
+/// `scry-sai-core` depends on them). Each entry is `(directory, crate)`:
 /// the crates.io package name (`scry-sai-*`) differs from the on-disk directory
 /// (`scry-*`, kept stable so the Bazel target paths don't churn — the
 /// `[package] name` was renamed, the `[lib] name` and dirs were not).
@@ -41,8 +41,9 @@ const CRATES_TO_PUBLISH: &[(&str, &str)] = &[
     ("scry-interval", "scry-sai-interval"),
     ("scry-taint", "scry-sai-taint"),
     ("scry-octagon", "scry-sai-octagon"),
+    ("scry-bits", "scry-sai-bits"),
     ("scry-provenance", "scry-sai-provenance"),
-    // Depends on all four leaves — publish before its own consumers.
+    // Depends on the pure leaves — publish before its own consumers.
     ("scry-analyze-core", "scry-sai-core"),
     // Depends on scry-sai-core — publish last. The `scry-viz` binary/library
     // (FEAT-024) consumes the analyzer library to render an AnalysisResult.

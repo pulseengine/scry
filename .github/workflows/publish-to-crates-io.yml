@@ -2,9 +2,9 @@
 # in parallel with release.yml (signed wasm component + SBOMs + MC/DC evidence).
 #
 # Publishes the reusable libraries — scry-sai-interval, scry-sai-taint,
-# scry-sai-octagon, scry-sai-provenance, scry-sai-core — plus the scry-sai-viz
-# tool (binary + library; FEAT-024), which consumes scry-sai-core to render an
-# AnalysisResult. The Wasm-component crates
+# scry-sai-octagon, scry-sai-bits, scry-sai-provenance, scry-sai-core — plus the
+# scry-sai-viz tool (binary + library; FEAT-024), which consumes scry-sai-core
+# to render an AnalysisResult. The Wasm-component crates
 # (wasm-lattice, scry-analyzer) and the test / MC-DC harnesses are
 # `publish = false` and ship as signed `.wasm` release assets instead (the
 # witness precedent: publish the libs, ship the component).

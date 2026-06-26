@@ -1,0 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# scry-bits — the pure known-bits × interval-guarded congruence reduced
+# product (FEAT-037, DD-017). Mirrors scry-octagon / scry-interval: a
+# dependency-free crate that compiles #![no_std] AND native (where
+# scry-host-tests + the crate's own γ-sweep tests falsify the lattice
+# laws + concretization soundness, including the wrapping semantics).
+
+rust_library(
+    name = "scry_bits",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_bits",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    tags = ["feat-037"],
+)
+
+rust_test(
+    name = "scry_bits_test",
+    crate = ":scry_bits",
+    edition = "2024",
+    tags = ["feat-037"],
+)

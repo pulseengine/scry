@@ -199,3 +199,21 @@ rocq_proof_test(
     deps = [":reachable"],
     tags = ["rocq", "verification", "feat-022"],
 )
+
+# FEAT-037 (DD-017): mechanized soundness of the congruence domain over Wasm's
+# wrapping integer arithmetic — the wrap modulus weakens to gcd(m, 2^w), and the
+# full modulus is retained only under the interval no-wrap guard. The known-bits
+# transfers + the 2-adic reduction are falsified by the scry-bits γ-sweep tests
+# (the bit-vector mechanization is named future work, as the octagon DBM
+# transfers were). No admits, no axioms (the DD-015 proof-in-slice gate).
+rocq_library(
+    name = "bitscongruence",
+    srcs = ["BitsCongruence.v"],
+    tags = ["rocq", "verification", "feat-037"],
+)
+
+rocq_proof_test(
+    name = "bitscongruence_test",
+    deps = [":bitscongruence"],
+    tags = ["rocq", "verification", "feat-037"],
+)

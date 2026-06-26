@@ -540,6 +540,101 @@ artifacts:
       - type: traces-to
         target: G-005
 
+  - id: DD-017
+    type: design-decision
+    title: "FEAT-037 shape — known-bits × interval-guarded congruence reduced product, wrapping-sound"
+    status: approved
+    description: >
+      How scry adds a bit/alignment/stride domain (synth#54) — the LLVM-KnownBits
+      + Granger-congruence analogue — soundly over Wasm's WRAPPING integer
+      arithmetic.
+
+      THE DESIGN: a reduced product of two new components that co-reduce with
+      each other and with the existing interval domain.
+        * KNOWN-BITS: per-bit lattice (each bit known-0 / known-1 / ⊤), stored as
+          (zeros, ones) with the well-formedness invariant zeros & ones = 0; a
+          dedicated ⊥. γ(zeros,ones) = { x | x & zeros = 0 ∧ x & ones = ones }.
+          Transfers: and/or/xor/not/const and constant shifts are EXACT; add/
+          sub/mul use a sound trailing-known-bits rule (common low known-zeros
+          survive because no carry crosses a position where both inputs are 0).
+        * CONGRUENCE: x ≡ b (mod m) over the machine integers, m ≥ 0 (m = 0 ⇒ the
+          constant b, m = 1 ⇒ ⊤). Join = (gcd of moduli, aligned residue);
+          meet = CRT (lcm), ⊥ on residue conflict.
+
+      THE SOUNDNESS SUBTLETY (the reason this is a DD, not just a feature):
+      a congruence is preserved by a WRAPPING add/sub/mul ONLY when the modulus
+      divides 2^W. Proof obligation (mechanized, admit-free): for all integers,
+        (x + y) mod 2^W  ≡  b1 + b2   (mod gcd(m, 2^W)),
+      and ≡ (mod m) EXACTLY when no wrap occurred. Therefore:
+        (1) a transfer that MIGHT wrap weakens the result modulus to gcd(m, 2^W)
+            (always a power of two) — never retaining a modulus the wrapped
+            result can violate;
+        (2) the FULL modulus m is retained only when the interval domain proves
+            the operation is wrap-free (operands' [lo,hi] keep the exact-ℤ result
+            inside the representable range) — the "no-wrap guard". This is what
+            lets a non-power-of-two stride (i ≡ 2 (mod 3)) survive soundly across
+            a guarded increment.
+
+      REDUCTION (each component sharpens the others, never drops a concrete
+      point): known low-zero bits ⇔ congruence mod 2^k (the 2-adic residue);
+      a fixed low-bit prefix in known-bits gives (2^k, b) and vice-versa; the
+      interval feeds the no-wrap guard. Reduction soundness = γ(reduce a) ⊇ γ(a)
+      with equality of concretization (it only makes implicit facts explicit).
+
+      SOUNDNESS GUARDRAILS (the analysis is UNSOUND if any is violated):
+        - Any unmodelled op / overflow-possible op without a no-wrap proof ⇒ the
+          congruence modulus collapses to gcd(m, 2^W); known-bits to ⊤ where a
+          carry/borrow can reach. Never keep a fact the concrete run can break.
+        - ⊥ is propagated, never silently widened to ⊤ mid-meet (would drop the
+          infeasibility signal) and never confused with ⊤.
+        - The bit/congruence value is a SOUND COMPANION to the interval, not a
+          replacement: where a transfer is unmodelled the companion is ⊤, which
+          is always sound.
+
+      STAGING & SCOPE (full vertical slice, per the FEAT-037 decision):
+        slice-1 (this FEAT) — pure crate scry-sai-bits (lattices + transfers +
+          reduction) with exhaustive γ-sweep tests; admit-free Rocq for the
+          load-bearing obligations (wrapping-congruence lemma, gcd fallback,
+          known-bits bitwise/shift/const transfer soundness, KB↔2-adic
+          reduction); Interp integration maintaining a companion KB×congruence
+          value per local/operand using the live interval as the no-wrap guard;
+          a LIBRARY-ONLY AnalysisResult field surfacing the facts (no WIT / no
+          frozen-JSON change, as FEAT-036). The DBM-style matrix transfers that
+          are only γ-sweep-falsified (not yet mechanized) are named honestly, as
+          the octagon arc did (DD-015 proof-in-slice gate, mechanize-or-name).
+        future — mechanize the add/sub/mul trailing-bits transfer at the
+          bit-vector level; richer stride recovery for loop induction vars.
+
+      Falsifiable claim (slice-1): for every modelled op, γ(transfer#(a,b)) ⊇
+      { concrete result of the op over γ(a) × γ(b) }, INCLUDING the wrapping
+      semantics. Falsifier: a γ-sweep witness (or a .wat fixture) whose concrete
+      (possibly wrapped) result falls outside the reported known-bits/congruence.
+    tags: [decision, capability, domain, analysis, v2.x]
+    fields:
+      rationale: >
+        Known-bits and congruence are the two classical domains for alignment /
+        bit / stride facts (LLVM KnownBits; Granger 1989). Over wrapping machine
+        integers the naïve congruence domain is UNSOUND (a single wrapping add
+        breaks a non-power-of-two modulus), and the sound power-of-two-only
+        version coincides with known-bits' low fragment — so a truthful "both"
+        REQUIRES the interval no-wrap guard to let general moduli earn their
+        keep. Building it as a reduced product (vs a fused domain) keeps each
+        component's proof modular and the reduction explicitly soundness-checked.
+        Library-only output keeps the //:scry composition and frozen contract
+        untouched; synth consumes scry-sai-core as a library (synth#51) so a
+        plain-Rust field is exactly the consumable surface.
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: traces-to
+        target: FEAT-037
+      - type: traces-to
+        target: G-005
+      - type: traces-to
+        target: FEAT-036
+      - type: traces-to
+        target: DD-015
+
   # ──────────────────────────────────────────────────────────────────────
   # Requirements added for the 2.0 line.
   # ──────────────────────────────────────────────────────────────────────
@@ -1736,25 +1831,50 @@ artifacts:
 
   - id: FEAT-037
     type: feature
-    title: "v2.x — Known-bits / congruence abstract domain (synth wishlist, scry#54)"
-    status: proposed
+    title: "v2.x — Known-bits × interval-guarded congruence reduced product (synth#54)"
+    status: accepted
     description: >
-      Add a known-bits (and/or congruence `a·k + b`) abstract domain capturing
-      alignment and low-bit patterns the interval domain misses — enabling
-      alignment-driven check elision and bit-level specialization for codegen
-      consumers. Largest investment: a new domain crate + transfer functions +
-      mechanized Rocq soundness, integrated into the Interp alongside interval +
-      octagon.
+      Add a NEW reduced-product abstract domain capturing alignment, low-bit
+      patterns, and induction strides the interval + octagon domains miss —
+      enabling alignment-driven bounds-check elision and bit-level
+      specialization for codegen consumers (synth#54). The product has two
+      components that co-reduce (and reduce against the existing interval):
+
+        * KNOWN-BITS — a per-bit lattice (each bit ∈ {known-0, known-1, ⊤}),
+          LLVM-KnownBits style. Exact transfers for and/or/xor/not/const and the
+          constant shifts; a sound trailing-known-bits rule for add/sub/mul.
+        * CONGRUENCE — `x ≡ b (mod m)` over the machine integers. SOUNDNESS
+          SUBTLETY (DD-017): Wasm arithmetic wraps mod 2^W, and a congruence is
+          preserved by a wrapping add/sub/mul ONLY when m | 2^W. So a transfer
+          that MIGHT wrap weakens the modulus to gcd(m, 2^W) (a power of two);
+          the full modulus is kept ONLY across operations the interval domain
+          proves cannot overflow (the no-wrap guard). This is what lets a
+          non-power-of-two stride (e.g. i ≡ 2 (mod 3)) survive soundly.
+
+      REDUCTION: known low-zero bits ⇔ congruence mod 2^k; the interval supplies
+      the no-wrap guard; each component sharpens the others.
+
+      Full vertical slice: the pure domain crate (scry-sai-bits) + transfer
+      functions + admit-free Rocq soundness for the load-bearing obligations +
+      integration into the Interp + a LIBRARY-ONLY AnalysisResult field
+      surfacing the bit/alignment/stride facts (WIT and the frozen v1 JSON
+      contract unchanged, as with FEAT-036 param_ranges).
     tags: [capability, domain, analysis, v2.x]
     fields:
       phase: phase-2
       acceptance-criteria:
-        - "Given a value with a statically-known alignment/low-bit pattern, When scry analyzes the module, Then the known-bits domain reports it soundly (γ over-approximates the concrete value), with an admit-free Rocq soundness proof for the domain's lattice + transfer functions."
+        - "Given a value with a statically-known alignment/low-bit pattern (e.g. the result of `x & 0xFFFFFFF8`), When scry analyzes the module, Then the known-bits component reports the fixed bits soundly (γ over-approximates the concrete value), proven by an exhaustive γ-sweep test and an admit-free Rocq soundness proof for the lattice + bitwise/shift/const transfers."
+        - "Given an add/sub/mul whose operands carry a congruence `≡ b (mod m)` with m NOT dividing 2^W, When the interval domain CANNOT prove the operation is wrap-free, Then the result's congruence modulus is weakened to gcd(m, 2^W) — never retaining a modulus the wrapped result can violate; and when the interval DOES prove no wrap, the full modulus m is retained. Mechanized admit-free (the (x+y) mod 2^W ≡ b1+b2 (mod gcd(m,2^W)) lemma)."
+        - "Given the reduced product, When known-bits fixes the low k bits OR congruence asserts mod 2^k, Then the reduction makes both components agree (low-zero bits ⇔ 2-adic residue) without dropping any concrete value — proven sound (reduction only removes non-concretizable points)."
     links:
       - type: traces-to
         target: REQ-001
       - type: traces-to
         target: G-005
+      - type: traces-to
+        target: DD-017
+      - type: traces-to
+        target: FEAT-036
 
   # ──────────────────────────────────────────────────────────────────────
   # Safety goal for the v2.0 qualification milestone.
