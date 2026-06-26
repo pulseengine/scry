@@ -1714,7 +1714,7 @@ artifacts:
   - id: FEAT-036
     type: feature
     title: "v2.x — Interprocedural range propagation (synth wishlist, scry#54)"
-    status: proposed
+    status: accepted
     description: >
       Narrow a callee's parameter invariants from the value ranges at its
       call sites (a sound, monotone interprocedural pass over the existing

@@ -7,6 +7,36 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-06-26
+
+Headline: **interprocedural parameter ranges (FEAT-036, synth#54).** Each
+function's parameters now carry the join of the argument values observed across
+its call sites — a sound interprocedural fact for downstream specialization.
+
+### Added — FEAT-036 (traces REQ-004)
+
+- `CallEdge.arg_ranges: Vec<AbstractValue>` — the abstract arguments at each
+  call site, in parameter order (populated for direct calls; empty for
+  `call_indirect` / signature-unknown imports).
+- `FunctionSummary.param_ranges: Vec<AbstractValue>` — per parameter, the join
+  of `arg_ranges` over every **direct** call site reaching the function. Sound
+  by construction: it is `Unknown` (⊤) for every parameter of a function that is
+  **exported, the start function, or reachable via `call_indirect`** (external /
+  over-approximate entry points whose arguments scry cannot bound), and ⊤ if any
+  indirect edge is unsound — so a `param_ranges` entry is never narrower than
+  some reachable call permits. Otherwise it is the over-approximate incoming
+  value across all calls (e.g. a function called with `5` and `10` gets
+  `[5, 10]`).
+- Both fields are library-only (read off the `scry-sai-core` `AnalysisResult`);
+  the WIT mirror and the frozen v1 JSON contract are unchanged.
+
+### Posture
+
+- Additive fields (SemVer-minor). Sound: the join over all accounted callers is
+  an over-approximation; the ⊤ fallback for any unaccounted (external /
+  indirect) caller means scry never claims a parameter range that excludes a
+  reachable argument.
+
 ## [2.1.1] — 2026-06-26
 
 ### Changed — FEAT-035 (scry#62)
