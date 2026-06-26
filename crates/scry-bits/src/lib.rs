@@ -164,6 +164,24 @@ impl KnownBits {
         }
     }
 
+    /// The least value in `γ` (unknown bits set to 0). `0` for ⊥ (vacuous).
+    #[inline]
+    pub fn umin(&self, w: u32) -> u64 {
+        match *self {
+            KnownBits::Bottom => 0,
+            KnownBits::Bits { ones, .. } => ones & width_mask(w),
+        }
+    }
+
+    /// The greatest value in `γ` (unknown bits set to 1). `0` for ⊥ (vacuous).
+    #[inline]
+    pub fn umax(&self, w: u32) -> u64 {
+        match *self {
+            KnownBits::Bottom => 0,
+            KnownBits::Bits { zeros, .. } => !zeros & width_mask(w),
+        }
+    }
+
     /// `self ⊑ other` (γ(self) ⊆ γ(other)): every bit `other` fixes, `self`
     /// fixes the same way.
     #[inline]
@@ -518,6 +536,34 @@ impl BitsCong {
     #[inline]
     pub fn contains(&self, x: u64, w: u32) -> bool {
         self.kb.contains(x, w) && self.cong.contains(x & width_mask(w))
+    }
+
+    /// Least / greatest value in the concretization (from known-bits — a sound,
+    /// if not always tightest, value range). Used to derive the no-wrap guard.
+    #[inline]
+    pub fn umin(&self, w: u32) -> u64 {
+        self.kb.umin(w)
+    }
+    #[inline]
+    pub fn umax(&self, w: u32) -> u64 {
+        self.kb.umax(w)
+    }
+
+    /// Sound no-wrap guards from the operands' value ranges (used by the
+    /// analyzer to decide whether the full congruence modulus may be retained).
+    /// `2^w` is taken in u128 to avoid overflow at `w == 64`.
+    #[inline]
+    pub fn add_wrap_free(&self, other: &Self, w: u32) -> bool {
+        (self.umax(w) as u128) + (other.umax(w) as u128) < (1u128 << w)
+    }
+    #[inline]
+    pub fn mul_wrap_free(&self, other: &Self, w: u32) -> bool {
+        (self.umax(w) as u128) * (other.umax(w) as u128) < (1u128 << w)
+    }
+    /// `x - y` is wrap-free (no borrow) when every `x` ≥ every `y`.
+    #[inline]
+    pub fn sub_wrap_free(&self, other: &Self, w: u32) -> bool {
+        self.umin(w) >= other.umax(w)
     }
 
     /// `self ⊑ other` (both components).
@@ -1225,6 +1271,42 @@ mod tests {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn umin_umax_bound_the_concretization() {
+        for xs in [vec![8u64, 16, 24], vec![0xF0, 0xF8], vec![3, 7, 11]] {
+            let a = alpha(&xs);
+            let (lo, hi) = (a.umin(W), a.umax(W));
+            for x in 0u64..256 {
+                if a.contains(x, W) {
+                    assert!(lo <= x && x <= hi, "{x} outside [{lo},{hi}] for {a:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wrap_free_guard_is_sound() {
+        // Values with the top nibble known-0 (≤ 0x0F): any two sum < 0x20 < 256.
+        let small = alpha(&[1u64, 2, 4, 8]); // ⊆ [0,15]
+        assert!(
+            small.add_wrap_free(&small, W),
+            "0..15 + 0..15 cannot wrap mod 256"
+        );
+        let big = alpha(&[200u64, 255]);
+        assert!(!big.add_wrap_free(&big, W), "200.. + 200.. can wrap");
+        // When the guard says wrap-free, the concrete sum truly never wraps.
+        for x in 0u64..256 {
+            if !small.contains(x, W) {
+                continue;
+            }
+            for y in 0u64..256 {
+                if small.contains(y, W) {
+                    assert!(x + y < 256, "guard claimed wrap-free but {x}+{y} wraps");
                 }
             }
         }

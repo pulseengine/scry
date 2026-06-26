@@ -1834,7 +1834,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scry-host-tests"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "jsonschema",
@@ -1851,19 +1851,20 @@ dependencies = [
 
 [[package]]
 name = "scry-sai-analyzer"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "scry-sai-core",
 ]
 
 [[package]]
 name = "scry-sai-bits"
-version = "2.2.0"
+version = "2.3.0"
 
 [[package]]
 name = "scry-sai-core"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
+ "scry-sai-bits",
  "scry-sai-interval",
  "scry-sai-octagon",
  "scry-sai-provenance",
@@ -1875,11 +1876,11 @@ dependencies = [
 
 [[package]]
 name = "scry-sai-interval"
-version = "2.2.0"
+version = "2.3.0"
 
 [[package]]
 name = "scry-sai-lattice"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "bitflags",
  "scry-sai-octagon",
@@ -1888,19 +1889,19 @@ dependencies = [
 
 [[package]]
 name = "scry-sai-octagon"
-version = "2.2.0"
+version = "2.3.0"
 
 [[package]]
 name = "scry-sai-provenance"
-version = "2.2.0"
+version = "2.3.0"
 
 [[package]]
 name = "scry-sai-taint"
-version = "2.2.0"
+version = "2.3.0"
 
 [[package]]
 name = "scry-sai-viz"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "cpp_demangle 0.5.1",
  "rustc-demangle",

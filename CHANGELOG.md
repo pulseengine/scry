@@ -7,6 +7,59 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-06-26
+
+Headline: **known-bits × interval-guarded congruence reduced product
+(FEAT-037, DD-017, synth#54).** A new abstract domain capturing alignment,
+low-bit patterns, and induction strides the interval + octagon domains miss —
+for alignment-driven bounds-check elision and bit-level specialization in
+codegen consumers.
+
+### Added — FEAT-037 (traces REQ-001, G-005, DD-017)
+
+- New pure crate **`scry-sai-bits`** (`crates/scry-bits`) — the reduced product
+  of a known-bits lattice (LLVM-`KnownBits`) and a Granger congruence lattice
+  over Wasm's wrapping machine integers, with a `reduce` operator exchanging the
+  2-adic residue between them. Zero-dependency `#![no_std]`, the sibling of
+  `scry-sai-interval` / `scry-sai-octagon`. Published to crates.io.
+- **`AnalysisResult.bit_facts: Vec<BitFact>`** — known-bits / congruence facts
+  for locals, produced by an additive straight-line-sound pass over each
+  function body (the FEAT-021 "additive pass" precedent: it does not perturb the
+  interval/region/octagon/taint fixpoint). Each `BitFact` records, at a
+  `local.set`/`local.tee`, the written local's known zeros/ones and congruence
+  `(modulus, residue)`. Library-only (not in the WIT mirror or the frozen v1
+  JSON contract), like `function_meta` / `param_ranges`.
+
+### Soundness — the wrapping subtlety (DD-017)
+
+- Wasm arithmetic wraps mod `2^w`, and a congruence survives a wrapping
+  `add`/`sub`/`mul` only when `m | 2^w`. So a possibly-wrapping transfer weakens
+  the modulus to `gcd(m, 2^w) = 2^min(v2(m), w)`; the full modulus is retained
+  only when the operand value-range proves the op is wrap-free. This is what
+  lets a non-power-of-two stride (`i ≡ 2 (mod 3)`) survive soundly.
+- **Mechanized, admit-free** (`proofs/rocq/BitsCongruence.v`, Rocq 9.0.1, all
+  theorems "Closed under the global context"): `add_wrap_sound` /
+  `sub_wrap_sound` / `mul_wrap_sound` (`(x∘y) mod 2^w ≡ r1∘r2 (mod gcd(m,2^w))`)
+  and `add_nowrap_exact` / `mul_nowrap_exact` (full `m` retained under the
+  no-wrap guard). The known-bits transfers + the reduction are falsified by the
+  crate's exhaustive γ-sweep tests (every residue class mod ≤ 12 × 6 ops at
+  `w = 8`, including the wrapping semantics); the bit-vector mechanization is
+  named future work, as the octagon DBM transfers were (DD-015 proof-in-slice).
+
+### Posture
+
+- Additive field + new leaf crate (SemVer-minor). The companion bits value is a
+  *sound companion* to the interval: where a transfer is unmodelled the result
+  is ⊤, which is always sound; the straight-line pass stops at the first
+  control-flow op, so every emitted fact was established before any merge.
+- **Falsification statement.** scry claims every `BitFact` is a sound
+  over-approximation: the local's concrete (post-wrap) value at that pc is
+  always in the concretization of the reported known-bits *and* congruence.
+  This is FALSE if some modelled transfer (including the wrap-weaken / no-wrap
+  retention logic) ever reports a known bit the value violates, or a modulus the
+  wrapped value violates. Falsifier: a γ-sweep witness or a `.wat` fixture whose
+  concrete result escapes the reported fact.
+
 ## [2.2.0] — 2026-06-26
 
 Headline: **interprocedural parameter ranges (FEAT-036, synth#54).** Each

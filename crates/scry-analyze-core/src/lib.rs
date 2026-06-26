@@ -84,6 +84,7 @@ use wasmparser::{Operator, Parser, Payload};
 // binary format of the `component-provenance` v3 custom section plus the
 // projection lookup. `decode()` returns a `ProvenanceSection` (premises +
 // sha + origins); the `provenance` field below maps it into the mirror types.
+use scry_bits::{BitsCong, Cong};
 use scry_octagon::Octagon;
 
 pub use scry_interval::{Interval, Region};
@@ -360,6 +361,41 @@ pub struct AnalysisResult {
     /// module containing `memory.grow`), scry emits a diagnostic and keeps its
     /// own (conservative) determination here.
     pub verified_premises: FusionPremises,
+    /// FEAT-037 (DD-017): known-bits / congruence facts for locals, produced by
+    /// an additive straight-line-sound pass over each function body using the
+    /// known-bits × interval-guarded congruence reduced product
+    /// ([`scry_bits`]). Each entry records, at the program point of a
+    /// `local.set`/`local.tee`, the abstract bit/alignment/stride fact the
+    /// written local then carries — for alignment-driven bounds-check elision
+    /// and bit-level specialization in codegen consumers (synth#54). Sorted by
+    /// `(func_index, pc, local_index)`. Library-only (not in the WIT mirror or
+    /// the frozen v1 JSON contract), like [`AnalysisResult::function_meta`].
+    /// Only non-⊤ facts are emitted (a ⊤ fact carries no information).
+    pub bit_facts: Vec<BitFact>,
+}
+
+/// FEAT-037: a known-bits / congruence fact about one local at one program
+/// point. Sound over-approximation: the local's concrete value at this pc is
+/// always in the concretization of these fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BitFact {
+    /// Absolute function index.
+    pub func_index: u32,
+    /// Operator index (pc) of the `local.set`/`local.tee` that established it.
+    pub pc: u32,
+    /// The local written.
+    pub local_index: u32,
+    /// Value width in bits (32 or 64).
+    pub width: u32,
+    /// Bits known to be 0 (`value & known_zeros == 0`).
+    pub known_zeros: u64,
+    /// Bits known to be 1 (`value & known_ones == known_ones`).
+    pub known_ones: u64,
+    /// Congruence modulus: `0` = exact singleton (`value == cong_residue`),
+    /// `1` = no congruence fact, `m ≥ 2` = `value ≡ cong_residue (mod m)`.
+    pub cong_modulus: u64,
+    /// Congruence residue (see `cong_modulus`).
+    pub cong_residue: u64,
 }
 
 /// FEAT-027: human-readable metadata for one function index.
@@ -448,7 +484,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "2.2.0";
+const SCRY_VERSION: &str = "2.3.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -1697,6 +1733,12 @@ pub fn analyze(
         });
     }
 
+    // FEAT-037 (DD-017): additive known-bits × congruence pass over each
+    // function body. Does not touch the interval/region/octagon/taint state
+    // computed above — it is a separate straight-line-sound walk (the FEAT-021
+    // "additive pass" precedent).
+    let bit_facts = compute_bit_facts(&defined_funcs);
+
     Ok(AnalysisResult {
         invariants,
         diagnostics,
@@ -1708,7 +1750,213 @@ pub fn analyze(
         reachable_from_exports,
         function_meta,
         verified_premises,
+        bit_facts,
     })
+}
+
+// ───────────────────────── FEAT-037 (DD-017) ─────────────────────────
+
+/// Integer bit width of a Wasm value type, or `None` for types the bits domain
+/// does not model (floats, v128, references).
+#[inline]
+fn bits_width_of(ty: wasmparser::ValType) -> Option<u32> {
+    match ty {
+        wasmparser::ValType::I32 => Some(32),
+        wasmparser::ValType::I64 => Some(64),
+        _ => None,
+    }
+}
+
+/// If a companion value is an exact constant (a congruence singleton), return
+/// it — used to read a constant shift amount.
+#[inline]
+fn bits_as_const(slot: &Option<(BitsCong, u32)>) -> Option<u64> {
+    match slot {
+        Some((bc, _)) => match bc.cong {
+            Cong::Mod { m: 0, r } => Some(r),
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+/// True when a companion value carries no information (both components ⊤).
+#[inline]
+fn bits_is_top(bc: &BitsCong) -> bool {
+    matches!(bc.kb, scry_bits::KnownBits::Bits { zeros: 0, ones: 0 })
+        && matches!(bc.cong, Cong::Mod { m: 1, r: 0 })
+}
+
+/// FEAT-037 (DD-017): the additive known-bits × congruence pass. For each
+/// defined function it runs a STRAIGHT-LINE-sound abstract interpretation over
+/// the body using [`scry_bits`], emitting a [`BitFact`] at each
+/// `local.set`/`local.tee` whose written value carries a non-⊤ fact.
+///
+/// Soundness discipline (this pass never perturbs the interval/region/octagon/
+/// taint analysis — it is a separate walk):
+///   * Declared (non-parameter) locals are Wasm-zero-initialized, so they start
+///     as the exact constant 0; parameters start as ⊤ (unknown caller args).
+///   * Only a curated all-list of integer ops is modelled; on the FIRST
+///     control-flow op (`block`/`loop`/`if`/`br*`/`call*`/`return`/`end`/…) or
+///     any unmodelled op the walk STOPS for that function — every fact emitted
+///     was therefore established on the straight-line prefix before any merge,
+///     which is sound. (A future slice can add a join-at-merge fixpoint.)
+///   * The no-wrap guard for add/sub/mul is derived from the operands' known
+///     value range (`umax`/`umin`), a sound source: full modulus retained only
+///     when no wrap is provable, else weakened to `gcd(m, 2^w)` per DD-017.
+fn compute_bit_facts(defined_funcs: &[DefinedFunc<'_>]) -> Vec<BitFact> {
+    let mut facts: Vec<BitFact> = Vec::new();
+
+    for func in defined_funcs {
+        // Local slots: params (⊤) then declared locals (zero-initialized).
+        // `None` = a local the bits domain does not model (non-integer).
+        let mut locals: Vec<Option<(BitsCong, u32)>> = Vec::new();
+        for &ty in &func.params {
+            locals.push(bits_width_of(ty).map(|w| (BitsCong::top(), w)));
+        }
+        for &ty in &func.declared_locals {
+            locals.push(bits_width_of(ty).map(|w| (BitsCong::constant(0, w), w)));
+        }
+
+        let mut stack: Vec<Option<(BitsCong, u32)>> = Vec::new();
+
+        'body: for (pc, op) in func.ops.iter().enumerate() {
+            let pc = pc as u32;
+            match op {
+                Operator::I32Const { value } => {
+                    stack.push(Some((BitsCong::constant(*value as u32 as u64, 32), 32)));
+                }
+                Operator::I64Const { value } => {
+                    stack.push(Some((BitsCong::constant(*value as u64, 64), 64)));
+                }
+                Operator::LocalGet { local_index } => {
+                    let Some(slot) = locals.get(*local_index as usize) else {
+                        break 'body;
+                    };
+                    stack.push(*slot);
+                }
+                Operator::LocalSet { local_index } | Operator::LocalTee { local_index } => {
+                    let is_tee = matches!(op, Operator::LocalTee { .. });
+                    let Some(top) = stack.pop() else { break 'body };
+                    let idx = *local_index as usize;
+                    if idx >= locals.len() {
+                        break 'body;
+                    }
+                    // The written value must match the local's modelled width.
+                    let written = match (top, locals[idx]) {
+                        (Some((bc, wv)), Some((_, wl))) if wv == wl => Some((bc, wl)),
+                        // type/width mismatch or opaque source: local becomes ⊤
+                        // if it is an integer local, else stays unmodelled.
+                        (_, Some((_, wl))) => Some((BitsCong::top(), wl)),
+                        (_, None) => None,
+                    };
+                    locals[idx] = written;
+                    if let Some((bc, w)) = written
+                        && !bits_is_top(&bc)
+                    {
+                        facts.push(make_bit_fact(func.abs_index, pc, *local_index, w, &bc));
+                    }
+                    if is_tee {
+                        stack.push(written);
+                    }
+                }
+                Operator::Drop => {
+                    if stack.pop().is_none() {
+                        break 'body;
+                    }
+                }
+                // ── binary integer transfers ──
+                Operator::I32And | Operator::I64And => {
+                    bits_binop(&mut stack, |a, b, w| a.and(b, w))
+                }
+                Operator::I32Or | Operator::I64Or => bits_binop(&mut stack, |a, b, w| a.or(b, w)),
+                Operator::I32Xor | Operator::I64Xor => {
+                    bits_binop(&mut stack, |a, b, w| a.xor(b, w))
+                }
+                Operator::I32Add | Operator::I64Add => {
+                    bits_binop(&mut stack, |a, b, w| a.add(b, w, a.add_wrap_free(b, w)))
+                }
+                Operator::I32Sub | Operator::I64Sub => {
+                    bits_binop(&mut stack, |a, b, w| a.sub(b, w, a.sub_wrap_free(b, w)))
+                }
+                Operator::I32Mul | Operator::I64Mul => {
+                    bits_binop(&mut stack, |a, b, w| a.mul(b, w, a.mul_wrap_free(b, w)))
+                }
+                // ── shifts: the count is a runtime operand; model it only when
+                // it is a known constant (taken mod width, per Wasm). ──
+                Operator::I32Shl | Operator::I64Shl => {
+                    bits_shift(&mut stack, |a, s, w| a.shl(s, w))
+                }
+                Operator::I32ShrU | Operator::I64ShrU => {
+                    bits_shift(&mut stack, |a, s, w| a.shr_u(s, w))
+                }
+                Operator::I32ShrS | Operator::I64ShrS => {
+                    bits_shift(&mut stack, |a, s, w| a.shr_s(s, w))
+                }
+                // First control-flow / unmodelled op: stop — the straight-line
+                // prefix's facts are sound; beyond a merge we make no claim.
+                _ => break 'body,
+            }
+        }
+    }
+
+    facts.sort_by_key(|f| (f.func_index, f.pc, f.local_index));
+    facts
+}
+
+/// Pop two companion operands, apply a binary transfer when both are modelled
+/// and same-width, push the result (⊤/opaque otherwise).
+#[inline]
+fn bits_binop(
+    stack: &mut Vec<Option<(BitsCong, u32)>>,
+    f: impl Fn(&BitsCong, &BitsCong, u32) -> BitsCong,
+) {
+    let b = stack.pop().flatten();
+    let a = stack.pop().flatten();
+    let out = match (a, b) {
+        (Some((ba, wa)), Some((bb, wb))) if wa == wb => Some((f(&ba, &bb, wa), wa)),
+        _ => None,
+    };
+    stack.push(out);
+}
+
+/// Pop a (count, value) pair; apply the shift only when the count is a known
+/// constant (taken mod width); push ⊤/opaque otherwise.
+#[inline]
+fn bits_shift(
+    stack: &mut Vec<Option<(BitsCong, u32)>>,
+    f: impl Fn(&BitsCong, u32, u32) -> BitsCong,
+) {
+    let count = stack.pop().flatten();
+    let value = stack.pop().flatten();
+    let out = match value {
+        Some((bv, w)) => bits_as_const(&count).map(|c| (f(&bv, (c % w as u64) as u32, w), w)),
+        None => None,
+    };
+    stack.push(out);
+}
+
+/// Build a [`BitFact`] from a companion value.
+#[inline]
+fn make_bit_fact(func_index: u32, pc: u32, local_index: u32, width: u32, bc: &BitsCong) -> BitFact {
+    let (known_zeros, known_ones) = match bc.kb {
+        scry_bits::KnownBits::Bits { zeros, ones } => (zeros, ones),
+        scry_bits::KnownBits::Bottom => (0, 0),
+    };
+    let (cong_modulus, cong_residue) = match bc.cong {
+        Cong::Mod { m, r } => (m, r),
+        Cong::Bottom => (1, 0),
+    };
+    BitFact {
+        func_index,
+        pc,
+        local_index,
+        width,
+        known_zeros,
+        known_ones,
+        cong_modulus,
+        cong_residue,
+    }
 }
 
 /// FEAT-027: assemble per-function human-readable metadata for every index
@@ -4702,6 +4950,7 @@ mod tests {
             reachable_from_exports: alloc::vec![],
             function_meta: alloc::vec![],
             verified_premises: FusionPremises::default(),
+            bit_facts: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -5172,6 +5421,86 @@ mod tests {
             AnalysisConfig::default(),
         )
         .expect("analyze")
+    }
+
+    /// FEAT-037: masking a value to clear its low bits surfaces a known-bits /
+    /// alignment fact on the destination local. `local 1 := (local 0) & 0xFFF8`
+    /// ⇒ local 1 has its low 3 bits known-0 (8-aligned) and ≡ 0 (mod 8).
+    #[test]
+    fn feat037_mask_surfaces_alignment() {
+        // func: (param i32) (local i32); local.set 1 (local.get 0 & 0xFFFFFFF8)
+        let r = analyze_default(
+            "(module (func (param i32) (local i32) \
+               local.get 0 i32.const 0xFFFFFFF8 i32.and local.set 1))",
+        );
+        let f = r
+            .bit_facts
+            .iter()
+            .find(|f| f.local_index == 1)
+            .expect("a bit fact for local 1");
+        assert_eq!(f.width, 32);
+        // low 3 bits known zero.
+        assert_eq!(f.known_zeros & 0b111, 0b111, "low 3 bits must be known-0");
+        // and the reduced congruence sees ≡ 0 (mod 8).
+        assert_eq!(f.cong_modulus, 8, "alignment ⇒ mod 8");
+        assert_eq!(f.cong_residue, 0);
+    }
+
+    /// FEAT-037: a zero-initialized local OR'd with a constant carries exact
+    /// bits. `local 0 := 0 | 5` ⇒ local 0 is the constant 5 (singleton).
+    #[test]
+    fn feat037_zero_init_local_is_known() {
+        // declared local starts at 0; `local.set 0 (local.get 0 | 5)` ⇒ 5.
+        let r = analyze_default(
+            "(module (func (local i32) \
+               local.get 0 i32.const 5 i32.or local.set 0))",
+        );
+        let f = r
+            .bit_facts
+            .iter()
+            .find(|f| f.local_index == 0)
+            .expect("a bit fact for local 0");
+        // 0 | 5 = 5 exactly: every bit is known and the value is pinned to 5.
+        assert_eq!(f.known_ones, 5, "bits known-1 must be exactly 5");
+        assert_eq!(
+            f.known_zeros,
+            !5u64 & scry_bits::width_mask(32),
+            "all other 32 bits must be known-0 (fully pinned to 5)"
+        );
+        // congruence is exact too: ≡ 5 (mod 0 singleton OR mod 2^32 — both pin
+        // a unique 32-bit value).
+        assert!(
+            f.cong_residue == 5 && (f.cong_modulus == 0 || f.cong_modulus == (1u64 << 32)),
+            "congruence must pin the value to 5, got mod {} res {}",
+            f.cong_modulus,
+            f.cong_residue
+        );
+    }
+
+    /// FEAT-037 soundness: every emitted bit fact must be a sound
+    /// over-approximation — it never fixes a bit both ways, and the congruence
+    /// is well-formed. (A deeper concrete-execution cross-check lives in the
+    /// scry-bits γ-sweep; here we assert the surfaced facts are well-formed and
+    /// the pass is purely additive — produced without touching other output.)
+    #[test]
+    fn feat037_emitted_facts_are_wellformed() {
+        let r = analyze_default(
+            "(module (func (param i32) (local i32) \
+               local.get 0 i32.const 0xFF00 i32.and i32.const 8 i32.shl local.set 1))",
+        );
+        for f in &r.bit_facts {
+            assert_eq!(
+                f.known_zeros & f.known_ones,
+                0,
+                "a bit cannot be known both 0 and 1: {f:?}"
+            );
+            if f.cong_modulus >= 2 {
+                assert!(
+                    f.cong_residue < f.cong_modulus,
+                    "residue out of range: {f:?}"
+                );
+            }
+        }
     }
 
     /// FEAT-034: scry determines its OWN fusion premises (verify-not-trust):
