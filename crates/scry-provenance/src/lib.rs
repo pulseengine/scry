@@ -309,7 +309,17 @@ pub fn decode(bytes: &[u8]) -> Result<ProvenanceSection, DecodeError> {
         let mut h = 39;
         take_u32(bytes, &mut h)? // header count at offset 39 (h advances to 43)
     };
-    let mut origins = Vec::with_capacity(entry_count as usize);
+    // Pre-size from the count, but BOUND it by what the remaining payload could
+    // possibly hold: `entry_count` is attacker-controlled (up to u32::MAX) from
+    // a 43-byte header, and a bare `Vec::with_capacity(entry_count)` panics with
+    // "capacity overflow" on a 32-bit target (the wasm32 production build) for a
+    // crafted tiny payload — a DoS in the trusted decoder. The smallest possible
+    // entry is 13 bytes (fused u32 + id_len u32 + 0-byte id + orig u32 +
+    // has_code_range u8), so no more than `body_len / 13` entries can follow;
+    // an over-stated count then fails the per-entry `take_*` bound check below.
+    let body_len = bytes.len().saturating_sub(HEADER_LEN);
+    let cap = (entry_count as usize).min(body_len / 13);
+    let mut origins = Vec::with_capacity(cap);
     for _ in 0..entry_count {
         let fused_func_index = take_u32(bytes, &mut off)?;
         let id_len = take_u32(bytes, &mut off)? as usize;
@@ -513,6 +523,22 @@ mod tests {
             decode(&bytes),
             Err(DecodeError::TrailingBytes { .. })
         ));
+    }
+
+    #[test]
+    fn huge_entry_count_does_not_panic_or_oom() {
+        // A 43-byte header declaring u32::MAX entries (no body) must fail with
+        // a bounded decode error — never a `Vec::with_capacity` capacity-
+        // overflow panic (which aborts on the 32-bit wasm32 production target).
+        let mut b = Vec::new();
+        b.extend_from_slice(&MAGIC);
+        b.push(FORMAT_VERSION);
+        b.push(0); // bounded_memory
+        b.push(0); // closed_world
+        b.extend_from_slice(&[0u8; 32]);
+        b.extend_from_slice(&u32::MAX.to_le_bytes()); // entry_count = u32::MAX
+        // No entry bytes follow → the first take_u32 of entry 0 is Truncated.
+        assert!(matches!(decode(&b), Err(DecodeError::Truncated { .. })));
     }
 
     #[test]
