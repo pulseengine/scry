@@ -424,11 +424,16 @@ impl Cong {
                         // feeds in — a non-termination hazard (clean-room).
                         let m2g = m2 / g;
                         // (r2 − r1) mod m2, non-negative; divisible by g.
-                        let diff_mod = ((r2 % m2) + m2 - (r1 % m2)) % m2;
+                        // Done in u128: `(r2 % m2) + m2` overflows u64 once
+                        // m2 > 2^63, which `Cong::new` can produce (clean-room).
+                        let diff_mod = ((((r2 % m2) as u128) + (m2 as u128) - ((r1 % m2) as u128))
+                            % (m2 as u128)) as u64;
                         let diff_g = (diff_mod / g) % m2g;
                         let inv = mod_inverse((m1 / g) % m2g, m2g);
                         let t = mul_mod(diff_g, inv, m2g);
-                        let x = ((r1 % l) + mul_mod(m1 % l, t % l, l)) % l;
+                        // x = (r1 + m1·t) mod l, in u128 (the sum can reach 2(l−1)).
+                        let x = (((r1 % l) as u128 + mul_mod(m1 % l, t % l, l) as u128)
+                            % (l as u128)) as u64;
                         Cong::new(l, x)
                     }
                     None => {
@@ -1408,6 +1413,25 @@ mod tests {
         } else {
             panic!("expected a Mod, got {r:?}");
         }
+    }
+
+    /// Clean-room regression (u64 overflow): a CRT combine with a modulus
+    /// > 2^63 must not overflow the intermediate `(r2 % m2) + m2` / `r1 + m1·t`
+    /// (done in u128). `Cong::new` can produce such moduli, and the crate is a
+    /// published library. Trigger: ≡1 (mod 3) ⊓ ≡1 (mod u64::MAX) — lcm fits
+    /// (u64::MAX is divisible by 3), so it enters the CRT arm.
+    #[test]
+    fn cong_meet_huge_modulus_no_overflow() {
+        let a = Cong::new(3, 1);
+        let b = Cong::new(u64::MAX, 1); // u64::MAX % 3 == 0 ⇒ b ⊆ ≡? check residue
+        // u64::MAX = 3·6148914691236517205, so u64::MAX ≡ 0 (mod 3); residue of
+        // b is 1, and 1 ≡ 1 (mod 3) ⇒ compatible.
+        let m = a.meet(&b); // must NOT panic / wrap.
+        // intersection ⊆ b, and ≡1 (mod 3): b's single-window residue must hold.
+        assert!(m.contains(1), "1 satisfies both ≡1 mod3 and ≡1 mod MAX");
+        // a value satisfying b but NOT a must be excluded.
+        // (1 + u64::MAX wraps; pick 4 ≡ 1 mod3 but 4 != 1 mod MAX ⇒ not in b.)
+        assert!(!m.contains(4), "4 ∉ b ⇒ ∉ meet");
     }
 
     #[test]
