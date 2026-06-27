@@ -3233,10 +3233,24 @@ impl Interp<'_, '_> {
             let _ = ctx.operand_stack.pop();
         }
         let written = region_write_set(self.ops, opener + 1, end);
-        // FEAT-040: an unmodelled control-flow region that actually widens a
-        // local to ⊤ is a (partial) give-up — record it so the gap report
-        // reflects write-set havoc, not only the full-function scrubs.
-        if !written.is_empty() {
+        // FEAT-040 / FEAT-043: an unmodelled control-flow region is a give-up
+        // worth a gap when it either widens a local to ⊤ (write-set non-empty)
+        // OR contains a CALL — havoc does not interpret the region body, so any
+        // call inside it is NEVER recorded in `call_graph`. Recording the gap
+        // keeps the invariant "a gap-free function's call_graph is COMPLETE",
+        // which `resolved_stack_callees` (FEAT-043) and the gap report rely on;
+        // without it, a void call (empty write-set) inside an `if` would be
+        // silently dropped from the stack weighting (clean-room finding).
+        let region_has_call = self.ops[opener + 1..end].iter().any(|op| {
+            matches!(
+                op,
+                Operator::Call { .. }
+                    | Operator::CallIndirect { .. }
+                    | Operator::ReturnCall { .. }
+                    | Operator::ReturnCallIndirect { .. }
+            )
+        });
+        if !written.is_empty() || region_has_call {
             ctx.gaps.push(Gap {
                 func_index: self.func_index,
                 pc: opener as u32,
@@ -3720,12 +3734,21 @@ fn detect_frame(ops: &[Operator<'_>], sp: SpGlobal) -> StackBound {
 /// the whole table, for functions scry interpreted COMPLETELY (no FEAT-040 gap).
 ///
 /// Soundness: a gap-free function was fully interpreted, so every call it makes
-/// is in `call_graph` and each edge's `resolved_targets` is a sound SUPERSET of
-/// the concrete targets (SCRY-001) — so the union is a sound, tighter callee
-/// set. A function WITH a gap may have unrecorded calls (it degraded, or a
-/// control region was write-set-havocked), so it falls back to the conservative
-/// whole-table `static_callees`. Recursion detection + the topo order stay on
+/// is in `call_graph` (havoc_region records a gap whenever it skips a region
+/// containing a call — FEAT-040, so the no-gap ⟹ complete-call_graph invariant
+/// holds), and each edge's `resolved_targets` is a sound superset of the
+/// MATERIALIZED-table targets — equal to the whole-table set when the index is
+/// unconstrained. A function WITH a gap (it degraded, or a control region with a
+/// call/write was havocked) falls back to the conservative whole-table
+/// `static_callees`. Recursion detection + the topo order stay on
 /// `static_callees` (conservative) — this only tightens the WEIGHTING.
+///
+/// KNOWN LIMITATION (pre-existing, shared with `static_callees`/reachability,
+/// NOT introduced here): scry's static table model (`FuncTable.entries`) holds
+/// only ACTIVE-segment functions, so a `call_indirect` against a table populated
+/// by a passive/declared element segment under-reports its targets in BOTH
+/// graphs — a FEAT-036-class gap tracked separately. FEAT-043 is no less sound
+/// than the prior whole-table weighting on that case.
 fn resolved_stack_callees(
     n: usize,
     static_callees: &[Vec<usize>],
@@ -5806,6 +5829,34 @@ mod tests {
             "entry must be weighted by the RESOLVED target $small (8+16=24), not the \
              whole-table max (8+64=72); got {:?}",
             entry.max_stack
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room): a call inside an `if` region
+    /// (write-set EMPTY — a void call) is havocked, so its edge is never in
+    /// call_graph. Without recording a gap for the call-bearing region, the
+    /// function looks gap-free and resolved_stack_callees would drop $big from
+    /// the weighting → under-count (256 instead of 264). The havoc-region gap
+    /// must force the conservative fallback, restoring the sound 264.
+    #[test]
+    fn feat043_call_in_havocked_if_not_dropped() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (func \
+                 global.get $sp i32.const 256 i32.sub global.set $sp \
+                 global.get $sp i32.const 256 i32.add global.set $sp) \
+               (func (export \"entry\") (param i32) \
+                 global.get $sp i32.const 8 i32.sub global.set $sp \
+                 local.get 0 (if (then call 0)) \
+                 global.get $sp i32.const 8 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Bytes(264),
+            "a void call inside an if must still contribute its callee's frame \
+             (8 + 256 = 264, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
         );
     }
 
