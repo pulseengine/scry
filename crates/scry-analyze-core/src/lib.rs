@@ -1881,9 +1881,19 @@ pub fn analyze(
 
     // FEAT-021 slice-1: worst-case shadow-stack bound, reusing the FEAT-006/007
     // call graph + Tarjan SCCs computed above for the summary pass.
+    // FEAT-043: weight the stack longest-path by the resolved call_indirect
+    // targets (not the whole table) for functions interpreted without a gap;
+    // recursion + topo stay on the conservative `static_callees`.
+    let stack_callees = resolved_stack_callees(
+        defined_funcs.len(),
+        &static_callees,
+        &call_graph,
+        &gaps,
+        import_func_count,
+    );
     let stack_usage = compute_stack_usage(
         &defined_funcs,
-        &static_callees,
+        &stack_callees,
         &sccs_reverse_topo_order(&sccs),
         &recursive_flags,
         resolve_sp_global(&mutable_i32_globals),
@@ -3704,9 +3714,68 @@ fn detect_frame(ops: &[Operator<'_>], sp: SpGlobal) -> StackBound {
 /// folded callees-first over the call-graph reverse-topological order;
 /// recursion SCCs are `Unbounded`. The overall bound is the max over all
 /// functions (any may be an entry point — sound).
+/// FEAT-043 (DD-016 slice-3): the per-defined-function callee set used to WEIGHT
+/// the worst-case shadow-stack longest-path — tightened to the RESOLVED
+/// `call_indirect` target set (FEAT-006's index-interval resolution) instead of
+/// the whole table, for functions scry interpreted COMPLETELY (no FEAT-040 gap).
+///
+/// Soundness: a gap-free function was fully interpreted, so every call it makes
+/// is in `call_graph` and each edge's `resolved_targets` is a sound SUPERSET of
+/// the concrete targets (SCRY-001) — so the union is a sound, tighter callee
+/// set. A function WITH a gap may have unrecorded calls (it degraded, or a
+/// control region was write-set-havocked), so it falls back to the conservative
+/// whole-table `static_callees`. Recursion detection + the topo order stay on
+/// `static_callees` (conservative) — this only tightens the WEIGHTING.
+fn resolved_stack_callees(
+    n: usize,
+    static_callees: &[Vec<usize>],
+    call_graph: &[CallEdge],
+    gaps: &[Gap],
+    import_func_count: u32,
+) -> Vec<Vec<usize>> {
+    let to_defined = |abs: u32| -> Option<usize> {
+        if abs >= import_func_count {
+            let d = (abs - import_func_count) as usize;
+            (d < n).then_some(d)
+        } else {
+            None // imports are out of the (guest) shadow-stack graph
+        }
+    };
+    let mut gapped = alloc::vec![false; n];
+    for g in gaps {
+        if let Some(d) = to_defined(g.func_index) {
+            gapped[d] = true;
+        }
+    }
+    let mut resolved: Vec<alloc::collections::BTreeSet<usize>> =
+        alloc::vec![alloc::collections::BTreeSet::new(); n];
+    for e in call_graph {
+        let Some(f) = to_defined(e.caller_func) else {
+            continue;
+        };
+        if gapped[f] {
+            continue;
+        }
+        for &t in &e.resolved_targets {
+            if let Some(d) = to_defined(t) {
+                resolved[f].insert(d);
+            }
+        }
+    }
+    (0..n)
+        .map(|f| {
+            if gapped[f] {
+                static_callees.get(f).cloned().unwrap_or_default()
+            } else {
+                resolved[f].iter().copied().collect()
+            }
+        })
+        .collect()
+}
+
 fn compute_stack_usage(
     defined_funcs: &[DefinedFunc<'_>],
-    static_callees: &[Vec<usize>],
+    stack_callees: &[Vec<usize>],
     reverse_topo: &[usize],
     recursive_flags: &[bool],
     sp: SpGlobal,
@@ -3726,7 +3795,7 @@ fn compute_stack_usage(
             continue;
         }
         let mut callee = StackBound::Bytes(0);
-        for &c in &static_callees[f] {
+        for &c in &stack_callees[f] {
             if c < n {
                 callee = sb_max(callee, max_stack[c]);
             }
@@ -4052,6 +4121,21 @@ fn interpret_op(
                 AbstractValue::Unknown
             };
             ctx.operand_stack.push(value);
+        }
+        Operator::GlobalGet { .. } => {
+            // FEAT-043: globals are not tracked in the interval domain, so a
+            // read yields ⊤ (sound). Crucially this does NOT degrade the
+            // function — previously `global.get` fell to the `other` fallback
+            // and scrubbed every local to ⊤, so any function with a stack
+            // prologue (which reads the SP global) lost all its analysis AND its
+            // `call_indirect` index resolution. Modelling it as a ⊤-push keeps
+            // the rest of the function analyzed.
+            ctx.operand_stack.push(AbstractValue::Unknown);
+        }
+        Operator::GlobalSet { .. } => {
+            // Writing a global consumes one operand and changes only that
+            // (untracked) global — locals/stack are unaffected (sound).
+            let _ = ctx.operand_stack.pop();
         }
         other => {
             // Anything outside the supported set: emit a fallback
@@ -5684,6 +5768,44 @@ mod tests {
         assert!(
             r.invariants.points.iter().all(|p| p.relational.is_empty()),
             "a non-relational function must surface no relational constraints"
+        );
+    }
+
+    /// FEAT-043 (DD-016 slice-3): the stack longest-path weights a
+    /// `call_indirect` by its RESOLVED target (a constant index → one table
+    /// entry), not the whole table. The entry (frame 8) calls table[0]=$small
+    /// (frame 16), so its bound is 8+16=24 — NOT 8+max(16,64)=72 that the
+    /// whole-table over-approximation would give.
+    #[test]
+    fn feat043_indirect_stack_weighted_by_resolved_target() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (table 2 funcref) (elem (i32.const 0) 0 1) \
+               (type $t (func)) \
+               (func \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 global.get $sp i32.const 16 i32.add global.set $sp) \
+               (func \
+                 global.get $sp i32.const 64 i32.sub global.set $sp \
+                 global.get $sp i32.const 64 i32.add global.set $sp) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 8 i32.sub global.set $sp \
+                 i32.const 0 call_indirect (type $t) \
+                 global.get $sp i32.const 8 i32.add global.set $sp))",
+        );
+        let entry = r
+            .stack_usage
+            .functions
+            .iter()
+            .find(|f| f.func_index == 2)
+            .expect("entry function stack record");
+        assert_eq!(
+            entry.max_stack,
+            StackBound::Bytes(24),
+            "entry must be weighted by the RESOLVED target $small (8+16=24), not the \
+             whole-table max (8+64=72); got {:?}",
+            entry.max_stack
         );
     }
 
