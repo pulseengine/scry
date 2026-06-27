@@ -138,8 +138,10 @@ jobs:
         with:
           # v0.3.0 was too old to parse scry's research-ext schema —
           # the action's internal `rivet validate` failed on v0.2.0
-          # (see issue #10). v0.13.1 matches the rivet release line.
-          rivet-version: v0.13.1
+          # (see issue #10). Bumped to v0.22.0 so the compliance action's
+          # internal `rivet validate` understands the top-level `release:`
+          # field (rivet >= 0.21) the roadmap now uses for release planning.
+          rivet-version: v0.22.0
           theme: dark
           archive: 'true'
           archive-name: scry-${{ env.BARE_VERSION }}-compliance-evidence

@@ -1752,7 +1752,8 @@ artifacts:
   - id: FEAT-034
     type: feature
     title: "v2.x — Independently-verified fusion premises + meld cross-check (FEAT-032 slice-2 consumption)"
-    status: proposed
+    status: accepted
+    release: v2.1.0
     description: >
       Consume the fusion premises (scry#63 / FEAT-032) the SOUND way:
       VERIFY, don't TRUST. scry parses every op, so it independently determines
@@ -1792,6 +1793,7 @@ artifacts:
     type: feature
     title: "v2.x — Align wasmparser/wasm-tools to 0.252 (dedup downstream trees, scry#62)"
     status: accepted
+    release: v2.1.1
     description: >
       Bump `wasmparser` 0.247 → 0.252 across the workspace so the dependency
       tree dedups with downstream consumers (meld/synth) that have moved to
@@ -1810,6 +1812,7 @@ artifacts:
     type: feature
     title: "v2.x — Interprocedural range propagation (synth wishlist, scry#54)"
     status: accepted
+    release: v2.2.0
     description: >
       Narrow a callee's parameter invariants from the value ranges at its
       call sites (a sound, monotone interprocedural pass over the existing
@@ -1833,6 +1836,7 @@ artifacts:
     type: feature
     title: "v2.x — Known-bits × interval-guarded congruence reduced product (synth#54)"
     status: accepted
+    release: v2.3.0
     description: >
       Add a NEW reduced-product abstract domain capturing alignment, low-bit
       patterns, and induction strides the interval + octagon domains miss —
@@ -1880,6 +1884,7 @@ artifacts:
     type: feature
     title: "v2.x — Consume verified bounded_memory to tighten the region/memory fixpoint (scry#70)"
     status: accepted
+    release: v2.4.0
     description: >
       Make FEAT-034's verified `bounded_memory` premise PAY OFF. INVESTIGATION
       REFRAME (v2.4.0): the concrete win is the `memory.size` / `memory.grow`
@@ -1916,6 +1921,7 @@ artifacts:
     type: feature
     title: "v2.x — Sound open-world reachable_from_exports (escaped funcrefs as roots) (scry#71)"
     status: accepted
+    release: v2.5.0
     description: >
       INVESTIGATION REFRAME (v2.5.0) — what looked like a `closed_world`
       precision tweak is actually a SOUNDNESS FIX. A clean-room confirmed that

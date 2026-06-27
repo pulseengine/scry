@@ -1,0 +1,671 @@
+artifacts:
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Research sweep (v2.5 → v3.0 planning). Captures the gap-driven survey:
+  # academic literature (classic + 2020-2026 frontier) scry could adopt,
+  # commercial / notable analyzers we measure against, and the market
+  # findings that frame the next release. Companion to artifacts/research.yaml
+  # (AC-001..011, TE-001..010, MF-001..005). Drives roadmap-3.0.yaml.
+  # ══════════════════════════════════════════════════════════════════════
+
+  # ── Academic references — numeric domains scry lacks ──────────────────
+
+  - id: AC-012
+    type: academic-reference
+    title: "Automatic Discovery of Linear Restraints Among Variables of a Program (Cousot & Halbwachs, POPL 1978)"
+    status: draft
+    tags: [abstract-interpretation, numerical-domain, relational, seminal]
+    fields:
+      authors: "Patrick Cousot, Nicolas Halbwachs"
+      year: 1978
+      venue: "POPL 1978"
+      url: "https://doi.org/10.1145/512760.512770"
+      key-finding: >
+        The convex-polyhedra domain: infers arbitrary linear inequalities
+        sum(a_i x_i) <= c. The most expressive classical linear relational
+        domain (exponential cost), the precision ceiling above the octagon.
+      relevance: >
+        The natural precision step above scry's shipped octagon (limited to
+        +/-x_i +/-x_j <= c). Would surface true linear memory-index relations
+        for bounds/trap reasoning. Adopt via ELINA decomposition (TE-012) to
+        keep it tractable. Backlog domain bet.
+    links:
+      - type: traces-to
+        target: REQ-016
+
+  - id: AC-013
+    type: academic-reference
+    title: "Affine Relationships Among Variables of a Program (Karr, Acta Informatica 1976)"
+    status: draft
+    tags: [abstract-interpretation, numerical-domain, relational, seminal]
+    fields:
+      authors: "Michael Karr (+ Müller-Olm & Seidl, ICALP 2004 for complete transfers)"
+      year: 1976
+      venue: "Acta Informatica 6:133-151"
+      url: "https://doi.org/10.1007/BF00268497"
+      key-finding: >
+        Linear-algebra domain computing EXACT affine equalities sum(a_i x_i)=c;
+        cheaper than polyhedra, fixpoint-complete for affine programs.
+      relevance: >
+        A low-cost relational EQUALITY domain to complement the octagon with a
+        small, mechanizable transfer set — attractive for admit-free Rocq. The
+        cheapest first step toward surfaced relational invariants (REQ-016).
+    links:
+      - type: traces-to
+        target: REQ-016
+
+  - id: AC-014
+    type: academic-reference
+    title: "Pentagons: a weakly relational domain for efficient validation of array accesses (Logozzo & Fähndrich, SAC 2008 / SCP 2010)"
+    status: draft
+    tags: [abstract-interpretation, numerical-domain, bounds, traps, high-value]
+    fields:
+      authors: "Francesco Logozzo, Manuel Fähndrich"
+      year: 2010
+      venue: "SAC 2008; Science of Computer Programming 75(9)"
+      url: "https://doi.org/10.1016/j.scico.2009.04.004"
+      key-finding: >
+        Cheap domain capturing x in [a,b] AND x < y — more precise than
+        intervals, far cheaper than octagon; built for bytecode/IL
+        array-bounds validation.
+      relevance: >
+        Near-perfect fit for Wasm linear-memory OOB/trap detection: the "x < y"
+        facts are exactly what prove addr < mem_size. Best effort-to-payoff
+        ratio of the surveyed domains; the enabler for OOB trap diagnostics.
+    links:
+      - type: traces-to
+        target: REQ-014
+
+  - id: AC-015
+    type: academic-reference
+    title: "A Parametric Segmentation Functor for Automatic and Scalable Array Content Analysis (Cousot, Cousot & Logozzo, POPL 2011)"
+    status: draft
+    tags: [abstract-interpretation, memory, array, seminal]
+    fields:
+      authors: "Patrick Cousot, Radhia Cousot, Francesco Logozzo"
+      year: 2011
+      venue: "POPL 2011, pp. 105-118"
+      url: "https://doi.org/10.1145/1926385.1926399"
+      key-finding: >
+        A parametric functor that segments arrays/memory into symbolic
+        intervals and lifts any element domain over them.
+      relevance: >
+        Would give scry's flat linear-memory region CONTENT sensitivity
+        (per-segment values, not one havoc'd blob) — a new analysis dimension
+        beyond the current region domain. Backlog memory bet.
+    links:
+      - type: traces-to
+        target: REQ-001
+
+  - id: AC-016
+    type: academic-reference
+    title: "The Gauge Domain: Scalable Analysis of Linear Inequality Invariants (Venet, CAV 2012)"
+    status: draft
+    tags: [abstract-interpretation, numerical-domain, scalability]
+    fields:
+      authors: "Arnaud J. Venet"
+      year: 2012
+      venue: "CAV 2012, LNCS 7358"
+      url: "https://doi.org/10.1007/978-3-642-31424-7_15"
+      key-finding: >
+        Expresses each variable as linear relations to in-scope loop counters;
+        O(kn) operations; scaled to 144 KLOC avionics code.
+      relevance: >
+        Scalable linear-inequality invariants tied to loop counters — relational
+        precision without polyhedra blowup; serves both the scaling (REQ-007)
+        and relational-surfacing (REQ-016) gaps.
+    links:
+      - type: traces-to
+        target: REQ-016
+
+  # ── Academic references — precision, termination, methodology ─────────
+
+  - id: AC-017
+    type: academic-reference
+    title: "Trace Partitioning in Abstract-Interpretation-Based Static Analyzers (Mauborgne & Rival, ESOP 2005 / TOPLAS 2007)"
+    status: draft
+    tags: [abstract-interpretation, precision, disjunctive, seminal]
+    fields:
+      authors: "Laurent Mauborgne, Xavier Rival"
+      year: 2005
+      venue: "ESOP 2005 (LNCS 3444); TOPLAS 29(5) 2007"
+      url: "https://www.di.ens.fr/~mauborgn/publi/esop05.html"
+      key-finding: >
+        Abstract over a PARTITION of traces (by branch history, loop iteration,
+        call context) rather than the merged state — recovers disjunctive
+        precision soundly. The canonical path-sensitivity technique (reused by
+        DeepPoly).
+      relevance: >
+        Lets scry avoid joining incompatible branches at merge points — the
+        standard precision booster, applicable to the loop/guard machinery.
+    links:
+      - type: traces-to
+        target: REQ-001
+
+  - id: AC-018
+    type: academic-reference
+    title: "The Abstract Domain of Segmented Ranking Functions / FuncTion (Urban, SAS 2013)"
+    status: draft
+    tags: [abstract-interpretation, termination, ranking-function, high-value]
+    fields:
+      authors: "Caterina Urban (+ Urban & Miné)"
+      year: 2013
+      venue: "SAS 2013, LNCS 7935"
+      url: "https://caterinaurban.github.io/project/function/"
+      key-finding: >
+        A parametric domain synthesizing piecewise ranking functions and sound
+        sufficient preconditions for termination.
+      relevance: >
+        Directly addresses scry's loop-bound/termination gap. A sound ranking
+        function is what would turn the WCSU stack bound's "Unbounded" (every
+        recursive SCC) into an actual bound, and extend it to loop-iteration /
+        fuel bounds (DD-016 slice-3 future).
+    links:
+      - type: traces-to
+        target: DD-016
+
+  - id: AC-019
+    type: academic-reference
+    title: "SPEED: Precise and Efficient Static Estimation of Program Computational Complexity (Gulwani, Mehra & Chilimbi, POPL 2009)"
+    status: draft
+    tags: [abstract-interpretation, cost-analysis, bounds]
+    fields:
+      authors: "Sumit Gulwani, Krishna K. Mehra, Trishul Chilimbi"
+      year: 2009
+      venue: "POPL 2009"
+      url: "https://doi.org/10.1145/1480881.1480898"
+      key-finding: >
+        Computes symbolic worst-case iteration/resource bounds via counter
+        instrumentation plus invariant generation.
+      relevance: >
+        Turns scry's reachability/call-graph machinery into a resource/cost
+        bound estimator — concrete loop-bound numbers and a Wasm fuel/gas bound
+        (metered Wasm), the analogue of aiT WCET (CA-002).
+    links:
+      - type: traces-to
+        target: DD-016
+
+  - id: AC-020
+    type: academic-reference
+    title: "A Formally-Verified C Static Analyzer / Verasco (Jourdan, Laporte, Blazy, Leroy, Pichardie, POPL 2015)"
+    status: draft
+    tags: [abstract-interpretation, mechanized-soundness, methodology, high-value]
+    fields:
+      authors: "Jacques-Henri Jourdan, Vincent Laporte, Sandrine Blazy, Xavier Leroy, David Pichardie"
+      year: 2015
+      venue: "POPL 2015, pp. 247-259"
+      url: "https://compcert.org/verasco/"
+      key-finding: >
+        An abstract interpreter for most of C, machine-checked sound in Coq,
+        with a modular reduced-product of relational + non-relational domains,
+        integrated with CompCert so guarantees carry to compiled code.
+      relevance: >
+        THE methodological precedent for scry's admit-free Rocq program and for
+        the reduced-product domain-combinator interface scry needs as its domain
+        count grows. De-risks REQ-002 (mechanized soundness vs the semantics).
+    links:
+      - type: traces-to
+        target: REQ-002
+
+  - id: AC-021
+    type: academic-reference
+    title: "Demanded / Interactive Abstract Interpretation with Demanded Summarization (Stein et al., PLDI 2021 / TOPLAS 2024)"
+    status: draft
+    tags: [abstract-interpretation, incremental, compositional, scalability, recent]
+    fields:
+      authors: "Benno Stein, Bor-Yuh Evan Chang, Manu Sridharan, et al."
+      year: 2024
+      venue: "PLDI 2021; TOPLAS 46(1) 2024"
+      url: "https://plv.colorado.edu/bec/papers/demanded-summarization-toplas24.pdf"
+      key-finding: >
+        First incremental + demand-driven + compositional AI for arbitrary
+        domains with from-scratch-consistency guarantees; reuses results across
+        edits and produces composable procedure summaries.
+      relevance: >
+        Upgrades scry's function summaries into reusable, edit-incremental
+        summaries — the scaling story for CI / the dashboard / large fused
+        modules (REQ-007).
+    links:
+      - type: traces-to
+        target: REQ-007
+
+  # ── Academic references — floats + recent frontier ────────────────────
+
+  - id: AC-022
+    type: academic-reference
+    title: "Relational Abstract Domains for the Detection of Floating-Point Run-Time Errors (Miné, ESOP 2004)"
+    status: draft
+    tags: [abstract-interpretation, floating-point, relational, high-value]
+    fields:
+      authors: "Antoine Miné (+ Chen, Miné, Cousot, APLAS 2008 for FP polyhedra)"
+      year: 2004
+      venue: "ESOP 2004, LNCS 2986"
+      url: "https://arxiv.org/pdf/cs/0703077"
+      key-finding: >
+        Adapts the octagon (later polyhedra) to IEEE-754 by abstracting to
+        reals-with-rounding-error nondeterminism, then over-approximating
+        soundly — the first relational floating-point domains.
+      relevance: >
+        THE reference for closing scry's IEEE-754 float gap soundly, and it
+        REUSES scry's already-shipped octagon DBM machinery — the float
+        capability with the least new machinery (REQ-015).
+    links:
+      - type: traces-to
+        target: REQ-015
+
+  - id: AC-023
+    type: academic-reference
+    title: "An Abstract Domain for Certifying Neural Networks / DeepPoly (Singh, Gehr, Püschel, Vechev, POPL 2019)"
+    status: draft
+    tags: [abstract-interpretation, floating-point, precision, recent]
+    fields:
+      authors: "Gagandeep Singh, Timon Gehr, Markus Püschel, Martin Vechev"
+      year: 2019
+      venue: "PACMPL 3(POPL), Art. 41 (ERAN)"
+      url: "https://ggndpsngh.github.io/files/DeepPoly.pdf"
+      key-finding: >
+        A custom polyhedra-lite domain (per-neuron linear upper/lower bounds +
+        interval concretization) for NN robustness, combined with trace
+        partitioning for refinement.
+      relevance: >
+        A worked example of designing a bespoke, cheap, sound relational domain
+        with a precise float/affine transformer — informs both the float (REQ-015)
+        and precision (REQ-001) directions. Also the cross-link to AI-robustness
+        verification scry's stack could later serve.
+    links:
+      - type: traces-to
+        target: REQ-015
+
+  - id: AC-024
+    type: academic-reference
+    title: "Hybrid Call Graph Analysis for WebAssembly: AI + Environment Specification (Paccamiccio, Raimondi, Loreti, 2025)"
+    status: draft
+    tags: [webassembly, call-graph, component-model, recent]
+    fields:
+      authors: "Mattia Paccamiccio, Franco Raimondi, Michele Loreti"
+      year: 2025
+      venue: "2025 preprint (SSRN); follow-on to AC-008"
+      url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5110464"
+      key-finding: >
+        Sound Wasm call-graph construction via abstract interpretation PLUS a
+        specification mechanism for external/host (import) behavior.
+      relevance: >
+        Extends scry's value-domain call graph (FEAT-006) to model host imports
+        / the Component-Model boundary soundly — the env-specification idea is
+        what handle/host-call modelling (REQ-003) needs. NOTE: confirm
+        published-vs-preprint status before promoting past draft.
+    links:
+      - type: traces-to
+        target: REQ-003
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Competitive analysis — the sound-analyzer bar (G-005) + Wasm peers.
+  # IDs use the prefix CA-.
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: CA-001
+    type: competitive-analysis
+    title: "AbsInt Astrée — sound abstract interpreter (the bar)"
+    status: draft
+    tags: [competitor, sound, runtime-error, qualification]
+    description: >
+      Deepens TE-001. The reference sound analyzer G-005 targets.
+    fields:
+      tool-name: "Astrée"
+      tool-url: "https://www.absint.com/astree/"
+      vendor: "AbsInt GmbH"
+      tool-status: commercial
+      approach: >
+        Sound AI for C/C++. Proves ABSENCE of: division by zero, out-of-bounds
+        indexing, null/uninit/dangling deref, integer AND IEEE-754 overflow,
+        data races, Spectre, dead code, non-terminating loops. Domains: intervals,
+        relational octagons (incl. float), congruences, filter domains, trace
+        partitioning. Ships DO-178C/DO-330, ISO 26262, IEC 61508, EN 50128 QSKs.
+      limitations: >
+        C/C++ source only (no Wasm); proprietary; soundness is argued + qualified,
+        NOT machine-checked against a formal language semantics.
+      differentiation: >
+        This is the bar. scry's wedge = mechanized Rocq soundness vs the OFFICIAL
+        Wasm semantics, which Astrée lacks. BORROW: runtime-error-classes-as-
+        diagnostics (G1/REQ-014), float octagon (REQ-015), trace partitioning,
+        and the QSK packaging template for the qualification dossier.
+
+  - id: CA-002
+    type: competitive-analysis
+    title: "AbsInt aiT (WCET) + StackAnalyzer (stack bound)"
+    status: draft
+    tags: [competitor, sound, resource-bound]
+    description: >
+      Sound binary-level resource-bound analyzers; the comparison point for
+      scry's worst-case shadow-stack bound.
+    fields:
+      tool-name: "aiT / StackAnalyzer"
+      tool-url: "https://www.absint.com/stackanalyzer/"
+      vendor: "AbsInt GmbH"
+      tool-status: commercial
+      approach: >
+        Sound AI on binaries. StackAnalyzer proves absence of stack overflow
+        (worst-case stack usage for all inputs); aiT computes safe WCET upper
+        bounds via cache/pipeline modelling. Both qualifiable.
+      limitations: >
+        Per-target microarchitecture models; proprietary; no Wasm; the bounds
+        are not mechanized.
+      differentiation: >
+        Directly comparable to scry's FEAT-021 WCSU bound — and scry's is
+        MECHANIZED (StackBound.v) + self-checked via a live kill-criterion, so
+        scry partly already wins. BORROW: aiT's WCET angle as a future Wasm
+        fuel/instruction-bound (more tractable than native WCET — no cache),
+        pairing with termination/ranking functions (AC-018/AC-019).
+
+  - id: CA-003
+    type: competitive-analysis
+    title: "MathWorks Polyspace Code Prover (sound) vs Bug Finder (heuristic)"
+    status: draft
+    tags: [competitor, sound, runtime-error, ux]
+    description: >
+      The other major commercial sound prover; notable for its per-operation
+      verdict UX.
+    fields:
+      tool-name: "Polyspace Code Prover"
+      tool-url: "https://www.mathworks.com/products/polyspace-code-prover.html"
+      vendor: "MathWorks"
+      tool-status: commercial
+      approach: >
+        Code Prover = sound AI proving absence of overflow, div-by-zero, OOB,
+        and other RTEs over all paths; color-codes EVERY operation
+        green(proven-safe)/red(unsafe)/orange(unproven). Bug Finder = fast
+        heuristic, 350+ defect types. Certification via IEC/DO qualification kits.
+      limitations: >
+        C/C++/Ada; proprietary; MATLAB ecosystem; orange-noise is the classic
+        complaint.
+      differentiation: >
+        The green/orange/red per-operation verdict is the UX model for scry's
+        library-only output gap (REQ-016/IDE surface). scry is squarely a "Code
+        Prover", not a "Bug Finder".
+
+  - id: CA-004
+    type: competitive-analysis
+    title: "Frama-C / Eva — open-source sound abstract interpreter"
+    status: draft
+    tags: [competitor, sound, open-source, architecture]
+    description: >
+      The closest architectural peer; proof that open-source sound AI reaches
+      DO-178 / Common Criteria EAL6-7.
+    fields:
+      tool-name: "Frama-C / Eva (EVA)"
+      tool-url: "https://frama-c.com/fc-plugins/eva.html"
+      vendor: "CEA List"
+      tool-status: active
+      approach: >
+        Sound AI plug-in for C. Proves absence of UB: invalid access, uninit
+        reads, integer overflow; IEEE-754 float intervals; interval+congruence
+        integer domain; pluggable communicating domains (gauges, Apron =
+        octagons/polyhedra). Used for DO-178, IEC 60880, Common Criteria EAL6-7.
+      limitations: >
+        C only; LGPL core but qualification is consulting-driven; precision needs
+        domain tuning.
+      differentiation: >
+        Architectural template for scry: its pluggable COMMUNICATING-domain design
+        is exactly how scry should let interval/octagon/region/bits/taint exchange
+        info and SURFACE relational invariants (REQ-016) — Eva surfaces them, scry
+        computes-but-discards. Proof that open-source sound AI can be certified.
+
+  - id: CA-005
+    type: competitive-analysis
+    title: "TrustInSoft Analyzer — commercialized Frama-C lineage"
+    status: draft
+    tags: [competitor, sound, qualification]
+    fields:
+      tool-name: "TrustInSoft Analyzer"
+      tool-url: "https://www.trust-in-soft.com/"
+      vendor: "TrustInSoft"
+      tool-status: commercial
+      approach: >
+        Sound AI (Frama-C lineage). Sound UB detection: buffer overflow, OOB,
+        null deref, use-after-free, div-by-zero, uninit reads, signed overflow.
+        C/C++; claims Rust support. ISO 26262 TCL3 qualification.
+      limitations: >
+        Proprietary; C/C++ focus; Rust/Wasm not first-class.
+      differentiation: >
+        Demonstrates the commercial packaging of sound AI (the business scry's
+        thesis implies). BORROW: their crisp marketing taxonomy of UB classes
+        proven absent — the messaging scry needs for its trap/RTE story (REQ-014).
+
+  - id: CA-006
+    type: competitive-analysis
+    title: "VeriWasm — sound SFI/sandbox verifier for compiled Wasm"
+    status: draft
+    tags: [competitor, sound, webassembly, closest-peer]
+    description: >
+      The closest "sound + Wasm" peer — orthogonal scope, instructive CVE miss.
+    fields:
+      tool-name: "VeriWasm"
+      tool-url: "https://github.com/PLSysSec/veriwasm"
+      vendor: "UC San Diego (PLSysSec)"
+      tool-status: maintained
+      approach: >
+        Sound static verifier of NATIVE-compiled Wasm (x86-64 from Lucet/
+        Wasmtime): proves memory accesses stay in-sandbox, control-flow targets
+        valid, stack usage bounded — i.e. SFI holds. No false positives by design.
+      limitations: >
+        Verifies the compiled output's sandboxing, NOT source-level RTE absence;
+        missed CVE-2021-32629 (signedness mis-modelling in the spec) — a
+        cautionary soundness-via-wrong-spec tale; research-grade.
+      differentiation: >
+        Orthogonal (SFI of the backend vs AI of the module). scry wins on
+        domains/RTE reasoning AND mechanized-against-official-semantics —
+        VeriWasm's CVE miss is the concrete argument FOR scry's WasmCert grounding
+        (REQ-002). BORROW: control-flow-target-validity + stack-bound verdicts.
+
+  - id: CA-007
+    type: competitive-analysis
+    title: "Wasmati — code-property-graph vulnerability scanner for Wasm"
+    status: draft
+    tags: [competitor, heuristic, webassembly, query]
+    fields:
+      tool-name: "Wasmati"
+      tool-url: "https://github.com/wasmati/wasmati"
+      vendor: "Univ. Lisbon"
+      tool-status: maintained
+      approach: >
+        Builds a Code Property Graph (AST+CFG+PDG) for Wasm; 4 query languages;
+        ~10 vuln queries (buffer overflow, format string). Scales to large real
+        binaries. Heuristic pattern-matching, unsound.
+      limitations: >
+        Unsound (false neg/pos); detects, does not prove.
+      differentiation: >
+        BORROW the CPG + queryable-graph idea. A SOUND CPG — a graph annotated
+        with scry's proven invariants, queryable — would be genuinely novel
+        (Wasmati UX + scry soundness). Ties to a query-language surface for
+        AnalysisResult (agent/REQ-017 + IDE).
+
+  - id: CA-008
+    type: competitive-analysis
+    title: "Wasm symbolic execution (SeeWasm, WASP, Manticore-wasm, WANA)"
+    status: draft
+    tags: [competitor, symbolic-execution, webassembly, complementary]
+    fields:
+      tool-name: "SeeWasm / WASP / Manticore-wasm / WANA"
+      tool-url: "https://arxiv.org/abs/2408.08537"
+      vendor: "various (academic)"
+      tool-status: research
+      approach: >
+        Symbolic / concolic execution of Wasm binaries; find concrete
+        bug-triggering inputs; path-explosion-bounded (not whole-program sound).
+      limitations: >
+        Opposite trade-off to scry: find-a-witness vs prove-absence; bounded
+        coverage.
+      differentiation: >
+        Complementary. BORROW: symbolic execution to generate COUNTEREXAMPLES for
+        scry's unproven/orange operations — turning "cannot prove safe" into
+        "input X may trap" (a strong UX pairing for REQ-014). scry wins on
+        completeness/soundness over all paths.
+
+  - id: CA-009
+    type: competitive-analysis
+    title: "Wasm Component Model verification — uncontested green field"
+    status: draft
+    tags: [webassembly, component-model, green-field, moat]
+    description: >
+      No sound analyzer occupies handle-state / linear-resource analysis for the
+      Component Model — scry's biggest novelty opportunity.
+    fields:
+      tool-name: "(none — open green field)"
+      tool-url: "https://component-model.bytecodealliance.org/"
+      vendor: "Bytecode Alliance (spec)"
+      tool-status: active
+      approach: >
+        The Component Model defines resource handles (own/borrow) with
+        destructor-on-last-drop. WAW 2025 notes syntactic type soundness is
+        INSUFFICIENT for interesting Component-Model properties — i.e. no mature
+        sound analyzer for handle-state exists today.
+      limitations: >
+        Nascent; Wasm 3.0 (Sept 2025) also adds 64-bit, multi-memory, GC,
+        exceptions scry must eventually model.
+      differentiation: >
+        Category-defining opportunity: a sound own/borrow handle-state analysis
+        (use-after-drop, double-drop, leaked handles) extending scry's existing
+        meld component-provenance boundary. The highest-moat item (REQ-003).
+
+  - id: CA-010
+    type: competitive-analysis
+    title: "CodeQL + Semgrep — heuristic taint at scale (borrow the UX)"
+    status: draft
+    tags: [competitor, heuristic, taint, ux, query]
+    fields:
+      tool-name: "GitHub CodeQL / Semgrep"
+      tool-url: "https://codeql.github.com/"
+      vendor: "GitHub / Semgrep Inc."
+      tool-status: active
+      approach: >
+        CodeQL = semantic code-as-database, whole-program exhaustive taint via a
+        query language (QL). Semgrep = lightweight pattern + Pro cross-file taint.
+        Both heuristic (no soundness claim).
+      limitations: >
+        Unsound (false neg/pos); not abstract interpretation.
+      differentiation: >
+        scry's noninterference/taint is SOUND where theirs is heuristic — a
+        differentiator to assert. BORROW: (1) a query language over scry's
+        analysis facts; (2) the SARIF + PR-comment + IDE pipeline (scry's
+        developer-surface gap); (3) Semgrep's rule-pack distribution model.
+
+  - id: CA-011
+    type: competitive-analysis
+    title: "Tool-qualification ecosystem (DO-330 TQL / ISO 26262-8 TCL / LDRA / QSKs)"
+    status: draft
+    tags: [qualification, standard, certification]
+    description: >
+      What "qualifiable" (G-005) concretely requires — and where scry's
+      mechanized proofs are stronger-but-unpackaged evidence.
+    fields:
+      tool-name: "DO-330 / ISO 26262-8 §11 qualification kits"
+      tool-url: "https://www.ldra.com/do-330/"
+      vendor: "RTCA / ISO; kits from AbsInt, MathWorks, LDRA"
+      tool-status: standard
+      approach: >
+        DO-330 assigns Tool Qualification Levels TQL-1..5; ISO 26262-8 §11 uses
+        Tool Confidence Level (TCL1-3) = Tool Impact x Tool error Detection. A
+        sound verification tool like scry typically lands TQL-5 / must justify
+        TCL. Kits ship: Tool Operational Requirements, Qualification Plan,
+        qualification test suite + results, life-cycle data (QSLCD).
+      limitations: >
+        Kits are test-suite-based; assembling the dossier is substantial effort.
+      differentiation: >
+        scry's mechanized Rocq proofs + MC/DC gate + live kill-criteria are
+        STRONGER evidence than the test-based QSKs — but scry has NO packaged
+        dossier (TORs, plan, TCL/TQL argument). Producing a DO-330 TQL-5 /
+        ISO 26262-8 TCL-mapped dossier (with proofs as the differentiating
+        evidence) is the G-005 capstone.
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Technology evaluations (continuing TE- series from research.yaml).
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: TE-011
+    type: technology-evaluation
+    title: "AI-agent gap detection from analysis output (structured-primary, viz-secondary)"
+    status: draft
+    tags: [ai-agent, visualization, gap-detection, tooling]
+    description: >
+      Evaluation of how an AI agent should consume scry's output (scry-viz +
+      AnalysisResult) to detect analysis gaps — where the analyzer gave up (top
+      / unsupported-op fallback). Evidence: LLMs UNDER-read charts/SVG for
+      precise/numeric queries (CharXiv best-model 47%; SVG fails arithmetic
+      reads; structured tables score 2.72 vs chart image 1.91), while agentic
+      triage over STRUCTURED static-analysis findings is production-ready
+      (AdaTaint cuts FPs 43.7%, ZeroFalse, LLM+SMT invariant loops). scry today
+      emits top as SILENCE (only non-top facts recorded) with scattered
+      UnsoundnessFallback diagnostics and no aggregated gap report — the worst
+      case for an agent. Recommendation: structured side-channel is the
+      evidentiary basis; the SVG is a human/orientation layer only.
+    fields:
+      technology: "Multimodal-LLM / agentic consumption of analysis output"
+      category: framework
+      maturity: research
+      rust-compatible: true
+      wasm-compatible: true
+      recommendation: trial
+
+  - id: TE-012
+    type: technology-evaluation
+    title: "Apron / ELINA — numeric abstract-domain libraries"
+    status: draft
+    tags: [numerical-domain, library, scalability]
+    description: >
+      Apron is the standard interface (intervals/octagons/polyhedra/congruences);
+      ELINA (ETH) makes polyhedra orders-of-magnitude faster via online constraint
+      decomposition with no precision loss, and accelerates octagon DBMs. The
+      engineering answer to "polyhedra is too expensive" (AC-012). Note: C
+      libraries — scry's pure-Rust no_std ethos means likely re-implementing the
+      DECOMPOSITION TECHNIQUE rather than linking, but the algorithms are the
+      reference.
+    fields:
+      technology: "Apron / ELINA"
+      category: library
+      maturity: production
+      rust-compatible: false
+      wasm-compatible: false
+      license: "LGPL / Apache-2.0"
+      recommendation: assess
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Market findings (continuing MF- series from research.yaml).
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: MF-006
+    type: market-finding
+    title: "Runtime-error / trap detection is the defining capability of the sound-analyzer bar — scry has the domains but emits no verdicts"
+    status: draft
+    tags: [runtime-error, positioning, gap]
+    description: >
+      Every sound competitor (Astrée, Polyspace Code Prover, Frama-C/Eva,
+      TrustInSoft, VeriWasm) is fundamentally a "prove absence of run-time
+      errors" tool. scry's interval/region/pentagon-able domains already compute
+      the facts (a divisor interval containing 0; an address interval exceeding
+      the region) but scry classifies NO trap site — div/rem, OOB load/store,
+      unreachable, overflow, stack-exhaustion all fall to the sound top fallback.
+      Closing this (REQ-014) is the single biggest credibility gap vs the bar
+      and the most visible capability for the qualification thesis (G-005).
+    fields:
+      domain: "Sound static analysis / safety-critical Wasm"
+      finding-type: tool-gap
+      source: "Competitive sweep CA-001/003/004/005/006 (2026-06)"
+      confidence: high
+
+  - id: MF-007
+    type: market-finding
+    title: "No sound handle-state analyzer exists for the Wasm Component Model — uncontested green field"
+    status: draft
+    tags: [component-model, green-field, opportunity, moat]
+    description: >
+      The Component Model's resource handles (own/borrow, destructor-on-last-drop)
+      have no mature sound analyzer; WAW 2025 notes syntactic type soundness is
+      insufficient for the interesting properties. scry already owns the meld
+      component-provenance boundary (SCPV v3) — extending it to track handle
+      lifetimes (use-after-drop, double-drop, leaked handles) would be a
+      category-defining, uncontested capability (REQ-003 substance / CA-009).
+    fields:
+      domain: "WebAssembly Component Model verification"
+      finding-type: opportunity
+      source: "Competitive sweep CA-009 + AC-009/AC-024 (2026-06)"
+      confidence: high
