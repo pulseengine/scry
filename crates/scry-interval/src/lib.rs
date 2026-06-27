@@ -131,6 +131,44 @@ pub fn widen(a: Interval, b: Interval) -> Interval {
     Interval { lo, hi }
 }
 
+/// FEAT-042: widening WITH THRESHOLDS. Like [`widen`], but when a bound would
+/// jump to ±∞ it instead snaps to the nearest enclosing `threshold` — the
+/// greatest threshold ≤ `b.lo` for the lower bound, the least threshold ≥ `b.hi`
+/// for the upper — falling back to ±∞ when no threshold encloses. Recovers loop
+/// bounds plain widening over-approximates to ⊤ (a counter that stays `< 16`
+/// snaps to a `16` threshold, not ∞). Sound: the result still ⊒ `a` and ⊒ `b`
+/// (a genuine widening), and termination holds because the threshold set is
+/// finite — each jump moves strictly up the finite ladder `{thresholds} ∪ {±∞}`.
+pub fn widen_with_thresholds(a: Interval, b: Interval, thresholds: &[i64]) -> Interval {
+    if is_bot(a) {
+        return b;
+    }
+    if is_bot(b) {
+        return a;
+    }
+    let lo = if b.lo < a.lo {
+        thresholds
+            .iter()
+            .copied()
+            .filter(|&t| t <= b.lo)
+            .max()
+            .unwrap_or(i64::MIN)
+    } else {
+        a.lo
+    };
+    let hi = if b.hi > a.hi {
+        thresholds
+            .iter()
+            .copied()
+            .filter(|&t| t >= b.hi)
+            .min()
+            .unwrap_or(i64::MAX)
+    } else {
+        a.hi
+    };
+    Interval { lo, hi }
+}
+
 pub fn constant_i32(c: i32) -> Interval {
     Interval {
         lo: c as i64,
@@ -309,6 +347,46 @@ pub fn region_widen(a: Region, b: Region) -> Region {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-042: threshold widening snaps a growing upper bound to the nearest
+    /// enclosing threshold instead of +∞, stays a sound widening (⊒ both inputs),
+    /// and terminates (reaches a fixed point at/within the threshold ladder).
+    #[test]
+    fn widen_with_thresholds_snaps_and_terminates() {
+        let thr = [8i64, 16, 64];
+        // [0,3] ⊔widen [0,5] : hi grew → snap to least threshold ≥ 5 = 8.
+        let w = widen_with_thresholds(Interval { lo: 0, hi: 3 }, Interval { lo: 0, hi: 5 }, &thr);
+        assert_eq!(w, Interval { lo: 0, hi: 8 }, "should snap to 8, not ∞");
+        // soundness: result contains both inputs.
+        for z in 0..=8 {
+            assert!(gamma(w, z));
+        }
+        assert!(gamma(w, 5) && gamma(w, 3));
+        // plain widen would have gone to +∞.
+        assert_eq!(
+            widen(Interval { lo: 0, hi: 3 }, Interval { lo: 0, hi: 5 }).hi,
+            i64::MAX
+        );
+        // termination: widening the snapped value against a still-growing body
+        // climbs the ladder 8 → 16 → 64 → ∞ and stops; never oscillates.
+        let mut acc = Interval { lo: 0, hi: 0 };
+        let mut prev = acc;
+        for step in 1..200 {
+            let body = Interval { lo: 0, hi: step };
+            acc = widen_with_thresholds(acc, body, &thr);
+            assert!(leq(prev, acc), "widening must be ascending");
+            prev = acc;
+        }
+        // After enough growth past the top threshold, it reaches ∞ — finite chain.
+        assert_eq!(acc.hi, i64::MAX);
+        // No threshold encloses → falls back to ±∞ (still sound).
+        let w2 = widen_with_thresholds(
+            Interval { lo: 0, hi: 100 },
+            Interval { lo: 0, hi: 200 },
+            &thr,
+        );
+        assert_eq!(w2.hi, i64::MAX);
+    }
 
     /// γ: does concrete `z` lie in the interval?
     fn gamma(a: Interval, z: i64) -> bool {

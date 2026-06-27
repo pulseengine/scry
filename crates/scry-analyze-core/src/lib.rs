@@ -2423,13 +2423,13 @@ const LOOP_ITER_CAP: u32 = 64;
 /// Per-local widening (FEAT-016 slice-2a). `widen(a, b)` over the interval
 /// domain (scry-interval, terminating ascending-chain); region/unknown keep
 /// their value only if unchanged, else degrade to ⊤ (`Unknown`).
-fn widen_abstract(a: &AbstractValue, b: &AbstractValue) -> AbstractValue {
+fn widen_abstract(a: &AbstractValue, b: &AbstractValue, thresholds: &[i64]) -> AbstractValue {
     match (a, b) {
         (AbstractValue::I32Interval(x), AbstractValue::I32Interval(y)) => {
-            AbstractValue::I32Interval(scry_interval::widen(*x, *y))
+            AbstractValue::I32Interval(scry_interval::widen_with_thresholds(*x, *y, thresholds))
         }
         (AbstractValue::I64Interval(x), AbstractValue::I64Interval(y)) => {
-            AbstractValue::I64Interval(scry_interval::widen(*x, *y))
+            AbstractValue::I64Interval(scry_interval::widen_with_thresholds(*x, *y, thresholds))
         }
         _ if a == b => clone_value(a),
         _ => AbstractValue::Unknown,
@@ -2455,8 +2455,15 @@ fn join_locals(a: &[AbstractValue], b: &[AbstractValue]) -> Vec<AbstractValue> {
     a.iter().zip(b).map(|(x, y)| join_abstract(x, y)).collect()
 }
 
-fn widen_locals(a: &[AbstractValue], b: &[AbstractValue]) -> Vec<AbstractValue> {
-    a.iter().zip(b).map(|(x, y)| widen_abstract(x, y)).collect()
+fn widen_locals(
+    a: &[AbstractValue],
+    b: &[AbstractValue],
+    thresholds: &[i64],
+) -> Vec<AbstractValue> {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| widen_abstract(x, y, thresholds))
+        .collect()
 }
 
 /// Interval NARROWING (FEAT-016 slice-2b-i): replace each INFINITE bound of
@@ -2717,6 +2724,10 @@ struct Interp<'a, 'b> {
     diagnostics: &'a mut Vec<Diagnostic>,
     call_graph: &'a mut Vec<CallEdge>,
     points: Vec<ProgramPoint>,
+    /// FEAT-042: syntactic widening thresholds for this function (its constant
+    /// operands, plus 0), used by the loop-header widening to snap a runaway
+    /// bound to the nearest enclosing constant instead of ±∞.
+    widen_thresholds: Vec<i64>,
 }
 
 impl Interp<'_, '_> {
@@ -3117,7 +3128,7 @@ impl Interp<'_, '_> {
                 None => (entry.clone(), entry_oct.clone()),
             };
             if iter >= LOOP_WIDEN_THRESHOLD {
-                next = widen_locals(&header, &next);
+                next = widen_locals(&header, &next, &self.widen_thresholds);
                 next_oct = scry_octagon::widen(&header_oct, &next_oct);
             }
             if locals_leq(&next, &header) && scry_octagon::leq(&next_oct, &header_oct) {
@@ -3265,6 +3276,24 @@ impl Interp<'_, '_> {
     }
 }
 
+/// FEAT-042: the widening thresholds for a function — its integer constant
+/// operands (the `i32.const` / `i64.const` immediates, where loop bounds and
+/// array sizes live) plus `0`, deduped and sorted. The loop-header widening
+/// snaps a runaway bound to the nearest enclosing threshold instead of ±∞.
+fn collect_widen_thresholds(ops: &[Operator<'_>]) -> Vec<i64> {
+    let mut ts: Vec<i64> = alloc::vec![0];
+    for op in ops {
+        match op {
+            Operator::I32Const { value } => ts.push(*value as i64),
+            Operator::I64Const { value } => ts.push(*value),
+            _ => {}
+        }
+    }
+    ts.sort_unstable();
+    ts.dedup();
+    ts
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_function_body(
     func: &DefinedFunc<'_>,
@@ -3281,6 +3310,7 @@ fn run_function_body(
     let ops = &func.ops;
     let end_at = build_end_map(ops);
     let want_points = emit_points.is_some();
+    let widen_thresholds = collect_widen_thresholds(ops);
     let mut interp = Interp {
         ops,
         end_at: &end_at,
@@ -3291,6 +3321,7 @@ fn run_function_body(
         diagnostics,
         call_graph,
         points: Vec::new(),
+        widen_thresholds,
     };
     let mut labels: Vec<Label> = Vec::new();
     interp.seq(0, ops.len(), &mut ctx, &mut labels, want_points)?;
