@@ -501,6 +501,85 @@ pub fn bound_of(o: &Octagon, k: u32) -> Option<(i64, i64)> {
     Some((lo, hi))
 }
 
+/// FEAT-041: the form of a surfaced relational constraint between two variables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelKind {
+    /// `x_a - x_b ≤ bound`.
+    Diff,
+    /// `x_a + x_b ≤ bound`.
+    Sum,
+}
+
+/// FEAT-041: a relational constraint the octagon holds between two DISTINCT
+/// variables — the precision the octagon arc computes but the unary
+/// interval projection (`bound_of`) discards (the v1.9 non-observability
+/// finding). `a != b`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Relation {
+    pub a: u32,
+    pub b: u32,
+    pub kind: RelKind,
+    pub bound: i64,
+}
+
+/// FEAT-041: extract the relational constraints the octagon holds between
+/// DISTINCT variables — the relational precision the unary interval projection
+/// (`bound_of`) discards (the v1.9 non-observability finding). Reads the
+/// strong-closed DBM so the surfaced relations are the tightest scry can prove:
+///   * `x_a − x_b ≤ c`  at cell `m[2b][2a]`  (all ordered a≠b);
+///   * `x_a + x_b ≤ c`  at cell `m[2b+1][2a]` (unordered, a < b).
+///
+/// We do NOT filter against the unary bounds: a relation that produced a unary
+/// bound (e.g. `i − n ≤ 0`, which yields `i ≤ n`) looks "unary-implied" once the
+/// octagon has reduced it into the interval, yet it is exactly the relational
+/// fact worth surfacing. We DO drop a `Diff`/`Sum` that is purely a restatement
+/// of a single variable's own bound (covered by `bound_of`): such cells never
+/// arise here because both indices belong to distinct variables. Every returned
+/// constraint is a sound invariant (a finite DBM cell is an upper bound scry
+/// maintains). Empty for ⊥ or a purely non-relational state.
+pub fn relations(o: &Octagon) -> Vec<Relation> {
+    let c = strong_close(o);
+    let mut out = Vec::new();
+    if is_bottom(&c) {
+        return out;
+    }
+    let dim = c.dim;
+    let n = c.n();
+    for a in 0..dim {
+        for b in 0..dim {
+            if a == b {
+                continue;
+            }
+            let (ai, bi) = (a as usize, b as usize);
+            // x_a - x_b ≤ diff  (cell m[2b][2a])
+            if 2 * ai < n && 2 * bi < n {
+                let d = c.at(2 * bi, 2 * ai);
+                if d != INF {
+                    out.push(Relation {
+                        a,
+                        b,
+                        kind: RelKind::Diff,
+                        bound: d,
+                    });
+                }
+            }
+            // x_a + x_b ≤ sum  (cell m[2b+1][2a]), unordered: only a < b
+            if a < b && 2 * bi + 1 < n && 2 * ai < n {
+                let s = c.at(2 * bi + 1, 2 * ai);
+                if s != INF {
+                    out.push(Relation {
+                        a,
+                        b,
+                        kind: RelKind::Sum,
+                        bound: s,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Octagon narrowing: recover bounds that [`widen`] over-eagerly discarded.
 /// Where the widened `a` has `INF` (a bound widening dropped), take `b`'s
 /// (re-applied, tighter) bound; elsewhere keep `a`. Descending and sound:
@@ -527,6 +606,51 @@ pub fn narrow(a: &Octagon, b: &Octagon) -> Octagon {
 #[allow(clippy::identity_op, clippy::erasing_op)]
 mod tests {
     use super::*;
+
+    /// FEAT-041: `relations` surfaces a genuinely-relational constraint
+    /// (x_0 - x_1 <= -1, i.e. i < n) and is sound (every surfaced bound holds
+    /// of every concrete point), but omits a constraint that is merely
+    /// unary-implied.
+    #[test]
+    fn relations_surfaces_relational_and_is_sound() {
+        // x_0 - x_1 <= -1 over 2 vars.
+        let o = add_diff(&top(2), 0, 1, -1);
+        let rels = relations(&o);
+        assert!(
+            rels.iter()
+                .any(|r| r.a == 0 && r.b == 1 && r.kind == RelKind::Diff && r.bound == -1),
+            "must surface x0 - x1 <= -1, got {rels:?}"
+        );
+        // Soundness: every surfaced Diff/Sum holds for any concrete point in γ.
+        for x0 in -8i64..8 {
+            for x1 in -8i64..8 {
+                if gamma(&o, &[x0, x1]) {
+                    for r in &rels {
+                        let (va, vb) = ([x0, x1][r.a as usize], [x0, x1][r.b as usize]);
+                        let lhs = match r.kind {
+                            RelKind::Diff => va - vb,
+                            RelKind::Sum => va + vb,
+                        };
+                        assert!(
+                            lhs <= r.bound,
+                            "surfaced relation violated: {r:?} at {x0},{x1}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// FEAT-041: a purely unary octagon (only x_0 <= 5) surfaces NO relational
+    /// constraints (no noise from unary-implied diffs).
+    #[test]
+    fn relations_omits_unary_only() {
+        let o = set_upper(&top(2), 0, 5);
+        assert!(
+            relations(&o).is_empty(),
+            "unary-only octagon must yield no relations"
+        );
+    }
 
     /// γ(o, vals): does the concrete assignment `vals` (length `dim`)
     /// satisfy every bound of the DBM? This is the test-side
