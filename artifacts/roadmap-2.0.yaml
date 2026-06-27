@@ -1879,23 +1879,30 @@ artifacts:
   - id: FEAT-038
     type: feature
     title: "v2.x — Consume verified bounded_memory to tighten the region/memory fixpoint (scry#70)"
-    status: proposed
+    status: accepted
     description: >
-      Make FEAT-034's verified `bounded_memory` premise PAY OFF. Today scry
-      surfaces and cross-checks `verified_premises.bounded_memory` (no
-      `memory.grow` anywhere ⇒ fixed linear memory) but does not consume it: the
-      region/interval memory pass still treats `memory.grow` conservatively
-      (v0.3 region scope — a grow havocs memory-derived state). When
-      bounded_memory holds — proven by scry's OWN check (verify-not-trust;
-      never meld's premise alone) — that fallback is unnecessary, so region
-      offsets and memory-load invariants can stay tight instead of widening.
-      Additive precision; no API/contract change. SOUND only because scry
-      verifies the absence of `memory.grow` itself.
+      Make FEAT-034's verified `bounded_memory` premise PAY OFF. INVESTIGATION
+      REFRAME (v2.4.0): the concrete win is the `memory.size` / `memory.grow`
+      ops, which previously fell to the unsupported-op fallback that scrubs the
+      WHOLE function to ⊤ (every local degraded). FEAT-038 models them directly:
+        * `memory.size` returns the current size in PAGES; memory never shrinks,
+          so size ∈ [initial, max]. When scry's OWN check confirms NO
+          `memory.grow` anywhere (bounded_memory — verify-not-trust, never
+          meld's premise alone), it is the EXACT constant `initial`.
+        * `memory.grow(delta)` pushes the previous size or -1 → result ∈
+          [-1, max]; it mutates linear memory, NOT locals, so it no longer
+          degrades the function.
+      Net effect: any function touching `memory.size`/`memory.grow` keeps its
+      interval/region/bit invariants instead of collapsing to ⊤, and a fixed-
+      memory module gets `memory.size` as a usable constant (bounds-check
+      elision). Additive precision; no API/contract change; sound by scry's own
+      verification.
     tags: [capability, precision, analysis, premise-consumption, v2.x]
     fields:
       phase: phase-2
       acceptance-criteria:
-        - "Given a module with NO `memory.grow` (so scry's verified_premises.bounded_memory is true), When scry analyzes a memory-derived value that the conservative grow-havoc would have widened to ⊤, Then the region/interval invariant is retained (tighter) — and for a module that DOES contain `memory.grow`, the conservative havoc still applies (no under-approximation)."
+        - "Given a module with NO `memory.grow` (verified_premises.bounded_memory true) that reads `memory.size`, When scry analyzes it, Then `memory.size` evaluates to the exact constant initial page count and the surrounding locals are NOT degraded to ⊤ (which the pre-FEAT-038 fallback did)."
+        - "Given a module containing `memory.grow`, When scry analyzes it, Then the grow result is the sound bounded interval [-1, max] (never under-approximated) and the function's other locals survive (no whole-function ⊤ scrub) — while bounded_memory remains false."
     links:
       - type: traces-to
         target: REQ-001

@@ -31,7 +31,7 @@ path = "src/lib.rs"
 # Path deps carry `version` so `cargo publish` rewrites them to the crates.io
 # coordinate (crates.io rejects path-only deps). The version equals the
 # workspace version and must be bumped in lockstep with it.
-scry-sai-interval = { path = "../scry-interval", version = "2.3.0" }
+scry-sai-interval = { path = "../scry-interval", version = "2.4.0" }
 
 # Step 2 (DD-012): the analyze body + helpers moved here. wasmparser parses
 # the input Wasm Core Model module; sha2 digests the module bytes for
@@ -43,20 +43,20 @@ sha2 = { workspace = true }
 
 # Security-label (taint) lattice for the noninterference analysis (FEAT-009)
 # and the pure meld<->scry provenance boundary crate (FEAT-002 / DD-002).
-scry-sai-taint = { path = "../scry-taint", version = "2.3.0" }
-scry-sai-provenance = { path = "../scry-provenance", version = "2.3.0" }
+scry-sai-taint = { path = "../scry-taint", version = "2.4.0" }
+scry-sai-provenance = { path = "../scry-provenance", version = "2.4.0" }
 
 # Octagon relational domain (FEAT-016 slice-2b-ii): carried alongside the
 # intervals through the structured-CFG fixpoint so a loop counter bounded by a
 # VARIABLE relation (`i < n`) stays bounded where the interval domain alone
 # widens it to ⊤. Same pure `#![no_std]` dual-compile crate as scry-interval.
-scry-sai-octagon = { path = "../scry-octagon", version = "2.3.0" }
+scry-sai-octagon = { path = "../scry-octagon", version = "2.4.0" }
 
 # Known-bits × interval-guarded congruence reduced product (FEAT-037 / DD-017):
 # an additive bit/alignment/stride companion computed in a straight-line-sound
 # pass, surfaced library-only on `AnalysisResult.bit_facts`. Same pure
 # `#![no_std]` dual-compile crate as the other domains.
-scry-sai-bits = { path = "../scry-bits", version = "2.3.0" }
+scry-sai-bits = { path = "../scry-bits", version = "2.4.0" }
 
 [dev-dependencies]
 # Test-only (the crate is otherwise dep-light + no_std): assemble the .wat

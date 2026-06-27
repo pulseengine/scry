@@ -484,7 +484,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "2.3.0";
+const SCRY_VERSION: &str = "2.4.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -665,6 +665,14 @@ struct ModuleCtx<'a> {
     func_table: &'a FuncTable,
     /// Per-region metadata for the v0.3 memory ops.
     default_region: &'a RegionMeta,
+    /// FEAT-038: scry verified that no `memory.grow` occurs anywhere, so the
+    /// linear memory is fixed at `memory_initial_pages` and `memory.size`
+    /// returns that exact constant. When false, `memory.size` is bounded by
+    /// `[memory_initial_pages, memory_max_pages]` (or unbounded above).
+    bounded_memory: bool,
+    /// FEAT-038: first memory's declared initial / maximum page counts.
+    memory_initial_pages: u64,
+    memory_max_pages: Option<u64>,
     /// Collected defined-function bodies (FEAT-007), indexed by
     /// defined-function index (absolute index minus
     /// `import_func_count`).
@@ -906,6 +914,12 @@ pub fn analyze(
     // until we see `memory.grow` (which currently still falls
     // back to UnsoundnessFallback per the v0.3 scope).
     let mut memory_min_bytes: u64 = 0;
+    // FEAT-038: the first memory's declared page limits, for `memory.size` /
+    // `memory.grow` modelling. `memory_initial_pages` is the page count
+    // `memory.size` returns when memory is fixed (bounded_memory); the maximum
+    // (when declared) caps the size interval otherwise.
+    let mut memory_initial_pages: u64 = 0;
+    let mut memory_max_pages: Option<u64> = None;
 
     // ── FEAT-021 shadow-stack state ──────────────────────────────
     // Indices of mutable i32 globals — the candidates for the C-style
@@ -1053,6 +1067,8 @@ pub fn analyze(
                         .map_err(|e| AnalyzeError::InvalidModule(format!("memory section: {e}")))?;
                     if first {
                         memory_min_bytes = mem.initial.saturating_mul(WASM_PAGE_SIZE);
+                        memory_initial_pages = mem.initial;
+                        memory_max_pages = mem.maximum;
                         first = false;
                     }
                 }
@@ -1387,6 +1403,19 @@ pub fn analyze(
     //       recursion-frontier result).
     // ───────────────────────────────────────────────────────────
     let static_callees = build_static_call_graph(&defined_funcs, &func_table, import_func_count);
+
+    // FEAT-038: scry's OWN bounded-memory determination — no `memory.grow` in
+    // any defined function ⇒ linear memory is fixed at its declared initial
+    // size (verify-not-trust; computed here, before the fixpoint, so the
+    // `memory.size` transfer can return the exact page count). Reused for
+    // `verified_premises` below.
+    let saw_memory_grow = defined_funcs.iter().any(|f| {
+        f.ops
+            .iter()
+            .any(|op| matches!(op, Operator::MemoryGrow { .. }))
+    });
+    let bounded_memory = !saw_memory_grow;
+
     let sccs = tarjan_sccs(&static_callees);
     let recursive_flags = recursive_flags_from_sccs(&sccs, &static_callees, defined_funcs.len());
 
@@ -1416,6 +1445,9 @@ pub fn analyze(
                 import_func_count,
                 func_table: &func_table,
                 default_region: &default_region_meta,
+                bounded_memory,
+                memory_initial_pages,
+                memory_max_pages,
                 defined_funcs: &defined_funcs,
                 summaries: &summaries,
             };
@@ -1458,6 +1490,9 @@ pub fn analyze(
         import_func_count,
         func_table: &func_table,
         default_region: &default_region_meta,
+        bounded_memory,
+        memory_initial_pages,
+        memory_max_pages,
         defined_funcs: &defined_funcs,
         summaries: &summaries,
     };
@@ -1704,13 +1739,11 @@ pub fn analyze(
     // scan — `memory.grow` anywhere ⇒ memory is not provably fixed; any
     // functional import ⇒ scry cannot prove a closed world at the core level.
     // These are sound because scry derived them, independent of meld's claim.
-    let saw_memory_grow = defined_funcs.iter().any(|f| {
-        f.ops
-            .iter()
-            .any(|op| matches!(op, Operator::MemoryGrow { .. }))
-    });
+    // `bounded_memory` (= `!saw_memory_grow`) is computed once before the
+    // fixpoint (FEAT-038, so `memory.size` can use it) and reused here.
+    let saw_memory_grow = !bounded_memory;
     let verified_premises = FusionPremises {
-        bounded_memory: !saw_memory_grow,
+        bounded_memory,
         closed_world: import_func_count == 0,
     };
     // Cross-check meld's asserted premise against scry's observation: a v3
@@ -3674,14 +3707,39 @@ fn interpret_op(
                 *table_index,
             );
         }
+        Operator::MemorySize { .. } => {
+            // FEAT-038: `memory.size` returns the current size in PAGES. Memory
+            // never shrinks, so size ∈ [initial, max]. When scry verified no
+            // `memory.grow` anywhere (bounded_memory), it is the exact constant
+            // `initial`. Modelled WITHOUT degrading the function (the prior
+            // `other` fallback scrubbed every local to ⊤).
+            let lo = module_ctx.memory_initial_pages as i64;
+            let hi = if module_ctx.bounded_memory {
+                lo
+            } else {
+                // memory32 caps at 65536 pages (4 GiB) when no maximum is given.
+                module_ctx.memory_max_pages.unwrap_or(65536) as i64
+            };
+            ctx.operand_stack
+                .push(AbstractValue::I32Interval(Interval { lo, hi }));
+        }
+        Operator::MemoryGrow { .. } => {
+            // FEAT-038: `memory.grow(delta)` pops the requested page delta and
+            // pushes the PREVIOUS size on success or -1 on failure — so the
+            // result is in `[-1, max]`. Sound, and (unlike the prior fallback)
+            // does not degrade locals: a grow mutates linear memory, not locals.
+            let _ = ctx.operand_stack.pop();
+            let hi = module_ctx.memory_max_pages.unwrap_or(65536) as i64;
+            ctx.operand_stack
+                .push(AbstractValue::I32Interval(Interval { lo: -1, hi }));
+        }
         other => {
             // Anything outside the supported set: emit a fallback
             // diagnostic, scrub state to top to preserve soundness
             // (REQ-001), and continue. Control flow (`If` / `Loop` /
-            // `Br*`) and `memory.grow` / `memory.size` still land
-            // here; FEAT-005 lifted the canonical memory ops,
-            // FEAT-006 lifted `call` / `call_indirect`, and FEAT-007
-            // will add interprocedural value propagation.
+            // `Br*`) still land here; FEAT-005 lifted the canonical
+            // memory ops, FEAT-006 lifted `call` / `call_indirect`,
+            // FEAT-038 lifted `memory.size` / `memory.grow`.
             if emit_diagnostics {
                 diagnostics.push(Diagnostic {
                     severity: DiagnosticSeverity::UnsoundnessFallback,
@@ -5522,6 +5580,55 @@ mod tests {
             .expect("bit fact for local 0");
         assert_eq!(f.width, 64);
         assert_eq!(f.known_ones, 0xFF_FFFF_FFFF, "low 40 bits known-1");
+    }
+
+    /// FEAT-038: under verified `bounded_memory` (no `memory.grow` anywhere),
+    /// `memory.size` is the exact constant initial page count — and modelling it
+    /// no longer degrades the function (the pre-FEAT-038 fallback scrubbed every
+    /// local to ⊤).
+    #[test]
+    fn feat038_memory_size_constant_when_bounded() {
+        // (memory 3), no grow ⇒ memory.size == 3 pages, stored into local 0.
+        let r = analyze_default(
+            "(module (memory 3) (func (result i32) (local i32) \
+               memory.size local.set 0 local.get 0))",
+        );
+        assert!(r.verified_premises.bounded_memory, "no grow ⇒ bounded");
+        let found = r.invariants.points.iter().any(|p| {
+            p.locals.iter().any(|l| {
+                l.local_index == 0
+                    && matches!(&l.value, AbstractValue::I32Interval(iv) if iv.lo == 3 && iv.hi == 3)
+            })
+        });
+        assert!(
+            found,
+            "memory.size under bounded_memory must make local 0 = [3,3] (not degraded); points={:?}",
+            r.invariants.points
+        );
+    }
+
+    /// FEAT-038: `memory.grow` is modelled (result ∈ [-1, max]) WITHOUT degrading
+    /// the function — its bounded result lands in a local instead of ⊤.
+    #[test]
+    fn feat038_memory_grow_does_not_degrade() {
+        // (memory 2 10): grow result ∈ [-1, 10], stored into local 0 (no drop —
+        // `drop` is itself unsupported and would degrade).
+        let r = analyze_default(
+            "(module (memory 2 10) (func (result i32) (local i32) \
+               i32.const 1 memory.grow local.set 0 local.get 0))",
+        );
+        assert!(!r.verified_premises.bounded_memory, "grow ⇒ not bounded");
+        let found = r.invariants.points.iter().any(|p| {
+            p.locals.iter().any(|l| {
+                l.local_index == 0
+                    && matches!(&l.value, AbstractValue::I32Interval(iv) if iv.lo == -1 && iv.hi == 10)
+            })
+        });
+        assert!(
+            found,
+            "memory.grow result must be the bounded [-1,10] (modelled, not degraded); points={:?}",
+            r.invariants.points
+        );
     }
 
     /// FEAT-034: scry determines its OWN fusion premises (verify-not-trust):
