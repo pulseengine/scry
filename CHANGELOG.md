@@ -20,10 +20,15 @@ premise: a function that touches memory ops no longer collapses to ⊤.
   to ⊤** (every local degraded). Any function reading memory size or growing
   memory now keeps its interval / region / known-bits invariants.
 - `memory.size` returns the current size in **pages**; memory never shrinks, so
-  it is `[initial, max]` — and the **exact constant `initial`** when scry's own
-  check confirms no `memory.grow` anywhere (`verified_premises.bounded_memory`,
-  verify-not-trust). A fixed-memory module thus gets `memory.size` as a usable
-  constant for bounds-check elision.
+  it is `[initial, max]` — and the **exact constant `initial`** only when the
+  memory is provably fixed: **module-private** (not imported, exported, or
+  shared) AND no `memory.grow` in any defined function (scry's own check,
+  verify-not-trust). Then only this module's defined code could grow it, which
+  the grow-free check rules out — so a fixed-memory module gets `memory.size` as
+  a usable constant for bounds-check elision. An **imported** memory uses its
+  declared minimum as the sound lower bound (never `[0,0]`); an imported /
+  exported / shared memory is never collapsed to a constant (the host or another
+  thread may grow it). [clean-room soundness findings, fixed before merge]
 - `memory.grow(delta)` evaluates to the sound bounded interval `[-1, max]` (the
   previous size on success, `-1` on failure); it mutates linear memory, not
   locals, so it no longer degrades the function.

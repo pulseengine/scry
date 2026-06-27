@@ -1901,8 +1901,9 @@ artifacts:
     fields:
       phase: phase-2
       acceptance-criteria:
-        - "Given a module with NO `memory.grow` (verified_premises.bounded_memory true) that reads `memory.size`, When scry analyzes it, Then `memory.size` evaluates to the exact constant initial page count and the surrounding locals are NOT degraded to ⊤ (which the pre-FEAT-038 fallback did)."
+        - "Given a module with a MODULE-PRIVATE memory (not imported/exported/shared) and NO `memory.grow` in any defined function, When scry reads `memory.size`, Then it evaluates to the exact constant initial page count and the surrounding locals are NOT degraded to ⊤ (which the pre-FEAT-038 fallback did)."
         - "Given a module containing `memory.grow`, When scry analyzes it, Then the grow result is the sound bounded interval [-1, max] (never under-approximated) and the function's other locals survive (no whole-function ⊤ scrub) — while bounded_memory remains false."
+        - "Given a module whose memory is IMPORTED, EXPORTED, or SHARED (host/other thread may grow it), When scry reads `memory.size`, Then it is the sound interval [initial, max] — NEVER a constant, and an imported memory uses its declared minimum as the lower bound (never [0,0]). (Clean-room soundness findings.)"
     links:
       - type: traces-to
         target: REQ-001
