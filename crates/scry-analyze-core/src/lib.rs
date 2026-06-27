@@ -126,6 +126,38 @@ pub struct ProgramPoint {
     /// surfaces it for non-Rust consumers). Sound over the same interval
     /// domain as `locals`.
     pub operand_stack: Vec<AbstractValue>,
+    /// FEAT-041 (REQ-016): the GENUINELY-relational octagon constraints holding
+    /// between distinct locals at this pc (`x_a - x_b ≤ c` / `x_a + x_b ≤ c`),
+    /// filtered to those NOT implied by the unary interval bounds. This makes
+    /// the octagon's relational precision OBSERVABLE — the v1.9 finding was that
+    /// strong closure tightened these but the output only ever projected the
+    /// octagon to unary intervals, so the relational facts were invisible.
+    /// Library-only (the WIT mirror carries only `locals`); sound (each is a
+    /// constraint the octagon maintains).
+    pub relational: Vec<RelationalConstraint>,
+}
+
+/// FEAT-041: a surfaced relational octagon constraint between two distinct
+/// locals at a program point. `a != b`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RelationalConstraint {
+    /// Local index `a`.
+    pub a: u32,
+    /// Local index `b`.
+    pub b: u32,
+    /// Constraint form (`Diff`: `x_a - x_b ≤ bound`; `Sum`: `x_a + x_b ≤ bound`).
+    pub kind: RelKind,
+    /// The upper bound.
+    pub bound: i64,
+}
+
+/// FEAT-041: the form of a [`RelationalConstraint`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelKind {
+    /// `x_a - x_b ≤ bound`.
+    Diff,
+    /// `x_a + x_b ≤ bound`.
+    Sum,
 }
 
 /// Mirror of WIT `invariant-bundle`. The full per-module invariant bundle.
@@ -869,6 +901,23 @@ fn as_i32_interval(v: &AbstractValue) -> Option<Interval> {
 fn interval_is_top(iv: &Interval) -> bool {
     let t = domain::top();
     iv.lo == t.lo && iv.hi == t.hi
+}
+
+/// FEAT-041: extract the surfaced relational constraints from an octagon, as
+/// the core's `RelationalConstraint` (converting `scry_octagon::Relation`).
+fn snapshot_relational(octagon: &Octagon) -> Vec<RelationalConstraint> {
+    scry_octagon::relations(octagon)
+        .into_iter()
+        .map(|r| RelationalConstraint {
+            a: r.a,
+            b: r.b,
+            kind: match r.kind {
+                scry_octagon::RelKind::Diff => RelKind::Diff,
+                scry_octagon::RelKind::Sum => RelKind::Sum,
+            },
+            bound: r.bound,
+        })
+        .collect()
 }
 
 /// Snapshot the locals as a list of `LocalInvariant` records.
@@ -2733,6 +2782,7 @@ impl Interp<'_, '_> {
                         pc: pc as u32,
                         locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
                         operand_stack: snapshot_stack(&ctx.operand_stack),
+                        relational: snapshot_relational(&ctx.octagon),
                     });
                 }
                 pc = next;
@@ -2753,6 +2803,7 @@ impl Interp<'_, '_> {
                         pc: pc as u32,
                         locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
                         operand_stack: snapshot_stack(&ctx.operand_stack),
+                        relational: snapshot_relational(&ctx.octagon),
                     });
                 }
                 pc = next;
@@ -2816,6 +2867,7 @@ impl Interp<'_, '_> {
                     pc: pc as u32,
                     locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
                     operand_stack: snapshot_stack(&ctx.operand_stack),
+                    relational: snapshot_relational(&ctx.octagon),
                 });
             }
             if stop {
@@ -3207,6 +3259,7 @@ impl Interp<'_, '_> {
                 // precise-looking-but-unsound one. Locals stay meaningful: they
                 // were soundly widened to ⊤ above.
                 operand_stack: Vec::new(),
+                relational: snapshot_relational(&ctx.octagon),
             });
         }
     }
@@ -5288,6 +5341,7 @@ mod tests {
                     value: av.clone(),
                 }],
                 operand_stack: alloc::vec![av.clone()],
+                relational: alloc::vec![],
             }],
         };
         let res = AnalysisResult {
@@ -5562,6 +5616,44 @@ mod tests {
             taint_policy: None,
         };
         analyze(bytes, config).expect("analyze must succeed")
+    }
+
+    /// FEAT-041: the octagon's relational constraint between i and n in
+    /// fixture-11 (the variable-bounded loop) is now SURFACED on the program
+    /// points — the v1.9 non-observability finding closed. A relation between
+    /// locals 0 (i) and 1 (n) must appear, and every surfaced constraint must be
+    /// sound (consistent with the unary intervals at that point).
+    #[test]
+    fn feat041_relational_invariants_surfaced() {
+        let r = analyze_fixture("fixture-11-var-bound.wat");
+        let has_rel = r.invariants.points.iter().any(|p| {
+            p.relational
+                .iter()
+                .any(|c| (c.a == 0 && c.b == 1) || (c.a == 1 && c.b == 0))
+        });
+        assert!(
+            has_rel,
+            "fixture-11 must surface a relational constraint between i (0) and n (1); \
+             points' relational: {:?}",
+            r.invariants
+                .points
+                .iter()
+                .map(|p| (p.pc, &p.relational))
+                .collect::<alloc::vec::Vec<_>>()
+        );
+    }
+
+    /// FEAT-041: a purely non-relational function surfaces NO relational
+    /// constraints (no noise).
+    #[test]
+    fn feat041_no_relations_when_non_relational() {
+        let r = analyze_default(
+            "(module (func (param i32) (result i32) local.get 0 i32.const 1 i32.add))",
+        );
+        assert!(
+            r.invariants.points.iter().all(|p| p.relational.is_empty()),
+            "a non-relational function must surface no relational constraints"
+        );
     }
 
     /// FEAT-021 slice-1: a 3-deep direct call chain with constant frames sums
