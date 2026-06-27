@@ -675,6 +675,10 @@ struct ModuleCtx<'a> {
     /// FEAT-038: first memory's declared initial / maximum page counts.
     memory_initial_pages: u64,
     memory_max_pages: Option<u64>,
+    /// FEAT-038: total memory count (precise `memory.size`/`grow` only when 1)
+    /// and whether memory index 0 is 64-bit (2^48-page ceiling + i64 result).
+    memory_count: u64,
+    memory_is_64: bool,
     /// Collected defined-function bodies (FEAT-007), indexed by
     /// defined-function index (absolute index minus
     /// `import_func_count`).
@@ -930,6 +934,13 @@ pub fn analyze(
     let mut memory_is_imported: bool = false;
     let mut memory_is_exported: bool = false;
     let mut memory_is_shared: bool = false;
+    // FEAT-038 soundness (clean-room): total memory count (imports + defined)
+    // and whether memory index 0 is 64-bit. `memory.size`/`memory.grow` are
+    // modelled precisely ONLY for the single-memory, memidx-0 case; >1 memory
+    // or a non-zero memidx ⇒ ⊤ (only index 0 is captured). A 64-bit memory
+    // grows to 2^48 pages, so its ceiling is 2^48, not the memory32 65536.
+    let mut memory_count: u64 = 0;
+    let mut memory_is_64: bool = false;
 
     // ── FEAT-021 shadow-stack state ──────────────────────────────
     // Indices of mutable i32 globals — the candidates for the C-style
@@ -1043,10 +1054,16 @@ pub fn analyze(
                     // sound lower bound `memory.size` must use) and mark it
                     // host-controlled / possibly-shared.
                     if let wasmparser::TypeRef::Memory(memty) = imp.ty {
-                        memory_is_imported = true;
-                        memory_initial_pages = memty.initial;
-                        memory_max_pages = memty.maximum;
-                        memory_is_shared |= memty.shared;
+                        // Imported memories occupy the low memory-index space, so
+                        // the first one is memory index 0. Capture index 0 only.
+                        if memory_count == 0 {
+                            memory_is_imported = true;
+                            memory_initial_pages = memty.initial;
+                            memory_max_pages = memty.maximum;
+                            memory_is_shared |= memty.shared;
+                            memory_is_64 = memty.memory64;
+                        }
+                        memory_count += 1;
                     }
                 }
             }
@@ -1088,17 +1105,25 @@ pub fn analyze(
                 // "default" region's size. Multi-memory
                 // (post-MVP) is not yet supported — we use
                 // the first entry only.
-                let mut first = true;
+                let mut first_defined = true;
                 for entry in reader {
                     let mem = entry
                         .map_err(|e| AnalyzeError::InvalidModule(format!("memory section: {e}")))?;
-                    if first {
+                    // The first DEFINED memory anchors the v0.3 region floor.
+                    if first_defined {
                         memory_min_bytes = mem.initial.saturating_mul(WASM_PAGE_SIZE);
+                        first_defined = false;
+                    }
+                    // FEAT-038: capture memory INDEX 0's limits. Imports precede
+                    // defined memories in the index space, so a defined memory is
+                    // index 0 only when no memory was imported (memory_count == 0).
+                    if memory_count == 0 {
                         memory_initial_pages = mem.initial;
                         memory_max_pages = mem.maximum;
                         memory_is_shared |= mem.shared;
-                        first = false;
+                        memory_is_64 = mem.memory64;
                     }
+                    memory_count += 1;
                 }
             }
             Payload::GlobalSection(reader) => {
@@ -1483,6 +1508,8 @@ pub fn analyze(
                 memory_size_constant,
                 memory_initial_pages,
                 memory_max_pages,
+                memory_count,
+                memory_is_64,
                 defined_funcs: &defined_funcs,
                 summaries: &summaries,
             };
@@ -1528,6 +1555,8 @@ pub fn analyze(
         memory_size_constant,
         memory_initial_pages,
         memory_max_pages,
+        memory_count,
+        memory_is_64,
         defined_funcs: &defined_funcs,
         summaries: &summaries,
     };
@@ -1823,6 +1852,38 @@ pub fn analyze(
 }
 
 // ───────────────────────── FEAT-037 (DD-017) ─────────────────────────
+
+/// FEAT-038: the page ceiling for memory index 0 — the declared maximum if any,
+/// else the architectural cap (2^48 for memory64, 65536 for memory32).
+#[inline]
+fn mem_page_ceiling(m: &ModuleCtx<'_>) -> i64 {
+    let arch_cap: u64 = if m.memory_is_64 { 1u64 << 48 } else { 65536 };
+    m.memory_max_pages.unwrap_or(arch_cap) as i64
+}
+
+/// FEAT-038: the abstract `memory.size` result for `memidx`. Precise only for
+/// memory index 0 of a single-memory module (the only memory scry captures);
+/// any other memidx or a multi-memory module is ⊤ (sound). The exact constant
+/// `initial` applies only to a provably-fixed module-private memory; otherwise
+/// the sound interval `[initial, ceiling]`. 64-bit memory returns an i64.
+#[inline]
+fn mem_size_value(m: &ModuleCtx<'_>, memidx: u32) -> AbstractValue {
+    if memidx != 0 || m.memory_count != 1 {
+        return AbstractValue::Unknown;
+    }
+    let lo = m.memory_initial_pages as i64;
+    let hi = if m.memory_size_constant {
+        lo
+    } else {
+        mem_page_ceiling(m)
+    };
+    let iv = Interval { lo, hi };
+    if m.memory_is_64 {
+        AbstractValue::I64Interval(iv)
+    } else {
+        AbstractValue::I32Interval(iv)
+    }
+}
 
 /// Integer bit width of a Wasm value type, or `None` for types the bits domain
 /// does not model (floats, v128, references).
@@ -3742,31 +3803,34 @@ fn interpret_op(
                 *table_index,
             );
         }
-        Operator::MemorySize { .. } => {
+        Operator::MemorySize { mem, .. } => {
             // FEAT-038: `memory.size` returns the current size in PAGES. Memory
-            // never shrinks, so size ∈ [initial, max]. When scry verified no
-            // `memory.grow` anywhere (bounded_memory), it is the exact constant
-            // `initial`. Modelled WITHOUT degrading the function (the prior
-            // `other` fallback scrubbed every local to ⊤).
-            let lo = module_ctx.memory_initial_pages as i64;
-            let hi = if module_ctx.memory_size_constant {
-                lo
-            } else {
-                // memory32 caps at 65536 pages (4 GiB) when no maximum is given.
-                module_ctx.memory_max_pages.unwrap_or(65536) as i64
-            };
-            ctx.operand_stack
-                .push(AbstractValue::I32Interval(Interval { lo, hi }));
+            // never shrinks, so size ∈ [initial, max]; the exact constant
+            // `initial` only for a provably-fixed module-private memory. We
+            // model precisely ONLY memory index 0 of a single-memory module
+            // (scry captures only index 0); any other memidx, or a multi-memory
+            // module, is ⊤ (sound). 64-bit memory caps at 2^48 pages and
+            // returns an i64. Modelled WITHOUT degrading the function.
+            let value = mem_size_value(module_ctx, *mem);
+            ctx.operand_stack.push(value);
         }
-        Operator::MemoryGrow { .. } => {
+        Operator::MemoryGrow { mem, .. } => {
             // FEAT-038: `memory.grow(delta)` pops the requested page delta and
             // pushes the PREVIOUS size on success or -1 on failure — so the
-            // result is in `[-1, max]`. Sound, and (unlike the prior fallback)
-            // does not degrade locals: a grow mutates linear memory, not locals.
+            // result is in `[-1, max]`. Does NOT degrade locals (a grow mutates
+            // linear memory, not locals). ⊤ for an unmodelled memidx/memory.
             let _ = ctx.operand_stack.pop();
-            let hi = module_ctx.memory_max_pages.unwrap_or(65536) as i64;
-            ctx.operand_stack
-                .push(AbstractValue::I32Interval(Interval { lo: -1, hi }));
+            let value = if *mem == 0 && module_ctx.memory_count == 1 {
+                let hi = mem_page_ceiling(module_ctx);
+                if module_ctx.memory_is_64 {
+                    AbstractValue::I64Interval(Interval { lo: -1, hi })
+                } else {
+                    AbstractValue::I32Interval(Interval { lo: -1, hi })
+                }
+            } else {
+                AbstractValue::Unknown
+            };
+            ctx.operand_stack.push(value);
         }
         other => {
             // Anything outside the supported set: emit a fallback
@@ -5735,6 +5799,48 @@ mod tests {
                 "exported memory is host-growable ⇒ not the constant 1: {iv:?}"
             );
         }
+    }
+
+    /// FEAT-038 SOUNDNESS REGRESSION (clean-room #1): a 64-bit memory grows to
+    /// 2^48 pages, not the memory32 cap of 65536. An exported memory64 (host-
+    /// growable, so not a constant) must report `memory.size ∈ [1, 2^48]` as an
+    /// i64 — the prior `unwrap_or(65536)` under-approximated.
+    #[test]
+    fn feat038_memory64_ceiling() {
+        let v = memory_size_value(
+            "(module (memory i64 1) (export \"m\" (memory 0)) \
+               (func (result i64) memory.size))",
+        );
+        match v {
+            AbstractValue::I64Interval(iv) => {
+                assert_eq!(iv.lo, 1);
+                assert_eq!(
+                    iv.hi,
+                    1i64 << 48,
+                    "memory64 ceiling is 2^48 pages, not 65536"
+                );
+            }
+            other => {
+                panic!("memory64 memory.size must be an i64 interval [1, 2^48], got {other:?}")
+            }
+        }
+    }
+
+    /// FEAT-038 SOUNDNESS REGRESSION (clean-room #2/#3): scry captures only
+    /// memory index 0 and does not model multi-memory, so `memory.size` in a
+    /// module with >1 memory is ⊤ (never memory 0's bounds reused for another
+    /// memidx, and never an imported memory 0's min clobbered by a defined one).
+    #[test]
+    fn feat038_multimemory_is_top() {
+        // memidx 1 read against a 2-memory module ⇒ ⊤ (Unknown), not [1,..].
+        let v = memory_size_value(
+            "(module (memory 1 5) (memory 3 9) (func (result i32) memory.size 1))",
+        );
+        assert!(
+            matches!(v, AbstractValue::Unknown),
+            "multi-memory memory.size must be ⊤ (only index 0 of a single-memory \
+             module is modelled), got {v:?}"
+        );
     }
 
     /// FEAT-034: scry determines its OWN fusion premises (verify-not-trust):

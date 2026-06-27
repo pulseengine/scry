@@ -28,7 +28,11 @@ premise: a function that touches memory ops no longer collapses to ⊤.
   a usable constant for bounds-check elision. An **imported** memory uses its
   declared minimum as the sound lower bound (never `[0,0]`); an imported /
   exported / shared memory is never collapsed to a constant (the host or another
-  thread may grow it). [clean-room soundness findings, fixed before merge]
+  thread may grow it). A **64-bit memory** uses the 2⁴⁸-page ceiling (not the
+  memory32 65536) and returns an i64; `memory.size`/`memory.grow` are modelled
+  precisely only for the single-memory, memidx-0 case — a multi-memory module
+  or a non-zero memidx is ⊤. [four clean-room soundness findings, fixed before
+  merge]
 - `memory.grow(delta)` evaluates to the sound bounded interval `[-1, max]` (the
   previous size on success, `-1` on failure); it mutates linear memory, not
   locals, so it no longer degrades the function.
