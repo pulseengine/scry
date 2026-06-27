@@ -1876,6 +1876,68 @@ artifacts:
       - type: traces-to
         target: FEAT-036
 
+  - id: FEAT-038
+    type: feature
+    title: "v2.x — Consume verified bounded_memory to tighten the region/memory fixpoint (scry#70)"
+    status: proposed
+    description: >
+      Make FEAT-034's verified `bounded_memory` premise PAY OFF. Today scry
+      surfaces and cross-checks `verified_premises.bounded_memory` (no
+      `memory.grow` anywhere ⇒ fixed linear memory) but does not consume it: the
+      region/interval memory pass still treats `memory.grow` conservatively
+      (v0.3 region scope — a grow havocs memory-derived state). When
+      bounded_memory holds — proven by scry's OWN check (verify-not-trust;
+      never meld's premise alone) — that fallback is unnecessary, so region
+      offsets and memory-load invariants can stay tight instead of widening.
+      Additive precision; no API/contract change. SOUND only because scry
+      verifies the absence of `memory.grow` itself.
+    tags: [capability, precision, analysis, premise-consumption, v2.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a module with NO `memory.grow` (so scry's verified_premises.bounded_memory is true), When scry analyzes a memory-derived value that the conservative grow-havoc would have widened to ⊤, Then the region/interval invariant is retained (tighter) — and for a module that DOES contain `memory.grow`, the conservative havoc still applies (no under-approximation)."
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: G-005
+      - type: traces-to
+        target: FEAT-034
+
+  - id: FEAT-039
+    type: feature
+    title: "v2.x — Consume verified closed_world to tighten reachable_from_exports (scry#71)"
+    status: proposed
+    description: >
+      Make FEAT-034's verified `closed_world` premise PAY OFF for the
+      reachability footprint (synth#383 / VCR-MEM-001). `reachable_from_exports`
+      (FEAT-022) is a sound superset seeded by exports + start AND
+      over-approximated import/host entry points. When `closed_world` holds (no
+      functional imports — scry's own check) there is no external/host caller,
+      so the import-driven over-approximation can be dropped, shrinking the
+      reachable set toward the true one (a tighter shadow-stack / linear-memory
+      reservation). The `call_indirect` whole-table over-approximation is
+      RETAINED (closed_world does not bound indirect targets — that is the
+      FEAT-036 funcref-escape story). Stays a sound superset (SCRY-001).
+    tags: [capability, precision, analysis, premise-consumption, v2.x]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a module with NO functional imports (verified_premises.closed_world true), When scry computes reachable_from_exports, Then import/host-entry roots are excluded so the reported set is no larger than exports+start reachability — while remaining a sound superset (never drops a concretely-reachable function), and a module WITH a functional import keeps the conservative seed."
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: REQ-011
+      - type: traces-to
+        target: G-005
+      - type: traces-to
+        target: FEAT-034
+      - type: traces-to
+        target: FEAT-022
+      - type: traces-to
+        target: FEAT-036
+
   # ──────────────────────────────────────────────────────────────────────
   # Safety goal for the v2.0 qualification milestone.
   # ──────────────────────────────────────────────────────────────────────
