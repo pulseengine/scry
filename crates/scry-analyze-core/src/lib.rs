@@ -3410,13 +3410,21 @@ fn build_static_call_graph(
         let mut callees: Vec<usize> = Vec::new();
         for op in &func.ops {
             match op {
-                Operator::Call { function_index } if *function_index >= import_func_count => {
+                // Direct call AND direct TAIL call (`return_call`): both transfer
+                // to the target; a tail call does NOT tear down the caller's
+                // shadow frame first, so the callee's frame is live on top of the
+                // caller's — a regular call edge for the longest-path. (FEAT-043
+                // clean-room: omitting return_call here under-counted the stack
+                // AND missed tail-recursive cycles.)
+                Operator::Call { function_index } | Operator::ReturnCall { function_index }
+                    if *function_index >= import_func_count =>
+                {
                     let d = (*function_index - import_func_count) as usize;
                     if d < defined_funcs.len() && !callees.contains(&d) {
                         callees.push(d);
                     }
                 }
-                Operator::CallIndirect { .. } => {
+                Operator::CallIndirect { .. } | Operator::ReturnCallIndirect { .. } => {
                     for &t in &table_targets {
                         if !callees.contains(&t) {
                             callees.push(t);
@@ -3808,6 +3816,22 @@ fn compute_stack_usage(
         .iter()
         .map(|f| detect_frame(&f.ops, sp))
         .collect();
+    // FEAT-043 soundness: a function that dispatches an arbitrary funcref
+    // (`call_ref` / `return_call_ref`, function-references proposal) calls a
+    // target scry cannot enumerate — neither the resolved nor the whole-table
+    // graph covers it — so its stack contribution is UNKNOWN, not a false finite
+    // bound. (Distinct from `call_indirect`, whose targets are the table.)
+    let unresolved_funcref_call: Vec<bool> = defined_funcs
+        .iter()
+        .map(|f| {
+            f.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Operator::CallRef { .. } | Operator::ReturnCallRef { .. }
+                )
+            })
+        })
+        .collect();
     let mut max_stack: Vec<StackBound> = alloc::vec![StackBound::Bytes(0); n];
     for &f in reverse_topo {
         if f >= n {
@@ -3815,6 +3839,10 @@ fn compute_stack_usage(
         }
         if recursive_flags[f] {
             max_stack[f] = StackBound::Unbounded;
+            continue;
+        }
+        if unresolved_funcref_call[f] {
+            max_stack[f] = StackBound::Unknown;
             continue;
         }
         let mut callee = StackBound::Bytes(0);
@@ -5856,6 +5884,55 @@ mod tests {
             StackBound::Bytes(264),
             "a void call inside an if must still contribute its callee's frame \
              (8 + 256 = 264, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #2): a `return_call` (tail
+    /// call) was never matched by build_static_call_graph, so its callee was
+    /// dropped from the stack weighting (and from recursion/reachability). A
+    /// tail call keeps the caller's shadow frame live, so entry(8) → mid(16)
+    /// →return_call→ big(256) peaks at 280 — not 256.
+    #[test]
+    fn feat043_tail_call_counted_in_stack() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (func \
+                 global.get $sp i32.const 256 i32.sub global.set $sp \
+                 global.get $sp i32.const 256 i32.add global.set $sp) \
+               (func \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 return_call 0) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 8 i32.sub global.set $sp \
+                 call 1 \
+                 global.get $sp i32.const 8 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Bytes(280),
+            "tail call must contribute its callee's frame (8+16+256=280, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #2b): a self `return_call`
+    /// (tail recursion) must be flagged recursive ⇒ Unbounded, not a finite
+    /// bound (recursion detection rides static_callees, which now sees the
+    /// return_call self-edge).
+    #[test]
+    fn feat043_tail_recursion_is_unbounded() {
+        let r = analyze_default(
+            "(module (global $sp (mut i32) (i32.const 65536)) \
+               (func (export \"loop_tail\") \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 return_call 0))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unbounded,
+            "tail recursion must be Unbounded, got {:?}",
             r.stack_usage.max_stack_bytes
         );
     }
