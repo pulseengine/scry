@@ -1,0 +1,547 @@
+artifacts:
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Roadmap 3.0 — release plan distilled from the v2.5→v3.0 research sweep
+  # (artifacts/research-2.yaml: AC-012..024, CA-001..011, TE-011/012,
+  # MF-006/007) and the internal gap audit. Theme arc:
+  #   v2.6  "Make the analysis observable"  — cash in computed-but-hidden
+  #         facts (relational invariants, gaps); cheap precision; agent/
+  #         qualification readiness.
+  #   v2.7  "Prove safety"                  — runtime-error / trap detection,
+  #         the defining capability of the Astrée/Polyspace bar (MF-006).
+  #   v3.0  "Qualifiable + differentiated"  — float domain, mechanized
+  #         soundness vs the OFFICIAL Wasm semantics, Component-Model
+  #         handle-state (the moat), and the tool-qualification dossier.
+  # Release axis = the top-level `release:` field (rivet >= 0.21). Track with
+  # `rivet release status <ver>` / `rivet list --release <ver>`.
+  # ══════════════════════════════════════════════════════════════════════
+
+  # ── New requirements from the gap audit ───────────────────────────────
+
+  - id: REQ-014
+    type: requirement
+    title: "Soundly classify every Wasm trap site as proven-safe or potential-trap"
+    status: proposed
+    description: >
+      scry shall classify each operation that can trap at run time — integer
+      div/rem (div-by-zero, INT_MIN/-1 overflow), out-of-bounds linear-memory
+      load/store, `unreachable`, and (where modelled) arithmetic overflow and
+      stack exhaustion — as PROVEN-SAFE (the domains prove the trap cannot fire
+      on any run) or POTENTIAL-TRAP (it may), never silently dropping the site.
+      This is the defining capability of the sound-analyzer bar (MF-006) that
+      scry's interval/region/pentagon domains already compute the facts for but
+      do not surface. A new diagnostic category beyond Info/Warning/
+      UnsoundnessFallback. Soundness: a site is PROVEN-SAFE only when the
+      abstract value rules out the trap; otherwise POTENTIAL-TRAP (over-approx).
+    tags: [runtime-error, trap, soundness, qualification, v2.x]
+    fields:
+      priority: must
+      category: functional
+    links:
+      - type: traces-to
+        target: G-005
+      - type: traces-to
+        target: REQ-001
+
+      - type: addresses-finding
+        target: MF-006
+  - id: REQ-015
+    type: requirement
+    title: "Sound IEEE-754 floating-point abstract domain"
+    status: proposed
+    description: >
+      scry shall model f32/f64 values soundly (today float arithmetic scrubs to
+      top, so any float-bearing function is un-analyzed — a hard scope hole vs
+      the commercial bar). Approach: interval-with-rounding-error / relational
+      FP domain (Miné ESOP'04, AC-022) reusing the shipped octagon DBM, with
+      correct NaN/inf/rounding-mode handling. Sound over-approximation of the
+      IEEE-754 semantics; admit-free Rocq for the core transfers.
+    tags: [floating-point, numerical-domain, soundness, v3.x]
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: traces-to
+        target: G-005
+      - type: traces-to
+        target: REQ-001
+
+      - type: references-paper
+        target: AC-022
+  - id: REQ-016
+    type: requirement
+    title: "Surface relational invariants (octagon / linear) in the analysis output"
+    status: proposed
+    description: >
+      scry computes relational facts (octagon DBM; strong closure since v1.9)
+      but the output projects them to unary intervals, so the relational
+      precision is invisible to consumers (the v1.9 non-observability finding).
+      scry shall expose the relational constraints (difference/sum bounds, and
+      later linear equalities) in the AnalysisResult so downstream optimizers
+      (loom, synth) and assessors can use them — the Frama-C/Eva communicating-
+      domain model (CA-004). Library-only first (like param_ranges/bit_facts);
+      WIT surfacing is a separate consumer-value item (FEAT-054).
+    tags: [relational, octagon, output, precision, v2.x]
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: traces-to
+        target: REQ-004
+      - type: traces-to
+        target: G-005
+
+      - type: references-paper
+        target: AC-013
+  - id: REQ-017
+    type: requirement
+    title: "Machine-readable analysis-gap reporting for assessor + AI-agent consumption"
+    status: proposed
+    description: >
+      scry shall emit explicit, machine-readable records of every place the
+      analysis is conservative — a program point degraded to top, an unsupported
+      op, an empty-on-havoc operand stack, an UnsoundnessFallback — instead of
+      emitting top as SILENCE (today only non-top facts are recorded). It shall
+      provide an aggregated gap report (per function, per op-kind, with totals).
+      This is required both for the qualification dossier's scope/limitation
+      statement (G-005) and so an AI agent can reliably detect where scry gave
+      up — the research (TE-011) shows agents must consume the STRUCTURED
+      side-channel, not the rendered viz, for precise gap claims.
+    tags: [gap-report, ai-agent, qualification, observability, v2.x]
+    fields:
+      priority: must
+      category: functional
+    links:
+      - type: traces-to
+        target: G-005
+      - type: traces-to
+        target: REQ-013
+
+      - type: evaluates-tech
+        target: TE-011
+  # ══════════════════════════════════════════════════════════════════════
+  # RELEASE v2.6.0 — "Make the analysis observable"
+  # Cash in computed-but-hidden facts; cheap precision; agent/qual readiness.
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: FEAT-040
+    type: feature
+    title: "v2.6 — Machine-readable gap records + aggregated gap report"
+    status: proposed
+    release: v2.6.0
+    description: >
+      Stop emitting top as silence. Emit a positive Gap{function, pc, op, kind,
+      reason} record whenever a fact degrades to top, an op is unsupported, an
+      operand stack is havocked, or UnsoundnessFallback/degraded fires; roll
+      them up into an aggregated gap report (by function, by op-kind, totals).
+      scry already has the raw signals (UnsoundnessFallback diagnostic, the
+      `degraded` flag) but scattered and unaggregated. Highest-leverage cheap
+      win: unlocks both the qualification scope/limitation statement and
+      AI-agent gap detection (TE-011). Library-only field + a scry-viz gaps
+      panel (text/table beside the SVG, per TE-011).
+    tags: [gap-report, observability, ai-agent, qualification, quick-win]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a module with an unsupported op or a top-degraded point, When scry analyzes it, Then AnalysisResult carries an explicit Gap record (function, pc, op, kind) for that site and an aggregated count — no conservative site is silently omitted."
+    links:
+      - type: traces-to
+        target: REQ-017
+
+      - type: evaluates-tech
+        target: TE-011
+  - id: FEAT-041
+    type: feature
+    title: "v2.6 — Surface relational octagon invariants in AnalysisResult"
+    status: proposed
+    release: v2.6.0
+    description: >
+      Expose the octagon's difference/sum bounds (the relational constraints the
+      analyzer already maintains and strong-closes) on the output, instead of
+      only the unary interval projection. Cashes in the entire octagon arc
+      (v1.4-v1.9), whose strong-closure precision is currently non-observable.
+      Library-only field first; sound by construction (the constraints are the
+      closed DBM scry already proves). Requires octagon SUM constraints in the
+      Interp to be non-trivial (the v1.9 note) — couple with that.
+    tags: [relational, octagon, output, precision]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a function where the octagon holds a relation (e.g. i < n or x + y <= c), When scry analyzes it, Then that relational constraint appears in the AnalysisResult relational-invariants field — not just the unary interval projection."
+    links:
+      - type: traces-to
+        target: REQ-016
+
+  - id: FEAT-042
+    type: feature
+    title: "v2.6 — Widening with thresholds"
+    status: proposed
+    release: v2.6.0
+    description: >
+      Replace the fixed iterate-then-widen at LOOP_WIDEN_THRESHOLD with widening
+      up to a set of syntactic thresholds (constants and guard bounds in scope),
+      a standard cheap precision lever that recovers loop bounds the current
+      widening over-approximates to top. Sound (widening still terminates).
+    tags: [precision, widening, loop, quick-win]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a counted loop bounded by a constant the current widening loses, When scry analyzes it with threshold widening, Then the loop counter is bounded by (or below) that constant rather than top — and the fixpoint still terminates."
+    links:
+      - type: traces-to
+        target: REQ-001
+
+  - id: FEAT-043
+    type: feature
+    title: "v2.6 — call_indirect target-set weighting for the shadow-stack bound (FEAT-021 slice-3)"
+    status: proposed
+    release: v2.6.0
+    description: >
+      DD-016 slice-3: weight an indirect call in the worst-case shadow-stack
+      longest-weighted-path by its RESOLVED target set (already computed by
+      FEAT-006) instead of the whole table — tightening the bound materially
+      while staying sound (the resolved set is an over-approximation).
+    tags: [stack-bound, precision, wcsu]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a module whose call_indirect resolves to a small target subset of a large table, When scry computes the stack bound, Then the bound reflects the resolved targets' frames (lower) rather than the whole-table maximum — and never under-counts the true peak."
+    links:
+      - type: traces-to
+        target: DD-016
+
+  # ══════════════════════════════════════════════════════════════════════
+  # RELEASE v2.7.0 — "Prove safety" (the Astrée/Polyspace headline, MF-006)
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: FEAT-044
+    type: feature
+    title: "v2.7 — Pentagons domain (cheap x in [a,b] AND x < y)"
+    status: proposed
+    release: v2.7.0
+    description: >
+      Add the Pentagons weakly-relational domain (Logozzo-Fähndrich, AC-014):
+      intervals + strict-less-than facts, far cheaper than octagon, built for
+      bounds validation. The enabler for sound out-of-bounds linear-memory trap
+      detection (the x < mem_size facts). New pure domain crate, admit-free Rocq
+      for the lattice + transfers, gamma-sweep tests — the scry domain pattern.
+    tags: [numerical-domain, bounds, traps, pentagons]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given an index guarded by a comparison to a length (i < n), When scry analyzes the guarded region, Then the pentagon records i < n soundly, with an admit-free Rocq proof of the lattice + transfer soundness and an exhaustive gamma-sweep."
+    links:
+      - type: traces-to
+        target: REQ-014
+
+      - type: references-paper
+        target: AC-014
+  - id: FEAT-045
+    type: feature
+    title: "v2.7 — Trap detection: division-by-zero + integer-overflow classification"
+    status: proposed
+    release: v2.7.0
+    description: >
+      Classify every i32/i64 div_s/div_u/rem_s/rem_u as PROVEN-SAFE (the divisor
+      interval excludes 0, and for div_s the dividend/divisor exclude the
+      INT_MIN/-1 overflow trap) or POTENTIAL-TRAP, as first-class diagnostics —
+      the first runtime-error class, the bar's headline capability. The interval
+      domain already computes the divisor range; this surfaces the verdict.
+    tags: [runtime-error, trap, division, overflow]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a div/rem whose divisor interval excludes 0 (and excludes the INT_MIN/-1 case for div_s), When scry analyzes it, Then it is reported PROVEN-SAFE; given a divisor interval containing 0, it is POTENTIAL-TRAP — never silently dropped."
+    links:
+      - type: traces-to
+        target: REQ-014
+
+      - type: addresses-finding
+        target: MF-006
+  - id: FEAT-046
+    type: feature
+    title: "v2.7 — Trap detection: out-of-bounds linear-memory access"
+    status: proposed
+    release: v2.7.0
+    description: >
+      Classify each load/store as PROVEN-SAFE when the effective address +
+      access size is provably within the memory's current size (using the region
+      domain + the pentagon x < mem_size facts + FEAT-038 memory.size bounds),
+      else POTENTIAL-TRAP. The OOB trap class — the most valuable for Wasm
+      sandbox-adjacent assurance (cf. VeriWasm, CA-006).
+    tags: [runtime-error, trap, memory, oob]
+    fields:
+      phase: phase-2
+      acceptance-criteria:
+        - "Given a load/store whose address+size is provably < memory size (region/pentagon bounds), When scry analyzes it, Then it is PROVEN-SAFE; given an address that may exceed the memory, it is POTENTIAL-TRAP — soundly (never PROVEN-SAFE when a concrete run could trap)."
+    links:
+      - type: traces-to
+        target: REQ-014
+
+      - type: addresses-finding
+        target: MF-006
+  # ══════════════════════════════════════════════════════════════════════
+  # RELEASE v3.0.0 — "Qualifiable + differentiated" (strategic)
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: FEAT-047
+    type: feature
+    title: "v3.0 — IEEE-754 floating-point domain (FP octagon)"
+    status: proposed
+    release: v3.0.0
+    description: >
+      Sound f32/f64 abstraction via interval-with-rounding-error reusing the
+      octagon DBM (Miné ESOP'04, AC-022), with NaN/inf/rounding handling.
+      Removes the hard scope hole where any float-bearing function is un-analyzed.
+      Admit-free Rocq for the core transfers; gamma-sweep over representative
+      float grids.
+    tags: [floating-point, numerical-domain, soundness, strategic]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a function performing f32/f64 arithmetic, When scry analyzes it, Then it produces a sound float interval (over-approximating the IEEE-754 result incl. rounding/NaN/inf) instead of degrading the function to top."
+    links:
+      - type: traces-to
+        target: REQ-015
+
+      - type: references-paper
+        target: AC-022
+  - id: FEAT-048
+    type: feature
+    title: "v3.0 — Mechanized soundness vs WasmCert-Coq + wrap-aware transfers (the differentiator)"
+    status: proposed
+    release: v3.0.0
+    description: >
+      Make the G-005 differentiator literally true: prove scry's transfers sound
+      against the OFFICIAL mechanized Wasm semantics (WasmCert-Coq, TE-004),
+      not only scry's own concrete model; in particular prove the WRAP-AWARE
+      i32/i64 add (today proven only on the no-wrap core, widened to top on
+      possible wrap). Also REPAIR or remove the recorded-false Verus join proof
+      before any dossier cites mechanized soundness. Methodology template:
+      Verasco (AC-020).
+    tags: [mechanized-soundness, rocq, wasmcert, differentiator, strategic]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given scry's interval add transfer, When checked against WasmCert-Coq's i32.add semantics, Then an admit-free Rocq theorem establishes soundness INCLUDING the wrapping case — and the false Verus join proof is repaired or removed."
+    links:
+      - type: traces-to
+        target: REQ-002
+      - type: traces-to
+        target: G-005
+
+      - type: references-paper
+        target: AC-020
+      - type: evaluates-tech
+        target: TE-004
+  - id: FEAT-049
+    type: feature
+    title: "v3.0 — Component-Model handle-state / use-after-drop (the moat)"
+    status: proposed
+    release: v3.0.0
+    description: >
+      The uncontested green field (MF-007 / CA-009): a sound affine handle-state
+      lattice over the Component Model's own/borrow resources (fresh / borrowed /
+      owned / dropped) detecting use-after-drop, double-drop, and leaked handles,
+      plus host-call effect sets — extending scry's existing meld component-
+      provenance boundary (SCPV v3) from plumbing to actual analysis. The
+      substance of REQ-003 / G-003. Env-specification for host imports per
+      AC-024.
+    tags: [component-model, handle-state, use-after-drop, moat, strategic]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a component that drops a resource handle and then uses it, When scry analyzes it, Then a use-after-drop is reported soundly; given a handle correctly owned/borrowed across its lifetime, no false report — with the handle lattice gamma-soundness mechanized."
+    links:
+      - type: traces-to
+        target: REQ-003
+      - type: traces-to
+        target: G-005
+
+      - type: addresses-finding
+        target: MF-007
+  - id: FEAT-050
+    type: feature
+    title: "v3.0 — Tool-qualification dossier (DO-330 TQL-5 / ISO 26262-8 TCL)"
+    status: proposed
+    release: v3.0.0
+    description: >
+      The G-005 capstone (CA-011): assemble the assessor-facing qualification
+      package — Tool Operational Requirements, Qualification Plan, the scope/
+      limitation statement (what scry soundly handles vs falls to top — fed by
+      FEAT-040's gap report), the operational-verification report, and the
+      TQL/TCL argument — mapping every objective to a scry artifact, with the
+      admit-free Rocq proofs + MC/DC gate + live kill-criteria as the
+      DIFFERENTIATING evidence (stronger than competitors' test-based QSKs).
+      Depends on the substance landing first (FEAT-045/046/048).
+    tags: [qualification, dossier, do-330, iso-26262, capstone, strategic]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the qualification dossier, When an assessor reviews it, Then every DO-330 TQL-5 / ISO 26262-8 §11 objective maps to a concrete scry artifact (proof, test, gate, or scope statement) — and the scope/limitation statement enumerates the analysis gaps from FEAT-040."
+    links:
+      - type: traces-to
+        target: G-005
+
+  # ══════════════════════════════════════════════════════════════════════
+  # BACKLOG — researched, valuable, not yet release-scoped (status proposed,
+  # no `release:`). Promote into a release when picked up.
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: FEAT-051
+    type: feature
+    title: "Backlog — Karr linear-equality domain"
+    status: proposed
+    description: >
+      Exact affine equalities sum(a_i x_i)=c (Karr 1976, AC-013) — a low-cost
+      relational equality domain complementing the octagon, with a small
+      mechanizable transfer set. Feeds REQ-016 relational surfacing.
+    tags: [numerical-domain, relational, backlog]
+    fields:
+      phase: future
+      acceptance-criteria:
+        - "Given a program with an affine relation among locals, When scry analyzes it, Then the Karr domain infers the exact equality soundly, with admit-free Rocq for join/meet/transfer."
+    links:
+      - type: traces-to
+        target: REQ-016
+
+      - type: references-paper
+        target: AC-013
+  - id: FEAT-052
+    type: feature
+    title: "Backlog — Termination / loop-bound via segmented ranking functions"
+    status: proposed
+    description: >
+      Synthesize sound ranking functions (Urban FuncTion, AC-018) to turn the
+      WCSU bound's "Unbounded" (every recursive SCC) into an actual bound for
+      bounded recursion, and add loop-iteration / Wasm fuel bounds (SPEED-style,
+      AC-019; the aiT WCET analogue, CA-002).
+    tags: [termination, ranking-function, resource-bound, backlog]
+    fields:
+      phase: future
+      acceptance-criteria:
+        - "Given a terminating bounded-recursion or counted loop, When scry analyzes it, Then it reports a sound iteration/depth bound (not Unbounded), backed by a synthesized ranking function."
+    links:
+      - type: traces-to
+        target: DD-016
+
+      - type: references-paper
+        target: AC-018
+  - id: FEAT-053
+    type: feature
+    title: "Backlog — Incremental / demanded compositional summaries (scaling)"
+    status: proposed
+    description: >
+      Upgrade FEAT-007 function summaries to incremental + demand-driven +
+      compositional (Stein et al., AC-021): reuse results across edits, compose
+      procedure summaries — the scaling story for CI, the dashboard, and large
+      fused modules (REQ-007, whose >=50k-instr scaling claim is still
+      un-benchmarked).
+    tags: [scalability, incremental, compositional, backlog]
+    fields:
+      phase: future
+      acceptance-criteria:
+        - "Given a small edit to one function of a large module, When scry re-analyzes incrementally, Then only the affected summaries recompute and the result matches a from-scratch run (from-scratch consistency)."
+    links:
+      - type: traces-to
+        target: REQ-007
+
+      - type: references-paper
+        target: AC-021
+  - id: FEAT-054
+    type: feature
+    title: "Backlog — WIT-level surfacing of library-only facts"
+    status: proposed
+    description: >
+      Surface the rich library-only fields (param_ranges, bit_facts,
+      operand_stack, verified_premises, relational invariants, gaps) through the
+      WIT/component boundary + the frozen JSON contract, so non-Rust / sandboxed
+      consumers (loom, assessor tooling) can read them. spar/AADL->WIT regen +
+      wrapper conversion. Serves REQ-004.
+    tags: [output, wit, consumer-value, backlog]
+    fields:
+      phase: future
+      acceptance-criteria:
+        - "Given a non-Rust consumer over the WIT boundary, When scry analyzes a module, Then it can read param_ranges / bit_facts / relational invariants / gaps via WIT — not only the Rust AnalysisResult."
+    links:
+      - type: traces-to
+        target: REQ-004
+
+  - id: FEAT-055
+    type: feature
+    title: "Backlog — Counterexample generation for POTENTIAL-TRAP sites (symbolic)"
+    status: proposed
+    description: >
+      Couple a SeeWasm-style symbolic engine (CA-008) to scry's POTENTIAL-TRAP
+      verdicts to turn "cannot prove safe" into "input X may trap" — and the
+      SeaHorn pattern (AI invariants seeding an SMT/CHC refinement) to shrink
+      orange->green without losing soundness.
+    tags: [counterexample, symbolic, ux, backlog]
+    fields:
+      phase: future
+      acceptance-criteria:
+        - "Given a POTENTIAL-TRAP site, When the symbolic companion runs, Then it either produces a concrete trapping input or refines the site to PROVEN-SAFE — soundness of scry's verdict preserved either way."
+    links:
+      - type: traces-to
+        target: REQ-014
+
+  - id: FEAT-056
+    type: feature
+    title: "Backlog — Sound queryable CPG + query language over AnalysisResult"
+    status: proposed
+    description: >
+      A queryable graph surface — scry's CFG/call-graph/data-flow annotated with
+      proven invariants — with a query language (the Wasmati CPG idea, CA-007,
+      made SOUND; the CodeQL/Semgrep UX, CA-010). Lets an agent or developer ask
+      "all points where kind=Top and op in (call_indirect, memory.grow)" instead
+      of scraping HTML (TE-011 structured-channel recommendation).
+    tags: [query, cpg, ai-agent, ux, backlog]
+    fields:
+      phase: future
+      acceptance-criteria:
+        - "Given the AnalysisResult, When an agent issues a structured query over the annotated graph, Then it gets the matching nodes/edges with their proven facts and gaps — no HTML scraping."
+    links:
+      - type: traces-to
+        target: REQ-017
+
+  - id: FEAT-057
+    type: feature
+    title: "Backlog — Polyhedra domain (ELINA-style decomposition)"
+    status: proposed
+    description: >
+      Convex polyhedra (Cousot-Halbwachs, AC-012) for exact linear inequalities
+      above the octagon, made tractable via ELINA's online constraint
+      decomposition (TE-012). The precision ceiling; a large domain bet beyond
+      Karr (FEAT-051).
+    tags: [numerical-domain, polyhedra, relational, backlog]
+    fields:
+      phase: future
+      acceptance-criteria:
+        - "Given a program with linear inequality invariants the octagon cannot express, When scry analyzes it, Then the polyhedra domain infers them soundly at acceptable cost (decomposed), with mechanized soundness."
+    links:
+      - type: traces-to
+        target: REQ-016
+
+      - type: references-paper
+        target: AC-012
+      - type: evaluates-tech
+        target: TE-012
+  - id: FEAT-058
+    type: feature
+    title: "Backlog — Array / linear-memory segmentation (content sensitivity)"
+    status: proposed
+    description: >
+      A parametric segmentation functor (Cousot-Cousot-Logozzo, AC-015) giving
+      scry's flat linear-memory region per-segment content sensitivity (track
+      values inside memory ranges, not one havoc'd blob) — a new analysis
+      dimension extending the region domain (REQ-001).
+    tags: [memory, array, segmentation, backlog]
+    fields:
+      phase: future
+      acceptance-criteria:
+        - "Given a loop that fills a memory range with a bounded value, When scry analyzes it, Then the segmentation domain tracks the per-segment content bound instead of widening loaded values to top."
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: references-paper
+        target: AC-015
