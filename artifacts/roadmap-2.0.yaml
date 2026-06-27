@@ -1914,24 +1914,38 @@ artifacts:
 
   - id: FEAT-039
     type: feature
-    title: "v2.x — Consume verified closed_world to tighten reachable_from_exports (scry#71)"
-    status: proposed
+    title: "v2.x — Sound open-world reachable_from_exports (escaped funcrefs as roots) (scry#71)"
+    status: accepted
     description: >
-      Make FEAT-034's verified `closed_world` premise PAY OFF for the
-      reachability footprint (synth#383 / VCR-MEM-001). `reachable_from_exports`
-      (FEAT-022) is a sound superset seeded by exports + start AND
-      over-approximated import/host entry points. When `closed_world` holds (no
-      functional imports — scry's own check) there is no external/host caller,
-      so the import-driven over-approximation can be dropped, shrinking the
-      reachable set toward the true one (a tighter shadow-stack / linear-memory
-      reservation). The `call_indirect` whole-table over-approximation is
-      RETAINED (closed_world does not bound indirect targets — that is the
-      FEAT-036 funcref-escape story). Stays a sound superset (SCRY-001).
-    tags: [capability, precision, analysis, premise-consumption, v2.x]
+      INVESTIGATION REFRAME (v2.5.0) — what looked like a `closed_world`
+      precision tweak is actually a SOUNDNESS FIX. A clean-room confirmed that
+      `reachable_from_exports` (FEAT-022), documented as a sound SUPERSET so a
+      consumer may "prune the complement" (SCRY-001; synth#383 / VCR-MEM-001),
+      could UNDER-approximate in an OPEN world: a function reachable only via an
+      escaped funcref — e.g. one placed in an EXPORTED funcref table with no
+      in-module `call_indirect`, held in an exported funcref global, or passed as
+      a funcref to an imported function — was OMITTED, yet the host or an import
+      can dispatch it. Pruning it would be unsound (a real frame unreserved).
+
+      Also disproved the original framing: gating on `closed_world` ALONE is
+      INSUFFICIENT (an exported funcref table leaks with `closed_world == true`).
+      The correct gate is FEAT-036's funcref-escape predicate
+      `callers_fully_known` (= no table, no `ref.func`, no const-position
+      funcref): exactly when NO funcref to a defined function can exist outside
+      the recorded call edges.
+
+      FIX: when `callers_fully_known` is FALSE, add every address-taken function
+      (a `ref.func` target in a body / global init / element item, and every
+      element-segment-named function) as a reachability ROOT — the host/import
+      may dispatch any of them. When TRUE (provably closed-and-escape-free), the
+      tight exports+start seed is correct — the precision the premise licenses.
+      Stays a sound superset (over-approximation only ADDS functions).
+    tags: [capability, soundness, analysis, premise-consumption, v2.x]
     fields:
       phase: phase-2
       acceptance-criteria:
-        - "Given a module with NO functional imports (verified_premises.closed_world true), When scry computes reachable_from_exports, Then import/host-entry roots are excluded so the reported set is no larger than exports+start reachability — while remaining a sound superset (never drops a concretely-reachable function), and a module WITH a functional import keeps the conservative seed."
+        - "Given a module where a function is reachable ONLY via an escaped funcref (in an exported funcref table with no in-module call_indirect, in an exported funcref global, or passed to an imported function), When scry computes reachable_from_exports, Then that function IS in the set (sound superset — never omits a host/import-dispatchable function)."
+        - "Given a module that is provably closed-and-escape-free (no table, no ref.func anywhere — callers_fully_known), When scry computes reachable_from_exports, Then a genuinely dead (unexported, uncalled) function is EXCLUDED — the tight seed the escape-free property licenses."
     links:
       - type: traces-to
         target: REQ-001

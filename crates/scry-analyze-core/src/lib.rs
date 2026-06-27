@@ -484,7 +484,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "2.4.0";
+const SCRY_VERSION: &str = "2.5.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -989,6 +989,14 @@ pub fn analyze(
     // a `call_ref`/host call the param-range gate cannot bound, and the
     // body-only operator scan would miss it. (Third clean-room finding.)
     let mut func_ref_taken_in_const: bool = false;
+    // FEAT-039: every function whose address is taken anywhere (a `ref.func` in
+    // a body / global init / element item, or a bare element-segment func index)
+    // — absolute indices. When funcrefs can escape (open world, NOT
+    // `callers_fully_known`), these are added as reachability roots so
+    // `reachable_from_exports` stays a sound SUPERSET (the host / an import may
+    // dispatch any escaped funcref). May contain duplicates / imports; filtered
+    // when seeded.
+    let mut address_taken_funcs: Vec<u32> = Vec::new();
     // Active element segments targeting table 0 with a constant
     // i32 offset: (offset, [func indices]). Collected here, then
     // baked into the `FuncTable` after we know the table length.
@@ -1148,6 +1156,8 @@ pub fn analyze(
                     if const_expr_takes_func_ref(&g.init_expr) {
                         func_ref_taken_in_const = true;
                     }
+                    // FEAT-039: collect the addressed function(s) as escape roots.
+                    const_expr_ref_func_targets(&g.init_expr, &mut address_taken_funcs);
                     gidx = gidx.saturating_add(1);
                 }
             }
@@ -1198,6 +1208,10 @@ pub fn analyze(
                     if element_items_take_func_ref(&element.items)? {
                         func_ref_taken_in_const = true;
                     }
+                    // FEAT-039: collect the named functions as escape roots (any
+                    // table / segment kind — host or `call_indirect` may reach
+                    // them once funcrefs escape).
+                    element_items_ref_func_targets(&element.items, &mut address_taken_funcs);
                     match &element.kind {
                         wasmparser::ElementKind::Active {
                             table_index,
@@ -1782,13 +1796,31 @@ pub fn analyze(
         });
     }
 
-    // FEAT-022 slice-1: reachability from the module's entry points, over the
-    // same over-approximated static call graph used for the summary pass.
+    // FEAT-039: complete the address-taken set with `ref.func` operands in
+    // function BODIES (the const-position ones were collected during parsing).
+    for f in &defined_funcs {
+        for op in &f.ops {
+            if let Operator::RefFunc { function_index } = op {
+                address_taken_funcs.push(*function_index);
+            }
+        }
+    }
+
+    // FEAT-022 slice-1 + FEAT-039: reachability from the module's entry points
+    // over the over-approximated static call graph. SOUNDNESS (FEAT-039): when
+    // funcrefs can escape to a caller scry cannot see (open world — NOT
+    // `callers_fully_known`, the FEAT-036 escape predicate), the host or an
+    // import may dispatch ANY address-taken function, so those are added as
+    // reachability roots to keep the result a sound SUPERSET (SCRY-001). When
+    // the module is provably closed-and-escape-free, the tight exports+start
+    // seed is correct — the precision the premise licenses.
     let reachable_from_exports = compute_reachable_from_exports(
         &static_callees,
         import_func_count,
         &exported_funcs,
         start_func,
+        callers_fully_known,
+        &address_taken_funcs,
     );
 
     let function_meta = build_function_meta(
@@ -3211,11 +3243,22 @@ fn build_static_call_graph(
 /// SUPERSET of the concretely-reachable functions (REQ-011/SCRY-001): an edge
 /// the analyzer over-approximates only ever ADDS a function, never drops a
 /// reachable one. A consumer may soundly prune any function NOT in this set.
+///
+/// FEAT-039: `callers_fully_known` (the FEAT-036 funcref-escape predicate) is
+/// true exactly when no funcref to a defined function can exist outside the
+/// recorded call edges. When it is FALSE — an open world where a funcref may
+/// have escaped to the host or an import — every address-taken function
+/// (`address_taken_funcs`, absolute indices) is added as a reachability root,
+/// because such a caller can dispatch any escaped funcref. This keeps the set a
+/// sound superset; without it a function reachable only via, e.g., an exported
+/// funcref table (with no in-module `call_indirect`) would be wrongly omitted.
 fn compute_reachable_from_exports(
     static_callees: &[Vec<usize>],
     import_func_count: u32,
     exported_funcs: &[u32],
     start_func: Option<u32>,
+    callers_fully_known: bool,
+    address_taken_funcs: &[u32],
 ) -> Vec<u32> {
     let n = static_callees.len();
     let mut reachable_defined = alloc::vec![false; n];
@@ -3240,6 +3283,12 @@ fn compute_reachable_from_exports(
     }
     if let Some(s) = start_func {
         seed(s, &mut work, &mut out, &mut reachable_defined);
+    }
+    // FEAT-039: in an open world, any escaped funcref is host/import-dispatchable.
+    if !callers_fully_known {
+        for &abs in address_taken_funcs {
+            seed(abs, &mut work, &mut out, &mut reachable_defined);
+        }
     }
     // BFS/DFS over the over-approximated static call graph.
     while let Some(d) = work.pop() {
@@ -4189,6 +4238,37 @@ fn element_items_take_func_ref(items: &wasmparser::ElementItems<'_>) -> Result<b
                 }
             }
             Ok(false)
+        }
+    }
+}
+
+/// FEAT-039: collect the function indices a constant expression takes the
+/// address of via `ref.func` (global init / element item). Used to seed
+/// reachability roots when funcrefs can escape (the open-world case).
+fn const_expr_ref_func_targets(expr: &wasmparser::ConstExpr<'_>, out: &mut Vec<u32>) {
+    for op in expr.get_operators_reader() {
+        if let Ok(Operator::RefFunc { function_index }) = op {
+            out.push(function_index);
+        }
+    }
+}
+
+/// FEAT-039: collect the function indices an element segment names (bare
+/// `Functions` items and `ref.func` `Expressions` items). A malformed segment
+/// is ignored for collection (the boolean escape flag already forces the
+/// conservative path; this set only ADDS roots, so a miss here cannot make the
+/// reachable set under-approximate beyond what the boolean already guards).
+fn element_items_ref_func_targets(items: &wasmparser::ElementItems<'_>, out: &mut Vec<u32>) {
+    match items {
+        wasmparser::ElementItems::Functions(funcs) => {
+            for idx in funcs.clone().into_iter().flatten() {
+                out.push(idx);
+            }
+        }
+        wasmparser::ElementItems::Expressions(_, exprs) => {
+            for expr in exprs.clone().into_iter().flatten() {
+                const_expr_ref_func_targets(&expr, out);
+            }
         }
     }
 }
@@ -5451,6 +5531,68 @@ mod tests {
         assert_eq!(
             sorted, res.reachable_from_exports,
             "set is sorted + deduped"
+        );
+    }
+
+    /// FEAT-039 SOUNDNESS REGRESSION (clean-room): in an OPEN world a function
+    /// reachable only via an escaped funcref (exported table / exported global /
+    /// passed to an import) was wrongly OMITTED from reachable_from_exports —
+    /// making the SCRY-001 "prune the complement" contract unsound. It must now
+    /// be INCLUDED. And in a closed-and-escape-free module, a genuinely dead
+    /// function must still be EXCLUDED (the precision the escape gate licenses).
+    #[test]
+    fn feat039_exported_table_func_is_reachable() {
+        // func 0 = main (export); func 1 = F, only in an EXPORTED funcref table,
+        // no in-module call_indirect. Host can call_indirect it ⇒ reachable.
+        let r = analyze_default(
+            "(module (table (export \"t\") 1 funcref) (elem (i32.const 0) 1) \
+               (func (export \"main\")) (func (result i32) i32.const 7))",
+        );
+        assert!(
+            r.reachable_from_exports.contains(&1),
+            "F in an exported funcref table is host-dispatchable ⇒ reachable; got {:?}",
+            r.reachable_from_exports
+        );
+    }
+
+    #[test]
+    fn feat039_exported_global_funcref_is_reachable() {
+        // func 1 (F) addressed by ref.func in an exported global's init expr.
+        let r = analyze_default(
+            "(module (func (export \"main\")) (func (result i32) i32.const 7) \
+               (global (export \"g\") funcref (ref.func 1)))",
+        );
+        assert!(
+            r.reachable_from_exports.contains(&1),
+            "F held in an exported funcref global is host-callable ⇒ reachable; got {:?}",
+            r.reachable_from_exports
+        );
+    }
+
+    #[test]
+    fn feat039_reffunc_to_import_is_reachable() {
+        // import cb=0; main=1 (export) passes ref.func 2 to the import; F=2.
+        let r = analyze_default(
+            "(module (import \"e\" \"cb\" (func (param funcref))) \
+               (func (export \"main\") ref.func 2 call 0) \
+               (func (result i32) i32.const 7))",
+        );
+        assert!(
+            r.reachable_from_exports.contains(&2),
+            "F passed as a funcref to an import can be called back ⇒ reachable; got {:?}",
+            r.reachable_from_exports
+        );
+    }
+
+    #[test]
+    fn feat039_closed_world_dead_func_still_excluded() {
+        // No table, no ref.func ⇒ callers_fully_known ⇒ tight seed; func 1 dead.
+        let r =
+            analyze_default("(module (func (export \"main\")) (func (result i32) i32.const 7))");
+        assert!(
+            !r.reachable_from_exports.contains(&1),
+            "a genuinely dead func in a closed/escape-free module must stay pruned; got {:?}",
+            r.reachable_from_exports
         );
     }
 
