@@ -175,7 +175,7 @@ artifacts:
   - id: FEAT-042
     type: feature
     title: "v2.6 — Widening with thresholds"
-    status: proposed
+    status: accepted
     release: v2.6.0
     description: >
       Replace the fixed iterate-then-widen at LOOP_WIDEN_THRESHOLD with widening
