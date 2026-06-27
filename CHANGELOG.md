@@ -7,6 +7,45 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-06-27
+
+Headline: **`reachable_from_exports` is now sound in the OPEN world (FEAT-039,
+scry#71).** Fixes a latent under-approximation: a function reachable only via an
+escaped funcref was wrongly omitted, making the SCRY-001 "prune the complement"
+contract unsound outside a closed module.
+
+### Fixed — FEAT-039 (traces REQ-001, REQ-011, G-005, FEAT-034) — SOUNDNESS
+
+- **`reachable_from_exports` could under-approximate** (present since FEAT-022).
+  A function reachable only through an escaped funcref — placed in an **exported
+  funcref table** (with no in-module `call_indirect`), held in an **exported
+  funcref global**, or **passed as a funcref to an imported function** — was
+  omitted from the set, even though the host or an import can dispatch it.
+  Pruning the complement (synth#383 / VCR-MEM-001 shadow-stack reservation)
+  could then drop a genuinely reachable function. Now: when funcrefs can escape
+  (the FEAT-036 `callers_fully_known` predicate is false — i.e. the module has a
+  table or any `ref.func`), every **address-taken** function (every `ref.func`
+  target in a body / global init / element item, and every element-segment-named
+  function) is added as a reachability **root**, keeping the result a sound
+  superset.
+- The original "consume `closed_world`" framing was disproved: gating on
+  `closed_world` alone is **insufficient** (an exported funcref table leaks with
+  `closed_world == true`). The correct gate is the funcref-escape predicate.
+- **Precision retained**: in a provably closed-and-escape-free module (no table,
+  no `ref.func`), the tight exports+start seed is kept — a genuinely dead
+  function is still pruned.
+
+### Posture
+
+- Soundness fix (the reported set only grows where it was unsound); the consumer
+  contract (SCRY-001) is now honored in the open world. No API / WIT / frozen-
+  JSON-contract change.
+- **Falsification statement.** scry claims every function callable on some
+  concrete run from a host/import/export entry is in `reachable_from_exports`.
+  FALSE if a function reachable via any funcref-dispatch path is absent.
+  Falsifier: a `.wat` whose function runs at runtime (host `call_indirect` on an
+  exported table, etc.) but is not in the set.
+
 ## [2.4.0] — 2026-06-27
 
 Headline: **`memory.size` / `memory.grow` modelled; verified `bounded_memory`
