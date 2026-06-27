@@ -484,7 +484,7 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "2.3.0";
+const SCRY_VERSION: &str = "2.4.0";
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -665,6 +665,20 @@ struct ModuleCtx<'a> {
     func_table: &'a FuncTable,
     /// Per-region metadata for the v0.3 memory ops.
     default_region: &'a RegionMeta,
+    /// FEAT-038: the memory is provably fixed at `memory_initial_pages` — it is
+    /// module-private (not imported/exported/shared) and no defined function
+    /// grows it — so `memory.size` returns that exact constant. When false,
+    /// `memory.size` is the sound interval `[memory_initial_pages,
+    /// memory_max_pages-or-65536]` (memory may have been grown by this module,
+    /// the host, or another thread).
+    memory_size_constant: bool,
+    /// FEAT-038: first memory's declared initial / maximum page counts.
+    memory_initial_pages: u64,
+    memory_max_pages: Option<u64>,
+    /// FEAT-038: total memory count (precise `memory.size`/`grow` only when 1)
+    /// and whether memory index 0 is 64-bit (2^48-page ceiling + i64 result).
+    memory_count: u64,
+    memory_is_64: bool,
     /// Collected defined-function bodies (FEAT-007), indexed by
     /// defined-function index (absolute index minus
     /// `import_func_count`).
@@ -906,6 +920,27 @@ pub fn analyze(
     // until we see `memory.grow` (which currently still falls
     // back to UnsoundnessFallback per the v0.3 scope).
     let mut memory_min_bytes: u64 = 0;
+    // FEAT-038: the first memory's declared page limits, for `memory.size` /
+    // `memory.grow` modelling. `memory_initial_pages` is the page count
+    // `memory.size` returns when memory is fixed (bounded_memory); the maximum
+    // (when declared) caps the size interval otherwise.
+    let mut memory_initial_pages: u64 = 0;
+    let mut memory_max_pages: Option<u64> = None;
+    // FEAT-038 soundness (clean-room): the constant-`memory.size` collapse is
+    // valid ONLY for a module-PRIVATE memory — not imported (host supplies and
+    // may grow it), not exported (host can grow it via the API), not shared
+    // (another thread may grow it). For any of those, `memory.size` is the
+    // sound interval `[initial, max]`, never a constant.
+    let mut memory_is_imported: bool = false;
+    let mut memory_is_exported: bool = false;
+    let mut memory_is_shared: bool = false;
+    // FEAT-038 soundness (clean-room): total memory count (imports + defined)
+    // and whether memory index 0 is 64-bit. `memory.size`/`memory.grow` are
+    // modelled precisely ONLY for the single-memory, memidx-0 case; >1 memory
+    // or a non-zero memidx ⇒ ⊤ (only index 0 is captured). A 64-bit memory
+    // grows to 2^48 pages, so its ceiling is 2^48, not the memory32 65536.
+    let mut memory_count: u64 = 0;
+    let mut memory_is_64: bool = false;
 
     // ── FEAT-021 shadow-stack state ──────────────────────────────
     // Indices of mutable i32 globals — the candidates for the C-style
@@ -1013,6 +1048,23 @@ pub fn analyze(
                     if matches!(imp.ty, wasmparser::TypeRef::Table(_)) {
                         module_has_table = true;
                     }
+                    // FEAT-038 soundness: an imported memory is host-supplied —
+                    // its true size is ≥ the declared minimum and the host may
+                    // grow it. Capture its declared limits (the minimum is the
+                    // sound lower bound `memory.size` must use) and mark it
+                    // host-controlled / possibly-shared.
+                    if let wasmparser::TypeRef::Memory(memty) = imp.ty {
+                        // Imported memories occupy the low memory-index space, so
+                        // the first one is memory index 0. Capture index 0 only.
+                        if memory_count == 0 {
+                            memory_is_imported = true;
+                            memory_initial_pages = memty.initial;
+                            memory_max_pages = memty.maximum;
+                            memory_is_shared |= memty.shared;
+                            memory_is_64 = memty.memory64;
+                        }
+                        memory_count += 1;
+                    }
                 }
             }
             Payload::FunctionSection(reader) => {
@@ -1034,6 +1086,12 @@ pub fn analyze(
                         // FEAT-027: keep the export name for readable metadata.
                         export_names.push((ex.index, alloc::string::String::from(ex.name)));
                     }
+                    // FEAT-038 soundness: an exported memory can be grown by the
+                    // host through the embedder API, so `memory.size` is not a
+                    // constant even with no in-module `memory.grow`.
+                    if matches!(ex.kind, wasmparser::ExternalKind::Memory) {
+                        memory_is_exported = true;
+                    }
                 }
             }
             Payload::StartSection { func, .. } => {
@@ -1047,14 +1105,25 @@ pub fn analyze(
                 // "default" region's size. Multi-memory
                 // (post-MVP) is not yet supported — we use
                 // the first entry only.
-                let mut first = true;
+                let mut first_defined = true;
                 for entry in reader {
                     let mem = entry
                         .map_err(|e| AnalyzeError::InvalidModule(format!("memory section: {e}")))?;
-                    if first {
+                    // The first DEFINED memory anchors the v0.3 region floor.
+                    if first_defined {
                         memory_min_bytes = mem.initial.saturating_mul(WASM_PAGE_SIZE);
-                        first = false;
+                        first_defined = false;
                     }
+                    // FEAT-038: capture memory INDEX 0's limits. Imports precede
+                    // defined memories in the index space, so a defined memory is
+                    // index 0 only when no memory was imported (memory_count == 0).
+                    if memory_count == 0 {
+                        memory_initial_pages = mem.initial;
+                        memory_max_pages = mem.maximum;
+                        memory_is_shared |= mem.shared;
+                        memory_is_64 = mem.memory64;
+                    }
+                    memory_count += 1;
                 }
             }
             Payload::GlobalSection(reader) => {
@@ -1387,6 +1456,26 @@ pub fn analyze(
     //       recursion-frontier result).
     // ───────────────────────────────────────────────────────────
     let static_callees = build_static_call_graph(&defined_funcs, &func_table, import_func_count);
+
+    // FEAT-038: scry's OWN bounded-memory determination — no `memory.grow` in
+    // any defined function ⇒ linear memory is fixed at its declared initial
+    // size (verify-not-trust; computed here, before the fixpoint, so the
+    // `memory.size` transfer can return the exact page count). Reused for
+    // `verified_premises` below.
+    let saw_memory_grow = defined_funcs.iter().any(|f| {
+        f.ops
+            .iter()
+            .any(|op| matches!(op, Operator::MemoryGrow { .. }))
+    });
+    let bounded_memory = !saw_memory_grow;
+    // FEAT-038 soundness (clean-room): `memory.size` is the EXACT initial-page
+    // constant only for a module-PRIVATE memory grown by no one — not imported,
+    // not exported, not shared, and with no in-module `memory.grow`. Then only
+    // this module's defined code could grow it, which `bounded_memory` rules
+    // out. Otherwise `memory.size` is the sound interval `[initial, max]`.
+    let memory_size_constant =
+        bounded_memory && !memory_is_imported && !memory_is_exported && !memory_is_shared;
+
     let sccs = tarjan_sccs(&static_callees);
     let recursive_flags = recursive_flags_from_sccs(&sccs, &static_callees, defined_funcs.len());
 
@@ -1416,6 +1505,11 @@ pub fn analyze(
                 import_func_count,
                 func_table: &func_table,
                 default_region: &default_region_meta,
+                memory_size_constant,
+                memory_initial_pages,
+                memory_max_pages,
+                memory_count,
+                memory_is_64,
                 defined_funcs: &defined_funcs,
                 summaries: &summaries,
             };
@@ -1458,6 +1552,11 @@ pub fn analyze(
         import_func_count,
         func_table: &func_table,
         default_region: &default_region_meta,
+        memory_size_constant,
+        memory_initial_pages,
+        memory_max_pages,
+        memory_count,
+        memory_is_64,
         defined_funcs: &defined_funcs,
         summaries: &summaries,
     };
@@ -1704,13 +1803,11 @@ pub fn analyze(
     // scan — `memory.grow` anywhere ⇒ memory is not provably fixed; any
     // functional import ⇒ scry cannot prove a closed world at the core level.
     // These are sound because scry derived them, independent of meld's claim.
-    let saw_memory_grow = defined_funcs.iter().any(|f| {
-        f.ops
-            .iter()
-            .any(|op| matches!(op, Operator::MemoryGrow { .. }))
-    });
+    // `bounded_memory` (= `!saw_memory_grow`) is computed once before the
+    // fixpoint (FEAT-038, so `memory.size` can use it) and reused here.
+    let saw_memory_grow = !bounded_memory;
     let verified_premises = FusionPremises {
-        bounded_memory: !saw_memory_grow,
+        bounded_memory,
         closed_world: import_func_count == 0,
     };
     // Cross-check meld's asserted premise against scry's observation: a v3
@@ -1755,6 +1852,38 @@ pub fn analyze(
 }
 
 // ───────────────────────── FEAT-037 (DD-017) ─────────────────────────
+
+/// FEAT-038: the page ceiling for memory index 0 — the declared maximum if any,
+/// else the architectural cap (2^48 for memory64, 65536 for memory32).
+#[inline]
+fn mem_page_ceiling(m: &ModuleCtx<'_>) -> i64 {
+    let arch_cap: u64 = if m.memory_is_64 { 1u64 << 48 } else { 65536 };
+    m.memory_max_pages.unwrap_or(arch_cap) as i64
+}
+
+/// FEAT-038: the abstract `memory.size` result for `memidx`. Precise only for
+/// memory index 0 of a single-memory module (the only memory scry captures);
+/// any other memidx or a multi-memory module is ⊤ (sound). The exact constant
+/// `initial` applies only to a provably-fixed module-private memory; otherwise
+/// the sound interval `[initial, ceiling]`. 64-bit memory returns an i64.
+#[inline]
+fn mem_size_value(m: &ModuleCtx<'_>, memidx: u32) -> AbstractValue {
+    if memidx != 0 || m.memory_count != 1 {
+        return AbstractValue::Unknown;
+    }
+    let lo = m.memory_initial_pages as i64;
+    let hi = if m.memory_size_constant {
+        lo
+    } else {
+        mem_page_ceiling(m)
+    };
+    let iv = Interval { lo, hi };
+    if m.memory_is_64 {
+        AbstractValue::I64Interval(iv)
+    } else {
+        AbstractValue::I32Interval(iv)
+    }
+}
 
 /// Integer bit width of a Wasm value type, or `None` for types the bits domain
 /// does not model (floats, v128, references).
@@ -3674,14 +3803,42 @@ fn interpret_op(
                 *table_index,
             );
         }
+        Operator::MemorySize { mem, .. } => {
+            // FEAT-038: `memory.size` returns the current size in PAGES. Memory
+            // never shrinks, so size ∈ [initial, max]; the exact constant
+            // `initial` only for a provably-fixed module-private memory. We
+            // model precisely ONLY memory index 0 of a single-memory module
+            // (scry captures only index 0); any other memidx, or a multi-memory
+            // module, is ⊤ (sound). 64-bit memory caps at 2^48 pages and
+            // returns an i64. Modelled WITHOUT degrading the function.
+            let value = mem_size_value(module_ctx, *mem);
+            ctx.operand_stack.push(value);
+        }
+        Operator::MemoryGrow { mem, .. } => {
+            // FEAT-038: `memory.grow(delta)` pops the requested page delta and
+            // pushes the PREVIOUS size on success or -1 on failure — so the
+            // result is in `[-1, max]`. Does NOT degrade locals (a grow mutates
+            // linear memory, not locals). ⊤ for an unmodelled memidx/memory.
+            let _ = ctx.operand_stack.pop();
+            let value = if *mem == 0 && module_ctx.memory_count == 1 {
+                let hi = mem_page_ceiling(module_ctx);
+                if module_ctx.memory_is_64 {
+                    AbstractValue::I64Interval(Interval { lo: -1, hi })
+                } else {
+                    AbstractValue::I32Interval(Interval { lo: -1, hi })
+                }
+            } else {
+                AbstractValue::Unknown
+            };
+            ctx.operand_stack.push(value);
+        }
         other => {
             // Anything outside the supported set: emit a fallback
             // diagnostic, scrub state to top to preserve soundness
             // (REQ-001), and continue. Control flow (`If` / `Loop` /
-            // `Br*`) and `memory.grow` / `memory.size` still land
-            // here; FEAT-005 lifted the canonical memory ops,
-            // FEAT-006 lifted `call` / `call_indirect`, and FEAT-007
-            // will add interprocedural value propagation.
+            // `Br*`) still land here; FEAT-005 lifted the canonical
+            // memory ops, FEAT-006 lifted `call` / `call_indirect`,
+            // FEAT-038 lifted `memory.size` / `memory.grow`.
             if emit_diagnostics {
                 diagnostics.push(Diagnostic {
                     severity: DiagnosticSeverity::UnsoundnessFallback,
@@ -5522,6 +5679,168 @@ mod tests {
             .expect("bit fact for local 0");
         assert_eq!(f.width, 64);
         assert_eq!(f.known_ones, 0xFF_FFFF_FFFF, "low 40 bits known-1");
+    }
+
+    /// FEAT-038: under verified `bounded_memory` (no `memory.grow` anywhere),
+    /// `memory.size` is the exact constant initial page count — and modelling it
+    /// no longer degrades the function (the pre-FEAT-038 fallback scrubbed every
+    /// local to ⊤).
+    #[test]
+    fn feat038_memory_size_constant_when_bounded() {
+        // (memory 3), no grow ⇒ memory.size == 3 pages, stored into local 0.
+        let r = analyze_default(
+            "(module (memory 3) (func (result i32) (local i32) \
+               memory.size local.set 0 local.get 0))",
+        );
+        assert!(r.verified_premises.bounded_memory, "no grow ⇒ bounded");
+        let found = r.invariants.points.iter().any(|p| {
+            p.locals.iter().any(|l| {
+                l.local_index == 0
+                    && matches!(&l.value, AbstractValue::I32Interval(iv) if iv.lo == 3 && iv.hi == 3)
+            })
+        });
+        assert!(
+            found,
+            "memory.size under bounded_memory must make local 0 = [3,3] (not degraded); points={:?}",
+            r.invariants.points
+        );
+    }
+
+    /// FEAT-038: `memory.grow` is modelled (result ∈ [-1, max]) WITHOUT degrading
+    /// the function — its bounded result lands in a local instead of ⊤.
+    #[test]
+    fn feat038_memory_grow_does_not_degrade() {
+        // (memory 2 10): grow result ∈ [-1, 10], stored into local 0 (no drop —
+        // `drop` is itself unsupported and would degrade).
+        let r = analyze_default(
+            "(module (memory 2 10) (func (result i32) (local i32) \
+               i32.const 1 memory.grow local.set 0 local.get 0))",
+        );
+        assert!(!r.verified_premises.bounded_memory, "grow ⇒ not bounded");
+        let found = r.invariants.points.iter().any(|p| {
+            p.locals.iter().any(|l| {
+                l.local_index == 0
+                    && matches!(&l.value, AbstractValue::I32Interval(iv) if iv.lo == -1 && iv.hi == 10)
+            })
+        });
+        assert!(
+            found,
+            "memory.grow result must be the bounded [-1,10] (modelled, not degraded); points={:?}",
+            r.invariants.points
+        );
+    }
+
+    /// The abstract `memory.size` value via a one-function `(func (result i32)
+    /// memory.size)` — read off the function summary, unambiguous (no pre-set
+    /// program-point to confuse with the result).
+    #[cfg(test)]
+    fn memory_size_value(module_src: &str) -> AbstractValue {
+        let r = analyze_default(module_src);
+        // The defined function returning memory.size is the last summary.
+        r.function_summaries
+            .last()
+            .and_then(|s| s.result_summary.first().cloned())
+            .expect("a result summary with the memory.size value")
+    }
+
+    /// FEAT-038 SOUNDNESS REGRESSION (clean-room #A): an IMPORTED memory is
+    /// host-supplied — true size ≥ declared minimum and the host may grow it.
+    /// `memory.size` must be `[initial, max]`, never the constant (and never the
+    /// `[0,0]` an un-captured import default would give).
+    #[test]
+    fn feat038_imported_memory_size_not_constant() {
+        let v = memory_size_value(
+            "(module (import \"env\" \"mem\" (memory 1)) \
+               (func (result i32) memory.size))",
+        );
+        match v {
+            AbstractValue::I32Interval(iv) => {
+                assert_eq!(iv.lo, 1, "imported (memory 1) ⇒ size ≥ 1, never 0: {iv:?}");
+                assert!(iv.hi > 1, "host may grow ⇒ not a constant: {iv:?}");
+            }
+            other => panic!("expected a sound bounded interval, got {other:?}"),
+        }
+    }
+
+    /// FEAT-038 soundness reasoning (clean-room #B, resolved): a functional
+    /// import canNOT grow this module's PRIVATE memory — in core Wasm an
+    /// imported `(func)` has no handle to a non-imported/exported/shared memory
+    /// (memory is not a first-class value that can be passed). Only this
+    /// module's defined code can grow a private memory, which `bounded_memory`
+    /// already rules out. So the constant `[1,1]` here is SOUND despite the
+    /// functional import — the gate does not (and need not) require closed_world.
+    #[test]
+    fn feat038_private_memory_constant_despite_import() {
+        let v = memory_size_value(
+            "(module (import \"env\" \"f\" (func)) (memory 1) \
+               (func (result i32) call 0 memory.size))",
+        );
+        match v {
+            AbstractValue::I32Interval(iv) => assert!(
+                iv.lo == 1 && iv.hi == 1,
+                "private memory + grow-free module ⇒ size is the constant 1 \
+                 (an import cannot reach a private memory): {iv:?}"
+            ),
+            other => panic!("expected [1,1], got {other:?}"),
+        }
+    }
+
+    /// FEAT-038: an EXPORTED memory is host-growable via the embedder API, so
+    /// even with no in-module grow `memory.size` is not a constant.
+    #[test]
+    fn feat038_exported_memory_size_not_constant() {
+        let v = memory_size_value(
+            "(module (memory 1) (export \"mem\" (memory 0)) \
+               (func (result i32) memory.size))",
+        );
+        if let AbstractValue::I32Interval(iv) = v {
+            assert!(
+                !(iv.lo == 1 && iv.hi == 1),
+                "exported memory is host-growable ⇒ not the constant 1: {iv:?}"
+            );
+        }
+    }
+
+    /// FEAT-038 SOUNDNESS REGRESSION (clean-room #1): a 64-bit memory grows to
+    /// 2^48 pages, not the memory32 cap of 65536. An exported memory64 (host-
+    /// growable, so not a constant) must report `memory.size ∈ [1, 2^48]` as an
+    /// i64 — the prior `unwrap_or(65536)` under-approximated.
+    #[test]
+    fn feat038_memory64_ceiling() {
+        let v = memory_size_value(
+            "(module (memory i64 1) (export \"m\" (memory 0)) \
+               (func (result i64) memory.size))",
+        );
+        match v {
+            AbstractValue::I64Interval(iv) => {
+                assert_eq!(iv.lo, 1);
+                assert_eq!(
+                    iv.hi,
+                    1i64 << 48,
+                    "memory64 ceiling is 2^48 pages, not 65536"
+                );
+            }
+            other => {
+                panic!("memory64 memory.size must be an i64 interval [1, 2^48], got {other:?}")
+            }
+        }
+    }
+
+    /// FEAT-038 SOUNDNESS REGRESSION (clean-room #2/#3): scry captures only
+    /// memory index 0 and does not model multi-memory, so `memory.size` in a
+    /// module with >1 memory is ⊤ (never memory 0's bounds reused for another
+    /// memidx, and never an imported memory 0's min clobbered by a defined one).
+    #[test]
+    fn feat038_multimemory_is_top() {
+        // memidx 1 read against a 2-memory module ⇒ ⊤ (Unknown), not [1,..].
+        let v = memory_size_value(
+            "(module (memory 1 5) (memory 3 9) (func (result i32) memory.size 1))",
+        );
+        assert!(
+            matches!(v, AbstractValue::Unknown),
+            "multi-memory memory.size must be ⊤ (only index 0 of a single-memory \
+             module is modelled), got {v:?}"
+        );
     }
 
     /// FEAT-034: scry determines its OWN fusion premises (verify-not-trust):

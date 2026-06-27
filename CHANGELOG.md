@@ -7,6 +7,47 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-06-27
+
+Headline: **`memory.size` / `memory.grow` modelled; verified `bounded_memory`
+makes `memory.size` a constant (FEAT-038, scry#70).** Spends the FEAT-034
+premise: a function that touches memory ops no longer collapses to ⊤.
+
+### Changed — FEAT-038 (traces REQ-001, G-005, FEAT-034)
+
+- `memory.size` and `memory.grow` are now modelled in the interpreter instead
+  of falling to the unsupported-op fallback, which **scrubbed the whole function
+  to ⊤** (every local degraded). Any function reading memory size or growing
+  memory now keeps its interval / region / known-bits invariants.
+- `memory.size` returns the current size in **pages**; memory never shrinks, so
+  it is `[initial, max]` — and the **exact constant `initial`** only when the
+  memory is provably fixed: **module-private** (not imported, exported, or
+  shared) AND no `memory.grow` in any defined function (scry's own check,
+  verify-not-trust). Then only this module's defined code could grow it, which
+  the grow-free check rules out — so a fixed-memory module gets `memory.size` as
+  a usable constant for bounds-check elision. An **imported** memory uses its
+  declared minimum as the sound lower bound (never `[0,0]`); an imported /
+  exported / shared memory is never collapsed to a constant (the host or another
+  thread may grow it). A **64-bit memory** uses the 2⁴⁸-page ceiling (not the
+  memory32 65536) and returns an i64; `memory.size`/`memory.grow` are modelled
+  precisely only for the single-memory, memidx-0 case — a multi-memory module
+  or a non-zero memidx is ⊤. [four clean-room soundness findings, fixed before
+  merge]
+- `memory.grow(delta)` evaluates to the sound bounded interval `[-1, max]` (the
+  previous size on success, `-1` on failure); it mutates linear memory, not
+  locals, so it no longer degrades the function.
+
+### Posture
+
+- Behavioral precision only — no API, WIT, or frozen-JSON-contract change.
+- **Falsification statement.** scry claims `memory.size` ∈ `[initial, max]` on
+  every run (and `= initial` under verified `bounded_memory`), and
+  `memory.grow` ∈ `[-1, max]`. FALSE if memory could exceed `max` pages, or if
+  `memory.size` returned a value outside that range, or if `bounded_memory` were
+  asserted while a reachable `memory.grow` exists (cross-checked + rejected per
+  FEAT-034). Falsifier: a fixture whose concrete `memory.size`/`grow` result
+  falls outside the reported interval.
+
 ## [2.3.0] — 2026-06-26
 
 Headline: **known-bits × interval-guarded congruence reduced product
