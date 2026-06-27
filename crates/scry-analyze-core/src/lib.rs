@@ -1454,7 +1454,7 @@ pub fn analyze(
     // `table_contents_unknown` is set, `contents_known` is
     // cleared so every `call_indirect` over-approximates to the
     // whole table.
-    let func_table = if !table_section_seen || !table0_is_funcref {
+    let mut func_table = if !table_section_seen || !table0_is_funcref {
         // No (funcref) table → no resolvable call_indirect target.
         FuncTable::empty()
     } else {
@@ -1561,6 +1561,31 @@ pub fn analyze(
             });
             defined_func_idx = defined_func_idx.saturating_add(1);
         }
+    }
+
+    // FEAT-043 soundness (clean-room #4): the static element-segment shape
+    // tells us the table's *initial* contents, but a Wasm table is mutable
+    // module-global state. If ANY defined function can write table 0
+    // (`table.set` / `table.fill` / `table.grow` on it, or it is the
+    // destination of a `table.copy` / `table.init`), a slot resolved from
+    // the active segments may be overwritten at runtime with a deeper-framed
+    // callee — so the resolved `call_indirect` target (and its stack frame)
+    // is no longer a sound enumeration. Clear `contents_known` so every
+    // downstream consumer (resolved stack weighting, interpret-time
+    // resolution, and the `compute_stack_usage` Unknown guard) falls back to
+    // the conservative whole-table over-approximation / Unknown.
+    let table0_mutated = defined_funcs.iter().any(|f| {
+        f.ops.iter().any(|op| match op {
+            Operator::TableSet { table }
+            | Operator::TableFill { table }
+            | Operator::TableGrow { table }
+            | Operator::TableInit { table, .. } => *table == 0,
+            Operator::TableCopy { dst_table, .. } => *dst_table == 0,
+            _ => false,
+        })
+    });
+    if table0_mutated {
+        func_table.contents_known = false;
     }
 
     // ───────────────────────────────────────────────────────────
@@ -1881,12 +1906,23 @@ pub fn analyze(
 
     // FEAT-021 slice-1: worst-case shadow-stack bound, reusing the FEAT-006/007
     // call graph + Tarjan SCCs computed above for the summary pass.
+    // FEAT-043: weight the stack longest-path by the resolved call_indirect
+    // targets (not the whole table) for functions interpreted without a gap;
+    // recursion + topo stay on the conservative `static_callees`.
+    let stack_callees = resolved_stack_callees(
+        defined_funcs.len(),
+        &static_callees,
+        &call_graph,
+        &gaps,
+        import_func_count,
+    );
     let stack_usage = compute_stack_usage(
         &defined_funcs,
-        &static_callees,
+        &stack_callees,
         &sccs_reverse_topo_order(&sccs),
         &recursive_flags,
         resolve_sp_global(&mutable_i32_globals),
+        func_table.contents_known,
     );
     if config.emit_diagnostics {
         let msg = match stack_usage.max_stack_bytes {
@@ -3223,10 +3259,24 @@ impl Interp<'_, '_> {
             let _ = ctx.operand_stack.pop();
         }
         let written = region_write_set(self.ops, opener + 1, end);
-        // FEAT-040: an unmodelled control-flow region that actually widens a
-        // local to ⊤ is a (partial) give-up — record it so the gap report
-        // reflects write-set havoc, not only the full-function scrubs.
-        if !written.is_empty() {
+        // FEAT-040 / FEAT-043: an unmodelled control-flow region is a give-up
+        // worth a gap when it either widens a local to ⊤ (write-set non-empty)
+        // OR contains a CALL — havoc does not interpret the region body, so any
+        // call inside it is NEVER recorded in `call_graph`. Recording the gap
+        // keeps the invariant "a gap-free function's call_graph is COMPLETE",
+        // which `resolved_stack_callees` (FEAT-043) and the gap report rely on;
+        // without it, a void call (empty write-set) inside an `if` would be
+        // silently dropped from the stack weighting (clean-room finding).
+        let region_has_call = self.ops[opener + 1..end].iter().any(|op| {
+            matches!(
+                op,
+                Operator::Call { .. }
+                    | Operator::CallIndirect { .. }
+                    | Operator::ReturnCall { .. }
+                    | Operator::ReturnCallIndirect { .. }
+            )
+        });
+        if !written.is_empty() || region_has_call {
             ctx.gaps.push(Gap {
                 func_index: self.func_index,
                 pc: opener as u32,
@@ -3386,13 +3436,21 @@ fn build_static_call_graph(
         let mut callees: Vec<usize> = Vec::new();
         for op in &func.ops {
             match op {
-                Operator::Call { function_index } if *function_index >= import_func_count => {
+                // Direct call AND direct TAIL call (`return_call`): both transfer
+                // to the target; a tail call does NOT tear down the caller's
+                // shadow frame first, so the callee's frame is live on top of the
+                // caller's — a regular call edge for the longest-path. (FEAT-043
+                // clean-room: omitting return_call here under-counted the stack
+                // AND missed tail-recursive cycles.)
+                Operator::Call { function_index } | Operator::ReturnCall { function_index }
+                    if *function_index >= import_func_count =>
+                {
                     let d = (*function_index - import_func_count) as usize;
                     if d < defined_funcs.len() && !callees.contains(&d) {
                         callees.push(d);
                     }
                 }
-                Operator::CallIndirect { .. } => {
+                Operator::CallIndirect { .. } | Operator::ReturnCallIndirect { .. } => {
                     for &t in &table_targets {
                         if !callees.contains(&t) {
                             callees.push(t);
@@ -3704,17 +3762,109 @@ fn detect_frame(ops: &[Operator<'_>], sp: SpGlobal) -> StackBound {
 /// folded callees-first over the call-graph reverse-topological order;
 /// recursion SCCs are `Unbounded`. The overall bound is the max over all
 /// functions (any may be an entry point — sound).
+/// FEAT-043 (DD-016 slice-3): the per-defined-function callee set used to WEIGHT
+/// the worst-case shadow-stack longest-path — tightened to the RESOLVED
+/// `call_indirect` target set (FEAT-006's index-interval resolution) instead of
+/// the whole table, for functions scry interpreted COMPLETELY (no FEAT-040 gap).
+///
+/// Soundness: a gap-free function was fully interpreted, so every call it makes
+/// is in `call_graph` (havoc_region records a gap whenever it skips a region
+/// containing a call — FEAT-040, so the no-gap ⟹ complete-call_graph invariant
+/// holds), and each edge's `resolved_targets` is a sound superset of the
+/// MATERIALIZED-table targets — equal to the whole-table set when the index is
+/// unconstrained. A function WITH a gap (it degraded, or a control region with a
+/// call/write was havocked) falls back to the conservative whole-table
+/// `static_callees`. Recursion detection + the topo order stay on
+/// `static_callees` (conservative) — this only tightens the WEIGHTING.
+///
+/// KNOWN LIMITATION (pre-existing, shared with `static_callees`/reachability,
+/// NOT introduced here): scry's static table model (`FuncTable.entries`) holds
+/// only ACTIVE-segment functions, so a `call_indirect` against a table populated
+/// by a passive/declared element segment under-reports its targets in BOTH
+/// graphs — a FEAT-036-class gap tracked separately. FEAT-043 is no less sound
+/// than the prior whole-table weighting on that case.
+fn resolved_stack_callees(
+    n: usize,
+    static_callees: &[Vec<usize>],
+    call_graph: &[CallEdge],
+    gaps: &[Gap],
+    import_func_count: u32,
+) -> Vec<Vec<usize>> {
+    let to_defined = |abs: u32| -> Option<usize> {
+        if abs >= import_func_count {
+            let d = (abs - import_func_count) as usize;
+            (d < n).then_some(d)
+        } else {
+            None // imports are out of the (guest) shadow-stack graph
+        }
+    };
+    let mut gapped = alloc::vec![false; n];
+    for g in gaps {
+        if let Some(d) = to_defined(g.func_index) {
+            gapped[d] = true;
+        }
+    }
+    let mut resolved: Vec<alloc::collections::BTreeSet<usize>> =
+        alloc::vec![alloc::collections::BTreeSet::new(); n];
+    for e in call_graph {
+        let Some(f) = to_defined(e.caller_func) else {
+            continue;
+        };
+        if gapped[f] {
+            continue;
+        }
+        for &t in &e.resolved_targets {
+            if let Some(d) = to_defined(t) {
+                resolved[f].insert(d);
+            }
+        }
+    }
+    (0..n)
+        .map(|f| {
+            if gapped[f] {
+                static_callees.get(f).cloned().unwrap_or_default()
+            } else {
+                resolved[f].iter().copied().collect()
+            }
+        })
+        .collect()
+}
+
 fn compute_stack_usage(
     defined_funcs: &[DefinedFunc<'_>],
-    static_callees: &[Vec<usize>],
+    stack_callees: &[Vec<usize>],
     reverse_topo: &[usize],
     recursive_flags: &[bool],
     sp: SpGlobal,
+    table0_contents_known: bool,
 ) -> StackUsage {
     let n = defined_funcs.len();
     let frames: Vec<StackBound> = defined_funcs
         .iter()
         .map(|f| detect_frame(&f.ops, sp))
+        .collect();
+    // FEAT-043 soundness: a function whose indirect dispatch scry CANNOT
+    // ENUMERATE calls a target neither the resolved nor the whole-table graph
+    // covers, so its stack contribution is UNKNOWN — not a false finite bound:
+    //   * `call_ref` / `return_call_ref` — an arbitrary funcref;
+    //   * `call_indirect` / `return_call_indirect` against a table scry does not
+    //     model (`table_index != 0`), or against table 0 whose contents are not
+    //     fully known (passive/declared elem, non-constant offsets) — then
+    //     `resolve_range` under-reports and the whole-table fallback is empty.
+    // A `call_indirect` against a FULLY-KNOWN table 0 is enumerable (resolved /
+    // whole-table) and stays finite. (Clean-room: multi-table + passive-elem.)
+    let has_unresolvable_call: Vec<bool> = defined_funcs
+        .iter()
+        .map(|f| {
+            f.ops.iter().any(|op| match op {
+                Operator::CallRef { .. } | Operator::ReturnCallRef { .. } => true,
+                Operator::CallIndirect { table_index, .. }
+                | Operator::ReturnCallIndirect { table_index, .. } => {
+                    *table_index != 0 || !table0_contents_known
+                }
+                _ => false,
+            })
+        })
         .collect();
     let mut max_stack: Vec<StackBound> = alloc::vec![StackBound::Bytes(0); n];
     for &f in reverse_topo {
@@ -3725,8 +3875,12 @@ fn compute_stack_usage(
             max_stack[f] = StackBound::Unbounded;
             continue;
         }
+        if has_unresolvable_call[f] {
+            max_stack[f] = StackBound::Unknown;
+            continue;
+        }
         let mut callee = StackBound::Bytes(0);
-        for &c in &static_callees[f] {
+        for &c in &stack_callees[f] {
             if c < n {
                 callee = sb_max(callee, max_stack[c]);
             }
@@ -4052,6 +4206,21 @@ fn interpret_op(
                 AbstractValue::Unknown
             };
             ctx.operand_stack.push(value);
+        }
+        Operator::GlobalGet { .. } => {
+            // FEAT-043: globals are not tracked in the interval domain, so a
+            // read yields ⊤ (sound). Crucially this does NOT degrade the
+            // function — previously `global.get` fell to the `other` fallback
+            // and scrubbed every local to ⊤, so any function with a stack
+            // prologue (which reads the SP global) lost all its analysis AND its
+            // `call_indirect` index resolution. Modelling it as a ⊤-push keeps
+            // the rest of the function analyzed.
+            ctx.operand_stack.push(AbstractValue::Unknown);
+        }
+        Operator::GlobalSet { .. } => {
+            // Writing a global consumes one operand and changes only that
+            // (untracked) global — locals/stack are unaffected (sound).
+            let _ = ctx.operand_stack.pop();
         }
         other => {
             // Anything outside the supported set: emit a fallback
@@ -5684,6 +5853,189 @@ mod tests {
         assert!(
             r.invariants.points.iter().all(|p| p.relational.is_empty()),
             "a non-relational function must surface no relational constraints"
+        );
+    }
+
+    /// FEAT-043 (DD-016 slice-3): the stack longest-path weights a
+    /// `call_indirect` by its RESOLVED target (a constant index → one table
+    /// entry), not the whole table. The entry (frame 8) calls table[0]=$small
+    /// (frame 16), so its bound is 8+16=24 — NOT 8+max(16,64)=72 that the
+    /// whole-table over-approximation would give.
+    #[test]
+    fn feat043_indirect_stack_weighted_by_resolved_target() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (table 2 2 funcref) (elem (i32.const 0) 0 1) \
+               (type $t (func)) \
+               (func \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 global.get $sp i32.const 16 i32.add global.set $sp) \
+               (func \
+                 global.get $sp i32.const 64 i32.sub global.set $sp \
+                 global.get $sp i32.const 64 i32.add global.set $sp) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 8 i32.sub global.set $sp \
+                 i32.const 0 call_indirect (type $t) \
+                 global.get $sp i32.const 8 i32.add global.set $sp))",
+        );
+        let entry = r
+            .stack_usage
+            .functions
+            .iter()
+            .find(|f| f.func_index == 2)
+            .expect("entry function stack record");
+        assert_eq!(
+            entry.max_stack,
+            StackBound::Bytes(24),
+            "entry must be weighted by the RESOLVED target $small (8+16=24), not the \
+             whole-table max (8+64=72); got {:?}",
+            entry.max_stack
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room): a call inside an `if` region
+    /// (write-set EMPTY — a void call) is havocked, so its edge is never in
+    /// call_graph. Without recording a gap for the call-bearing region, the
+    /// function looks gap-free and resolved_stack_callees would drop $big from
+    /// the weighting → under-count (256 instead of 264). The havoc-region gap
+    /// must force the conservative fallback, restoring the sound 264.
+    #[test]
+    fn feat043_call_in_havocked_if_not_dropped() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (func \
+                 global.get $sp i32.const 256 i32.sub global.set $sp \
+                 global.get $sp i32.const 256 i32.add global.set $sp) \
+               (func (export \"entry\") (param i32) \
+                 global.get $sp i32.const 8 i32.sub global.set $sp \
+                 local.get 0 (if (then call 0)) \
+                 global.get $sp i32.const 8 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Bytes(264),
+            "a void call inside an if must still contribute its callee's frame \
+             (8 + 256 = 264, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #4): a non-growable, active-
+    /// elem table-0 looks contents-known from its declaration, but a runtime
+    /// `table.set` (or table.copy/fill/init/grow) can overwrite a slot with a
+    /// deeper-framed callee. Resolving the call_indirect to the *declared*
+    /// target then under-counts the stack. Any table-0 mutation must demote the
+    /// table to contents-unknown so the dispatch becomes Unknown.
+    #[test]
+    fn feat043_runtime_table_mutation_is_unknown() {
+        // table 0 is (table 1 1 funcref) — non-growable, active elem slot0=$small —
+        // but `entry` overwrites slot0 with $big (frame 4096) via table.set before
+        // dispatching. The true peak is entry(4096)+$big(4096); the declared
+        // resolution would see only $small(16).
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 1048576)) \
+               (table 1 1 funcref) (elem (i32.const 0) func 0) \
+               (type $ft (func)) \
+               (func $small (type $ft) \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 global.get $sp i32.const 16 i32.add global.set $sp) \
+               (func $big (export \"big\") (type $ft) \
+                 global.get $sp i32.const 4096 i32.sub global.set $sp \
+                 global.get $sp i32.const 4096 i32.add global.set $sp) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 4096 i32.sub global.set $sp \
+                 i32.const 0 ref.func $big table.set 0 \
+                 i32.const 0 call_indirect (type $ft) \
+                 global.get $sp i32.const 4096 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unknown,
+            "a runtime table.set demotes table-0 to contents-unknown; the dispatch \
+             must be Unknown, not a finite under-count; got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #3): a `call_indirect` against
+    /// a table scry cannot enumerate — a non-zero table index, or a GROWABLE /
+    /// passive-populated table-0 (contents not fully known) — must yield Unknown,
+    /// not a false finite bound that drops the dispatched callee's frame.
+    #[test]
+    fn feat043_unenumerable_indirect_is_unknown() {
+        // call_indirect against table 1 (scry models only table 0).
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (table $t0 1 1 funcref) (table $t1 1 1 funcref) \
+               (elem (table $t1) (i32.const 0) func 0) \
+               (type $ft (func)) \
+               (func \
+                 global.get $sp i32.const 256 i32.sub global.set $sp \
+                 global.get $sp i32.const 256 i32.add global.set $sp) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 512 i32.sub global.set $sp \
+                 i32.const 0 call_indirect $t1 (type $ft) \
+                 global.get $sp i32.const 512 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unknown,
+            "an unenumerable (table 1) call_indirect must be Unknown, not a finite \
+             under-count; got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #2): a `return_call` (tail
+    /// call) was never matched by build_static_call_graph, so its callee was
+    /// dropped from the stack weighting (and from recursion/reachability). A
+    /// tail call keeps the caller's shadow frame live, so entry(8) → mid(16)
+    /// →return_call→ big(256) peaks at 280 — not 256.
+    #[test]
+    fn feat043_tail_call_counted_in_stack() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (func \
+                 global.get $sp i32.const 256 i32.sub global.set $sp \
+                 global.get $sp i32.const 256 i32.add global.set $sp) \
+               (func \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 return_call 0) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 8 i32.sub global.set $sp \
+                 call 1 \
+                 global.get $sp i32.const 8 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Bytes(280),
+            "tail call must contribute its callee's frame (8+16+256=280, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #2b): a self `return_call`
+    /// (tail recursion) must be flagged recursive ⇒ Unbounded, not a finite
+    /// bound (recursion detection rides static_callees, which now sees the
+    /// return_call self-edge).
+    #[test]
+    fn feat043_tail_recursion_is_unbounded() {
+        let r = analyze_default(
+            "(module (global $sp (mut i32) (i32.const 65536)) \
+               (func (export \"loop_tail\") \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 return_call 0))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unbounded,
+            "tail recursion must be Unbounded, got {:?}",
+            r.stack_usage.max_stack_bytes
         );
     }
 

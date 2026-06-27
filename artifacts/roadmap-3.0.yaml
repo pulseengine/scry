@@ -194,7 +194,7 @@ artifacts:
   - id: FEAT-043
     type: feature
     title: "v2.6 — call_indirect target-set weighting for the shadow-stack bound (FEAT-021 slice-3)"
-    status: proposed
+    status: accepted
     release: v2.6.0
     description: >
       DD-016 slice-3: weight an indirect call in the worst-case shadow-stack
