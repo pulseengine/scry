@@ -404,6 +404,11 @@ pub enum GapKind {
     /// An operator outside scry's modelled set: the function's abstract state
     /// is scrubbed to ⊤ (sound, but no further facts are learned in it).
     UnsupportedOp,
+    /// An unmodelled multi-target branch (`br_table`): control flow scrubbed.
+    UnmodeledBranch,
+    /// A memory access on a non-i32-shaped address operand: region state
+    /// scrubbed to ⊤ (the address could alias anywhere — sound fallback).
+    UnmodeledMemoryAddress,
 }
 
 /// FEAT-037: a known-bits / congruence fact about one local at one program
@@ -809,7 +814,15 @@ impl FuncCtx {
     /// we hit any operator outside the v0.2 AC#1 supported set —
     /// soundness over precision (REQ-001 / DD-005). The octagon is reset to
     /// `top` too (all relations forgotten — sound).
-    fn scrub_to_top(&mut self) {
+    ///
+    /// FEAT-040: every degradation MUST record a [`Gap`] (passed in), so no
+    /// function can silently degrade to ⊤ — the gap report is complete. The
+    /// `degraded` early-return elsewhere means only the FIRST scrub records a
+    /// gap (subsequent ops are skipped), which is the give-up point we want.
+    fn scrub_to_top(&mut self, gap: Gap) {
+        if !self.degraded {
+            self.gaps.push(gap);
+        }
         for slot in self.locals.iter_mut() {
             *slot = AbstractValue::I32Interval(domain::top());
         }
@@ -2755,7 +2768,12 @@ impl Interp<'_, '_> {
                 }
                 Operator::BrTable { .. } => {
                     // Unmodelled multi-target branch: sound fallback.
-                    ctx.scrub_to_top();
+                    ctx.scrub_to_top(Gap {
+                        func_index: self.func_index,
+                        pc: pc as u32,
+                        op: "br_table".to_string(),
+                        kind: GapKind::UnmodeledBranch,
+                    });
                     return Ok(Flow::Diverged);
                 }
                 _ => {}
@@ -3945,17 +3963,15 @@ fn interpret_op(
                     ),
                 });
             }
-            // FEAT-040: record the gap unconditionally (the function is about to
-            // degrade to ⊤). The `degraded` early-return means this fires once
-            // per function — at the first unsupported op, the point where scry
-            // gave up — which is exactly the scope/limitation signal we want.
-            ctx.gaps.push(Gap {
+            // FEAT-040: scrub_to_top records the gap (the function degrades to
+            // ⊤ here). The `degraded` early-return means this fires once per
+            // function — at the first unsupported op, the give-up point.
+            ctx.scrub_to_top(Gap {
                 func_index,
                 pc,
                 op: op_report_name(other),
                 kind: GapKind::UnsupportedOp,
             });
-            ctx.scrub_to_top();
         }
     }
     Ok(StepOutcome::Continue)
@@ -4092,7 +4108,12 @@ fn handle_memory_load(
                 ),
             });
         }
-        ctx.scrub_to_top();
+        ctx.scrub_to_top(Gap {
+            func_index,
+            pc,
+            op: op_label.to_string(),
+            kind: GapKind::UnmodeledMemoryAddress,
+        });
         return Ok(());
     };
 
@@ -4193,7 +4214,12 @@ fn handle_memory_store(
                 ),
             });
         }
-        ctx.scrub_to_top();
+        ctx.scrub_to_top(Gap {
+            func_index,
+            pc,
+            op: op_label.to_string(),
+            kind: GapKind::UnmodeledMemoryAddress,
+        });
         return Ok(());
     };
 
@@ -6080,6 +6106,27 @@ mod tests {
             "gap should name the unsupported op (f64.*), got {:?}",
             g.op
         );
+    }
+
+    /// FEAT-040 completeness: a non-unsupported-op degradation (an unmodelled
+    /// `br_table`) is ALSO recorded — degradation can't be silent (scrub_to_top
+    /// requires a Gap by signature).
+    #[test]
+    fn feat040_br_table_recorded_as_gap() {
+        let r = analyze_default(
+            "(module (func (param i32) (block (block \
+               local.get 0 br_table 0 1 0))))",
+        );
+        let g = r.gaps.iter().find(|g| g.func_index == 0);
+        if let Some(g) = g {
+            assert_eq!(
+                g.kind,
+                GapKind::UnmodeledBranch,
+                "br_table ⇒ UnmodeledBranch gap, got {g:?}"
+            );
+        } else {
+            panic!("br_table must record a gap; gaps={:?}", r.gaps);
+        }
     }
 
     /// FEAT-040: a fully-modelled function produces NO gaps (no false "gave up").
