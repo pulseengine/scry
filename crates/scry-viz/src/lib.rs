@@ -31,7 +31,7 @@ use core::fmt::Write as _;
 
 use scry_analyze_core::{
     AbstractValue, AnalysisResult, Diagnostic, DiagnosticSeverity, FunctionMeta, FunctionStack,
-    Interval, Region, SecurityLabel, SoundnessTag, StackBound, TaintFindingKind,
+    GapKind, Interval, Region, SecurityLabel, SoundnessTag, StackBound, TaintFindingKind,
 };
 
 /// FEAT-027: metadata for one function index, if scry resolved any.
@@ -156,6 +156,7 @@ pub fn render_html(result: &AnalysisResult, title: &str) -> String {
     render_functions(&mut s, result);
     render_call_graph(&mut s, result);
     render_diagnostics(&mut s, &result.diagnostics);
+    render_gaps(&mut s, result);
     render_taint(&mut s, result);
     render_provenance(&mut s, result);
     render_points(&mut s, result);
@@ -247,6 +248,7 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
     kv(s, "recursive functions", &recursive.to_string());
     kv(s, "call-graph edges", &r.call_graph.len().to_string());
     kv(s, "diagnostics", &r.diagnostics.len().to_string());
+    kv(s, "analysis gaps", &r.gaps.len().to_string());
     kv(s, "program points", &points.to_string());
     // FEAT-034: scry's own verified fusion premises (independent of meld).
     let vp = &r.verified_premises;
@@ -614,6 +616,40 @@ fn truncate_label(label: &str, max: usize) -> String {
         out.push('…');
         out
     }
+}
+
+/// FEAT-040: analysis gaps — the explicit "scry was conservative here" sites
+/// (an unsupported op that degraded a function to ⊤). Rendered as a structured
+/// table so an assessor (the qualification scope/limitation statement) or an AI
+/// agent reads the gaps as DATA, not as the silence of an absent fact.
+fn render_gaps(s: &mut String, r: &AnalysisResult) {
+    s.push_str("<section><h2>Analysis gaps</h2>");
+    if r.gaps.is_empty() {
+        s.push_str("<p class=\"empty\">No gaps — every analyzed function stayed within scry's modelled set.</p></section>");
+        return;
+    }
+    let _ = write!(
+        s,
+        "<p>{} site(s) where scry degraded a function to \u{22a4} (gave up).</p><ul class=\"diags\">",
+        r.gaps.len(),
+    );
+    for g in &r.gaps {
+        let kind = match g.kind {
+            GapKind::UnsupportedOp => "unsupported-op",
+            GapKind::UnmodeledBranch => "unmodeled-branch",
+            GapKind::UnmodeledMemoryAddress => "unmodeled-memory-address",
+            GapKind::UnmodeledControlFlow => "unmodeled-control-flow",
+        };
+        let _ = write!(
+            s,
+            "<li class=\"err\"><span class=\"sev\">{kind}</span> \
+             <code>fn{}:{}</code> {}</li>",
+            g.func_index,
+            g.pc,
+            esc(&g.op),
+        );
+    }
+    s.push_str("</ul></section>");
 }
 
 fn render_diagnostics(s: &mut String, diags: &[Diagnostic]) {

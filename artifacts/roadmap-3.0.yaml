@@ -127,7 +127,7 @@ artifacts:
   - id: FEAT-040
     type: feature
     title: "v2.6 — Machine-readable gap records + aggregated gap report"
-    status: proposed
+    status: accepted
     release: v2.6.0
     description: >
       Stop emitting top as silence. Emit a positive Gap{function, pc, op, kind,
