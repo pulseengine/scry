@@ -1454,7 +1454,7 @@ pub fn analyze(
     // `table_contents_unknown` is set, `contents_known` is
     // cleared so every `call_indirect` over-approximates to the
     // whole table.
-    let func_table = if !table_section_seen || !table0_is_funcref {
+    let mut func_table = if !table_section_seen || !table0_is_funcref {
         // No (funcref) table → no resolvable call_indirect target.
         FuncTable::empty()
     } else {
@@ -1561,6 +1561,31 @@ pub fn analyze(
             });
             defined_func_idx = defined_func_idx.saturating_add(1);
         }
+    }
+
+    // FEAT-043 soundness (clean-room #4): the static element-segment shape
+    // tells us the table's *initial* contents, but a Wasm table is mutable
+    // module-global state. If ANY defined function can write table 0
+    // (`table.set` / `table.fill` / `table.grow` on it, or it is the
+    // destination of a `table.copy` / `table.init`), a slot resolved from
+    // the active segments may be overwritten at runtime with a deeper-framed
+    // callee — so the resolved `call_indirect` target (and its stack frame)
+    // is no longer a sound enumeration. Clear `contents_known` so every
+    // downstream consumer (resolved stack weighting, interpret-time
+    // resolution, and the `compute_stack_usage` Unknown guard) falls back to
+    // the conservative whole-table over-approximation / Unknown.
+    let table0_mutated = defined_funcs.iter().any(|f| {
+        f.ops.iter().any(|op| match op {
+            Operator::TableSet { table }
+            | Operator::TableFill { table }
+            | Operator::TableGrow { table }
+            | Operator::TableInit { table, .. } => *table == 0,
+            Operator::TableCopy { dst_table, .. } => *dst_table == 0,
+            _ => false,
+        })
+    });
+    if table0_mutated {
+        func_table.contents_known = false;
     }
 
     // ───────────────────────────────────────────────────────────
@@ -5893,6 +5918,44 @@ mod tests {
             StackBound::Bytes(264),
             "a void call inside an if must still contribute its callee's frame \
              (8 + 256 = 264, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #4): a non-growable, active-
+    /// elem table-0 looks contents-known from its declaration, but a runtime
+    /// `table.set` (or table.copy/fill/init/grow) can overwrite a slot with a
+    /// deeper-framed callee. Resolving the call_indirect to the *declared*
+    /// target then under-counts the stack. Any table-0 mutation must demote the
+    /// table to contents-unknown so the dispatch becomes Unknown.
+    #[test]
+    fn feat043_runtime_table_mutation_is_unknown() {
+        // table 0 is (table 1 1 funcref) — non-growable, active elem slot0=$small —
+        // but `entry` overwrites slot0 with $big (frame 4096) via table.set before
+        // dispatching. The true peak is entry(4096)+$big(4096); the declared
+        // resolution would see only $small(16).
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 1048576)) \
+               (table 1 1 funcref) (elem (i32.const 0) func 0) \
+               (type $ft (func)) \
+               (func $small (type $ft) \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 global.get $sp i32.const 16 i32.add global.set $sp) \
+               (func $big (export \"big\") (type $ft) \
+                 global.get $sp i32.const 4096 i32.sub global.set $sp \
+                 global.get $sp i32.const 4096 i32.add global.set $sp) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 4096 i32.sub global.set $sp \
+                 i32.const 0 ref.func $big table.set 0 \
+                 i32.const 0 call_indirect (type $ft) \
+                 global.get $sp i32.const 4096 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unknown,
+            "a runtime table.set demotes table-0 to contents-unknown; the dispatch \
+             must be Unknown, not a finite under-count; got {:?}",
             r.stack_usage.max_stack_bytes
         );
     }
