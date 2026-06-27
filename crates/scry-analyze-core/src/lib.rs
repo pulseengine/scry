@@ -372,16 +372,24 @@ pub struct AnalysisResult {
     /// the frozen v1 JSON contract), like [`AnalysisResult::function_meta`].
     /// Only non-⊤ facts are emitted (a ⊤ fact carries no information).
     pub bit_facts: Vec<BitFact>,
-    /// FEAT-040 (REQ-017): explicit, machine-readable record of every place the
-    /// analysis was conservative — an unsupported operator that degraded the
-    /// function's abstract state to ⊤. Where the rest of the result emits ⊤ as
+    /// FEAT-040 (REQ-017): explicit, machine-readable records of the places the
+    /// interval/region interpreter was CONSERVATIVE — every site where it either
+    /// degraded a whole function to ⊤ (an unsupported op, a `br_table`, or a
+    /// non-i32-shaped memory address — the [`FuncCtx::scrub_to_top`] sites,
+    /// enforced complete by that method's signature) OR fell back to write-set
+    /// havoc of an unmodelled control-flow region (a typed `if` / non-empty
+    /// block-type — a partial give-up). Where the rest of the result emits ⊤ as
     /// *silence* (an unanalyzed point produces no record), this enumerates the
-    /// "scry gave up here" sites so an assessor (the qualification scope/
-    /// limitation statement) or an AI agent can see them directly. Sorted by
-    /// `(func_index, pc)`. Library-only, and emitted regardless of
-    /// `emit_diagnostics`. (Slice-1 covers the unsupported-op fallback — the
-    /// primary degradation site; future slices add operand-stack-havoc and
-    /// memory-fallback gap kinds.)
+    /// "scry was conservative here" sites so an assessor (the qualification
+    /// scope/limitation statement) or an AI agent can see them directly. Sorted
+    /// by `(func_index, pc)`. Library-only, emitted regardless of
+    /// `emit_diagnostics`.
+    ///
+    /// SCOPE (honest bounds): this covers the interval/region INTERPRETER. It
+    /// does NOT enumerate (a) ordinary loop widening to ⊤ — that is normal sound
+    /// abstraction, not a give-up; (b) the separate `bit_facts` / taint passes'
+    /// own conservative stops; (c) imported functions (never analyzed). Those
+    /// are sound but out of this report's scope.
     pub gaps: Vec<Gap>,
 }
 
@@ -409,6 +417,11 @@ pub enum GapKind {
     /// A memory access on a non-i32-shaped address operand: region state
     /// scrubbed to ⊤ (the address could alias anywhere — sound fallback).
     UnmodeledMemoryAddress,
+    /// An unmodelled control-flow region (a typed `if`, or a non-empty
+    /// block-type `block`) handled by write-set havoc: the locals the region
+    /// writes are widened to ⊤ (the rest stay precise — a PARTIAL give-up,
+    /// unlike the full-function scrubs above). FEAT-016 fallback.
+    UnmodeledControlFlow,
 }
 
 /// FEAT-037: a known-bits / congruence fact about one local at one program
@@ -3147,6 +3160,17 @@ impl Interp<'_, '_> {
             let _ = ctx.operand_stack.pop();
         }
         let written = region_write_set(self.ops, opener + 1, end);
+        // FEAT-040: an unmodelled control-flow region that actually widens a
+        // local to ⊤ is a (partial) give-up — record it so the gap report
+        // reflects write-set havoc, not only the full-function scrubs.
+        if !written.is_empty() {
+            ctx.gaps.push(Gap {
+                func_index: self.func_index,
+                pc: opener as u32,
+                op: op_report_name(&self.ops[opener]),
+                kind: GapKind::UnmodeledControlFlow,
+            });
+        }
         for idx in &written {
             if let Some(slot) = ctx.locals.get_mut(*idx as usize) {
                 *slot = AbstractValue::I32Interval(domain::top());
@@ -6127,6 +6151,25 @@ mod tests {
         } else {
             panic!("br_table must record a gap; gaps={:?}", r.gaps);
         }
+    }
+
+    /// FEAT-040 completeness (clean-room finding): write-set havoc of an
+    /// unmodelled control-flow region (a typed `if`) is now recorded — it is a
+    /// partial give-up that previously left no gap.
+    #[test]
+    fn feat040_control_flow_havoc_recorded_as_gap() {
+        let r = analyze_default(
+            "(module (func (param i32) (local i32) \
+               i32.const 5 local.set 1 \
+               local.get 0 (if (then i32.const 9 local.set 1))))",
+        );
+        assert!(
+            r.gaps
+                .iter()
+                .any(|g| g.kind == GapKind::UnmodeledControlFlow),
+            "write-set havoc of the if-region must record an UnmodeledControlFlow gap; got {:?}",
+            r.gaps
+        );
     }
 
     /// FEAT-040: a fully-modelled function produces NO gaps (no false "gave up").

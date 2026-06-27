@@ -636,6 +636,9 @@ fn render_gaps(s: &mut String, r: &AnalysisResult) {
     for g in &r.gaps {
         let kind = match g.kind {
             GapKind::UnsupportedOp => "unsupported-op",
+            GapKind::UnmodeledBranch => "unmodeled-branch",
+            GapKind::UnmodeledMemoryAddress => "unmodeled-memory-address",
+            GapKind::UnmodeledControlFlow => "unmodeled-control-flow",
         };
         let _ = write!(
             s,
