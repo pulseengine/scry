@@ -1897,6 +1897,7 @@ pub fn analyze(
         &sccs_reverse_topo_order(&sccs),
         &recursive_flags,
         resolve_sp_global(&mutable_i32_globals),
+        func_table.contents_known,
     );
     if config.emit_diagnostics {
         let msg = match stack_usage.max_stack_bytes {
@@ -3810,25 +3811,33 @@ fn compute_stack_usage(
     reverse_topo: &[usize],
     recursive_flags: &[bool],
     sp: SpGlobal,
+    table0_contents_known: bool,
 ) -> StackUsage {
     let n = defined_funcs.len();
     let frames: Vec<StackBound> = defined_funcs
         .iter()
         .map(|f| detect_frame(&f.ops, sp))
         .collect();
-    // FEAT-043 soundness: a function that dispatches an arbitrary funcref
-    // (`call_ref` / `return_call_ref`, function-references proposal) calls a
-    // target scry cannot enumerate — neither the resolved nor the whole-table
-    // graph covers it — so its stack contribution is UNKNOWN, not a false finite
-    // bound. (Distinct from `call_indirect`, whose targets are the table.)
-    let unresolved_funcref_call: Vec<bool> = defined_funcs
+    // FEAT-043 soundness: a function whose indirect dispatch scry CANNOT
+    // ENUMERATE calls a target neither the resolved nor the whole-table graph
+    // covers, so its stack contribution is UNKNOWN — not a false finite bound:
+    //   * `call_ref` / `return_call_ref` — an arbitrary funcref;
+    //   * `call_indirect` / `return_call_indirect` against a table scry does not
+    //     model (`table_index != 0`), or against table 0 whose contents are not
+    //     fully known (passive/declared elem, non-constant offsets) — then
+    //     `resolve_range` under-reports and the whole-table fallback is empty.
+    // A `call_indirect` against a FULLY-KNOWN table 0 is enumerable (resolved /
+    // whole-table) and stays finite. (Clean-room: multi-table + passive-elem.)
+    let has_unresolvable_call: Vec<bool> = defined_funcs
         .iter()
         .map(|f| {
-            f.ops.iter().any(|op| {
-                matches!(
-                    op,
-                    Operator::CallRef { .. } | Operator::ReturnCallRef { .. }
-                )
+            f.ops.iter().any(|op| match op {
+                Operator::CallRef { .. } | Operator::ReturnCallRef { .. } => true,
+                Operator::CallIndirect { table_index, .. }
+                | Operator::ReturnCallIndirect { table_index, .. } => {
+                    *table_index != 0 || !table0_contents_known
+                }
+                _ => false,
             })
         })
         .collect();
@@ -3841,7 +3850,7 @@ fn compute_stack_usage(
             max_stack[f] = StackBound::Unbounded;
             continue;
         }
-        if unresolved_funcref_call[f] {
+        if has_unresolvable_call[f] {
             max_stack[f] = StackBound::Unknown;
             continue;
         }
@@ -5832,7 +5841,7 @@ mod tests {
         let r = analyze_default(
             "(module \
                (global $sp (mut i32) (i32.const 65536)) \
-               (table 2 funcref) (elem (i32.const 0) 0 1) \
+               (table 2 2 funcref) (elem (i32.const 0) 0 1) \
                (type $t (func)) \
                (func \
                  global.get $sp i32.const 16 i32.sub global.set $sp \
@@ -5884,6 +5893,36 @@ mod tests {
             StackBound::Bytes(264),
             "a void call inside an if must still contribute its callee's frame \
              (8 + 256 = 264, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #3): a `call_indirect` against
+    /// a table scry cannot enumerate — a non-zero table index, or a GROWABLE /
+    /// passive-populated table-0 (contents not fully known) — must yield Unknown,
+    /// not a false finite bound that drops the dispatched callee's frame.
+    #[test]
+    fn feat043_unenumerable_indirect_is_unknown() {
+        // call_indirect against table 1 (scry models only table 0).
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (table $t0 1 1 funcref) (table $t1 1 1 funcref) \
+               (elem (table $t1) (i32.const 0) func 0) \
+               (type $ft (func)) \
+               (func \
+                 global.get $sp i32.const 256 i32.sub global.set $sp \
+                 global.get $sp i32.const 256 i32.add global.set $sp) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 512 i32.sub global.set $sp \
+                 i32.const 0 call_indirect $t1 (type $ft) \
+                 global.get $sp i32.const 512 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unknown,
+            "an unenumerable (table 1) call_indirect must be Unknown, not a finite \
+             under-count; got {:?}",
             r.stack_usage.max_stack_bytes
         );
     }
