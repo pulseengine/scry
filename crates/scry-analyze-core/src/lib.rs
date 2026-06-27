@@ -372,6 +372,38 @@ pub struct AnalysisResult {
     /// the frozen v1 JSON contract), like [`AnalysisResult::function_meta`].
     /// Only non-⊤ facts are emitted (a ⊤ fact carries no information).
     pub bit_facts: Vec<BitFact>,
+    /// FEAT-040 (REQ-017): explicit, machine-readable record of every place the
+    /// analysis was conservative — an unsupported operator that degraded the
+    /// function's abstract state to ⊤. Where the rest of the result emits ⊤ as
+    /// *silence* (an unanalyzed point produces no record), this enumerates the
+    /// "scry gave up here" sites so an assessor (the qualification scope/
+    /// limitation statement) or an AI agent can see them directly. Sorted by
+    /// `(func_index, pc)`. Library-only, and emitted regardless of
+    /// `emit_diagnostics`. (Slice-1 covers the unsupported-op fallback — the
+    /// primary degradation site; future slices add operand-stack-havoc and
+    /// memory-fallback gap kinds.)
+    pub gaps: Vec<Gap>,
+}
+
+/// FEAT-040: one analysis-gap record — a site where scry was conservative.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Gap {
+    /// Absolute function index where the gap occurred.
+    pub func_index: u32,
+    /// Operator index (pc) of the conservative site.
+    pub pc: u32,
+    /// The operator name that triggered the gap (e.g. `f64.add`, `select`).
+    pub op: String,
+    /// What kind of conservative step this is.
+    pub kind: GapKind,
+}
+
+/// FEAT-040: the category of an analysis [`Gap`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GapKind {
+    /// An operator outside scry's modelled set: the function's abstract state
+    /// is scrubbed to ⊤ (sound, but no further facts are learned in it).
+    UnsupportedOp,
 }
 
 /// FEAT-037: a known-bits / congruence fact about one local at one program
@@ -755,6 +787,10 @@ struct FuncCtx {
     /// become uninformative (all-top) and further records would just
     /// be noise.
     degraded: bool,
+    /// FEAT-040: analysis-gap records collected during this function's walk
+    /// (every unsupported-op fallback), drained by the caller in phase 2.
+    /// Independent of `emit_diagnostics` so the gap report is always available.
+    gaps: Vec<Gap>,
 }
 
 impl FuncCtx {
@@ -765,6 +801,7 @@ impl FuncCtx {
             operand_stack: Vec::new(),
             octagon,
             degraded: false,
+            gaps: Vec::new(),
         }
     }
 
@@ -1538,6 +1575,7 @@ pub fn analyze(
                 &mut sink_edges,
                 /*emit_diagnostics=*/ false,
                 /*depth=*/ 0,
+                /*emit_gaps=*/ None,
             )?;
             extract_results(&defined_funcs[defined].results, &result_state)
         };
@@ -1577,6 +1615,7 @@ pub fn analyze(
 
     let mut points: Vec<ProgramPoint> = Vec::new();
     let mut call_graph: Vec<CallEdge> = Vec::new();
+    let mut gaps: Vec<Gap> = Vec::new();
     for func in &defined_funcs {
         let init_locals = top_input_locals(func);
         run_function_body(
@@ -1588,8 +1627,10 @@ pub fn analyze(
             &mut call_graph,
             config.emit_diagnostics,
             /*depth=*/ 0,
+            /*emit_gaps=*/ Some(&mut gaps),
         )?;
     }
+    gaps.sort_by_key(|g| (g.func_index, g.pc));
 
     // ───────────────────────────────────────────────────────────
     // Assemble the per-function-summary output records (FEAT-007).
@@ -1880,6 +1921,7 @@ pub fn analyze(
         function_meta,
         verified_premises,
         bit_facts,
+        gaps,
     })
 }
 
@@ -3138,6 +3180,7 @@ fn run_function_body(
     call_graph: &mut Vec<CallEdge>,
     emit_diagnostics: bool,
     depth: u32,
+    emit_gaps: Option<&mut Vec<Gap>>,
 ) -> Result<Vec<AbstractValue>, AnalyzeError> {
     let mut ctx = FuncCtx::new(init_locals);
     let ops = &func.ops;
@@ -3158,6 +3201,9 @@ fn run_function_body(
     interp.seq(0, ops.len(), &mut ctx, &mut labels, want_points)?;
     if let Some(out) = emit_points {
         out.extend(interp.points);
+    }
+    if let Some(g) = emit_gaps {
+        g.append(&mut ctx.gaps);
     }
     Ok(ctx.operand_stack)
 }
@@ -3899,6 +3945,16 @@ fn interpret_op(
                     ),
                 });
             }
+            // FEAT-040: record the gap unconditionally (the function is about to
+            // degrade to ⊤). The `degraded` early-return means this fires once
+            // per function — at the first unsupported op, the point where scry
+            // gave up — which is exactly the scope/limitation signal we want.
+            ctx.gaps.push(Gap {
+                func_index,
+                pc,
+                op: op_report_name(other),
+                kind: GapKind::UnsupportedOp,
+            });
             ctx.scrub_to_top();
         }
     }
@@ -4382,6 +4438,7 @@ fn handle_call(
             &mut sink_edges,
             /*emit_diagnostics=*/ false,
             depth.saturating_add(1),
+            /*emit_gaps=*/ None,
         )?;
         (
             extract_results(&callee.results, &final_stack),
@@ -5102,6 +5159,22 @@ fn run_taint_analysis(
 /// (full payloads) and tends to balloon diagnostic strings. The set
 /// below is the one we expect to see most often via the fallback
 /// path; anything else falls through to a debug-ish label.
+/// FEAT-040: a human-readable name for ANY operator, for gap records. Uses the
+/// curated [`op_name`] when known, else falls back to the operator's Debug
+/// variant name (e.g. `F64Add`, `V128Const`) so an unsupported op is still
+/// identified in the gap report rather than shown as a generic placeholder.
+fn op_report_name(op: &Operator<'_>) -> String {
+    let n = op_name(op);
+    if n != "<unsupported>" {
+        return n.to_string();
+    }
+    let dbg = alloc::format!("{op:?}");
+    dbg.split([' ', '(', '{'])
+        .next()
+        .unwrap_or("<op>")
+        .to_string()
+}
+
 fn op_name(op: &Operator<'_>) -> &'static str {
     match op {
         Operator::Unreachable => "unreachable",
@@ -5188,6 +5261,7 @@ mod tests {
             function_meta: alloc::vec![],
             verified_premises: FusionPremises::default(),
             bit_facts: alloc::vec![],
+            gaps: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -5982,6 +6056,63 @@ mod tests {
             matches!(v, AbstractValue::Unknown),
             "multi-memory memory.size must be ⊤ (only index 0 of a single-memory \
              module is modelled), got {v:?}"
+        );
+    }
+
+    /// FEAT-040: an unsupported operator that degrades the function to ⊤ is
+    /// recorded as an explicit Gap — not emitted as silence — so an assessor /
+    /// AI agent can enumerate where scry gave up.
+    #[test]
+    fn feat040_unsupported_op_recorded_as_gap() {
+        // f64.add is outside scry's modelled set ⇒ the function degrades to ⊤.
+        let r = analyze_default(
+            "(module (func (param f64 f64) (result f64) \
+               local.get 0 local.get 1 f64.add))",
+        );
+        let g = r
+            .gaps
+            .iter()
+            .find(|g| g.func_index == 0)
+            .expect("a gap for the unsupported f64.add");
+        assert_eq!(g.kind, GapKind::UnsupportedOp);
+        assert!(
+            g.op != "<unsupported>" && g.op.to_lowercase().contains("f64"),
+            "gap should name the unsupported op (f64.*), got {:?}",
+            g.op
+        );
+    }
+
+    /// FEAT-040: a fully-modelled function produces NO gaps (no false "gave up").
+    #[test]
+    fn feat040_modelled_function_has_no_gaps() {
+        let r = analyze_default(
+            "(module (func (param i32) (result i32) local.get 0 i32.const 1 i32.add))",
+        );
+        assert!(
+            r.gaps.is_empty(),
+            "a fully-modelled i32 function must report no gaps, got {:?}",
+            r.gaps
+        );
+    }
+
+    /// FEAT-040: gaps are emitted even with the default config
+    /// (emit_diagnostics = false) — the gap report is independent of verbose
+    /// diagnostics.
+    #[test]
+    fn feat040_gaps_independent_of_emit_diagnostics() {
+        let r = analyze(
+            wat::parse_str("(module (func (result f64) f64.const 1 f64.const 2 f64.add))")
+                .expect("assemble"),
+            AnalysisConfig::default(), // emit_diagnostics = false
+        )
+        .expect("analyze");
+        assert!(
+            !r.gaps.is_empty(),
+            "gaps must populate even with default (no-diagnostics) config"
+        );
+        assert!(
+            r.diagnostics.is_empty(),
+            "default config emits no diagnostics"
         );
     }
 
