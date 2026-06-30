@@ -1867,6 +1867,7 @@ dependencies = [
  "scry-sai-bits",
  "scry-sai-interval",
  "scry-sai-octagon",
+ "scry-sai-pentagon",
  "scry-sai-provenance",
  "scry-sai-taint",
  "sha2",
@@ -1889,6 +1890,10 @@ dependencies = [
 
 [[package]]
 name = "scry-sai-octagon"
+version = "2.6.0"
+
+[[package]]
+name = "scry-sai-pentagon"
 version = "2.6.0"
 
 [[package]]

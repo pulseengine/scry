@@ -31,7 +31,8 @@ use core::fmt::Write as _;
 
 use scry_analyze_core::{
     AbstractValue, AnalysisResult, Diagnostic, DiagnosticSeverity, FunctionMeta, FunctionStack,
-    GapKind, Interval, Region, SecurityLabel, SoundnessTag, StackBound, TaintFindingKind,
+    GapKind, Interval, PentagonBound, Region, SecurityLabel, SoundnessTag, StackBound,
+    TaintFindingKind,
 };
 
 /// FEAT-027: metadata for one function index, if scry resolved any.
@@ -157,6 +158,7 @@ pub fn render_html(result: &AnalysisResult, title: &str) -> String {
     render_call_graph(&mut s, result);
     render_diagnostics(&mut s, &result.diagnostics);
     render_gaps(&mut s, result);
+    render_pentagon_facts(&mut s, result);
     render_taint(&mut s, result);
     render_provenance(&mut s, result);
     render_points(&mut s, result);
@@ -249,6 +251,7 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
     kv(s, "call-graph edges", &r.call_graph.len().to_string());
     kv(s, "diagnostics", &r.diagnostics.len().to_string());
     kv(s, "analysis gaps", &r.gaps.len().to_string());
+    kv(s, "relational guards", &r.pentagon_facts.len().to_string());
     kv(s, "program points", &points.to_string());
     // FEAT-034: scry's own verified fusion premises (independent of meld).
     let vp = &r.verified_premises;
@@ -648,6 +651,42 @@ fn render_gaps(s: &mut String, r: &AnalysisResult) {
             g.pc,
             esc(&g.op),
         );
+    }
+    s.push_str("</ul></section>");
+}
+
+/// FEAT-044: proven Pentagons strict relations — the `index < length` guards
+/// scry recorded for an `if` then-region. Rendered as structured data (the
+/// relational facts OOB-trap detection consumes), not silence.
+fn render_pentagon_facts(s: &mut String, r: &AnalysisResult) {
+    s.push_str("<section><h2>Relational guards (pentagons)</h2>");
+    if r.pentagon_facts.is_empty() {
+        s.push_str("<p class=\"empty\">No strict-less-than guards recorded.</p></section>");
+        return;
+    }
+    let _ = write!(
+        s,
+        "<p>{} proven strict relation(s) (<code>x &lt; bound</code>) guarding an \
+         <code>if</code> region.</p><ul class=\"diags\">",
+        r.pentagon_facts.len(),
+    );
+    for f in &r.pentagon_facts {
+        let sign = if f.unsigned { "u" } else { "s" };
+        let _ = write!(
+            s,
+            "<li class=\"info\"><span class=\"sev\">lt_{sign}</span> \
+             <code>fn{}:{}</code> local{} &lt; ",
+            f.func_index, f.pc, f.lhs_local,
+        );
+        match f.bound {
+            PentagonBound::Local(j) => {
+                let _ = write!(s, "local{j}");
+            }
+            PentagonBound::Const(c) => {
+                let _ = write!(s, "{c}");
+            }
+        }
+        s.push_str("</li>");
     }
     s.push_str("</ul></section>");
 }

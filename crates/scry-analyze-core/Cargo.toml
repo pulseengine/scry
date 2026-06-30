@@ -58,6 +58,13 @@ scry-sai-octagon = { path = "../scry-octagon", version = "2.6.0" }
 # `#![no_std]` dual-compile crate as the other domains.
 scry-sai-bits = { path = "../scry-bits", version = "2.6.0" }
 
+# Pentagons weakly-relational domain (FEAT-044 / AC-014): intervals + strict
+# `x < y` facts, the cheap relational layer behind sound out-of-bounds-trap
+# detection (FEAT-046). An additive guard-recording pass surfaces proven
+# strict relations library-only on `AnalysisResult.pentagon_facts`. Same pure
+# `#![no_std]` dual-compile crate as the other domains.
+scry-sai-pentagon = { path = "../scry-pentagon", version = "2.6.0" }
+
 [dev-dependencies]
 # Test-only (the crate is otherwise dep-light + no_std): assemble the .wat
 # corpus fixtures to Wasm bytes so the FEAT-016 loop-fixpoint tests can drive

@@ -217,3 +217,22 @@ rocq_proof_test(
     deps = [":bitscongruence"],
     tags = ["rocq", "verification", "feat-037"],
 )
+
+# FEAT-044 (AC-014): mechanized soundness of the Pentagons weakly-relational
+# domain — the [implies_lt] predicate (a strict fact recorded OR forced by the
+# intervals), the interval-recovering join, the order's strict-fact check, and
+# the two [close] derivations (interval tightening from a strict fact + strict
+# transitivity). The dense matrix fixpoint + lattice laws are falsified by the
+# scry-pentagon γ-sweep tests. No admits, no axioms (the DD-015 proof-in-slice
+# gate).
+rocq_library(
+    name = "pentagon",
+    srcs = ["Pentagon.v"],
+    tags = ["rocq", "verification", "feat-044"],
+)
+
+rocq_proof_test(
+    name = "pentagon_test",
+    deps = [":pentagon"],
+    tags = ["rocq", "verification", "feat-044"],
+)
