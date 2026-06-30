@@ -661,9 +661,11 @@ fn render_gaps(s: &mut String, r: &AnalysisResult) {
 /// error verdict. PROVEN-SAFE divisions are shown alongside POTENTIAL-TRAPs so
 /// an assessor sees the proof obligations discharged, not just the warnings.
 fn render_trap_checks(s: &mut String, r: &AnalysisResult) {
-    s.push_str("<section><h2>Trap checks (div/rem)</h2>");
+    s.push_str("<section><h2>Trap checks (div/rem + memory)</h2>");
     if r.trap_checks.is_empty() {
-        s.push_str("<p class=\"empty\">No division/remainder operators analyzed.</p></section>");
+        s.push_str(
+            "<p class=\"empty\">No trapping operators (div/rem/load/store) analyzed.</p></section>",
+        );
         return;
     }
     let traps = r
@@ -686,6 +688,7 @@ fn render_trap_checks(s: &mut String, r: &AnalysisResult) {
         let kind = match t.kind {
             TrapKind::DivByZero => "div-by-zero",
             TrapKind::SignedOverflow => "signed-overflow",
+            TrapKind::OutOfBounds => "out-of-bounds",
         };
         let _ = write!(
             s,

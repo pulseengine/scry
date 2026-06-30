@@ -554,6 +554,9 @@ pub enum TrapKind {
     /// Signed `div` overflow: `INT_MIN / -1` traps (only `i32/i64.div_s`;
     /// `rem_s` does NOT trap on this case, so it is never classified for rem).
     SignedOverflow,
+    /// FEAT-046: an out-of-bounds linear-memory access (the effective address
+    /// plus the access width may exceed the memory's guaranteed size).
+    OutOfBounds,
 }
 
 /// FEAT-045: the verdict of a [`TrapCheck`]. SOUND direction: `ProvenSafe` is
@@ -4259,6 +4262,16 @@ fn interpret_op(
                     verdict: TrapVerdict::PotentialTrap,
                 });
             }
+        } else if is_memory_access(op) {
+            // FEAT-046: a memory access reached in a degraded state cannot be
+            // proven in-bounds — classify PotentialTrap, never omit it.
+            ctx.trap_checks.push(TrapCheck {
+                func_index,
+                pc,
+                op: op_report_name(op),
+                kind: TrapKind::OutOfBounds,
+                verdict: TrapVerdict::PotentialTrap,
+            });
         }
         return Ok(StepOutcome::Continue);
     }
@@ -4541,6 +4554,18 @@ fn interpret_op(
                     ),
                 });
             }
+            // FEAT-046: an unmodelled memory access (narrow/float width) still
+            // gets a trap verdict — it cannot be proven in-bounds here, so it is
+            // PotentialTrap. Recorded before the scrub so it is never dropped.
+            if is_memory_access(other) {
+                ctx.trap_checks.push(TrapCheck {
+                    func_index,
+                    pc,
+                    op: op_report_name(other),
+                    kind: TrapKind::OutOfBounds,
+                    verdict: TrapVerdict::PotentialTrap,
+                });
+            }
             // FEAT-040: scrub_to_top records the gap (the function degrades to
             // ⊤ here). The `degraded` early-return means this fires once per
             // function — at the first unsupported op, the give-up point.
@@ -4615,6 +4640,40 @@ fn div_op_info(op: &Operator<'_>) -> Option<(&'static str, u32, bool)> {
         Operator::I64RemU => ("i64.rem_u", 64, false),
         _ => return None,
     })
+}
+
+/// FEAT-046: true if `op` is a linear-memory load or store (any width). Used to
+/// give a trap verdict to memory ops the interval interpreter does NOT model
+/// precisely (narrow/float widths, or any access reached while the function is
+/// already degraded) — they cannot be proven in-bounds, so they are classified
+/// `OutOfBounds`/`PotentialTrap`, never silently dropped.
+fn is_memory_access(op: &Operator<'_>) -> bool {
+    matches!(
+        op,
+        Operator::I32Load { .. }
+            | Operator::I64Load { .. }
+            | Operator::F32Load { .. }
+            | Operator::F64Load { .. }
+            | Operator::I32Load8S { .. }
+            | Operator::I32Load8U { .. }
+            | Operator::I32Load16S { .. }
+            | Operator::I32Load16U { .. }
+            | Operator::I64Load8S { .. }
+            | Operator::I64Load8U { .. }
+            | Operator::I64Load16S { .. }
+            | Operator::I64Load16U { .. }
+            | Operator::I64Load32S { .. }
+            | Operator::I64Load32U { .. }
+            | Operator::I32Store { .. }
+            | Operator::I64Store { .. }
+            | Operator::F32Store { .. }
+            | Operator::F64Store { .. }
+            | Operator::I32Store8 { .. }
+            | Operator::I32Store16 { .. }
+            | Operator::I64Store8 { .. }
+            | Operator::I64Store16 { .. }
+            | Operator::I64Store32 { .. }
+    )
 }
 
 /// FEAT-045: classify the runtime trap(s) of a division/remainder operator
@@ -4791,6 +4850,14 @@ fn handle_memory_load(
                 ),
             });
         }
+        // FEAT-046: a non-i32-shaped address cannot be proven in-bounds.
+        ctx.trap_checks.push(TrapCheck {
+            func_index,
+            pc,
+            op: op_label.to_string(),
+            kind: TrapKind::OutOfBounds,
+            verdict: TrapVerdict::PotentialTrap,
+        });
         ctx.scrub_to_top(Gap {
             func_index,
             pc,
@@ -4815,6 +4882,22 @@ fn handle_memory_load(
     let _ = region; // synthesised for soundness story; not currently consumed past this point.
 
     let in_bounds = region_in_bounds(effective.lo, effective.hi, width, default_region.size_bytes);
+
+    // FEAT-046: surface the OOB verdict. `region_in_bounds` is sound — true only
+    // when `addr ≥ 0` and `addr_hi + width ≤ size_bytes`, where `size_bytes` is
+    // the memory's GUARANTEED size (initial pages; memory only grows), so a
+    // proven-in-bounds access can never trap on any run.
+    ctx.trap_checks.push(TrapCheck {
+        func_index,
+        pc,
+        op: op_label.to_string(),
+        kind: TrapKind::OutOfBounds,
+        verdict: if in_bounds {
+            TrapVerdict::ProvenSafe
+        } else {
+            TrapVerdict::PotentialTrap
+        },
+    });
 
     if in_bounds {
         if emit_diagnostics {
@@ -4897,6 +4980,14 @@ fn handle_memory_store(
                 ),
             });
         }
+        // FEAT-046: a non-i32-shaped address cannot be proven in-bounds.
+        ctx.trap_checks.push(TrapCheck {
+            func_index,
+            pc,
+            op: op_label.to_string(),
+            kind: TrapKind::OutOfBounds,
+            verdict: TrapVerdict::PotentialTrap,
+        });
         ctx.scrub_to_top(Gap {
             func_index,
             pc,
@@ -4916,6 +5007,22 @@ fn handle_memory_store(
     let _ = domain::region_offset(region, effective);
 
     let in_bounds = region_in_bounds(effective.lo, effective.hi, width, default_region.size_bytes);
+
+    // FEAT-046: surface the OOB verdict. `region_in_bounds` is sound — true only
+    // when `addr ≥ 0` and `addr_hi + width ≤ size_bytes`, where `size_bytes` is
+    // the memory's GUARANTEED size (initial pages; memory only grows), so a
+    // proven-in-bounds access can never trap on any run.
+    ctx.trap_checks.push(TrapCheck {
+        func_index,
+        pc,
+        op: op_label.to_string(),
+        kind: TrapKind::OutOfBounds,
+        verdict: if in_bounds {
+            TrapVerdict::ProvenSafe
+        } else {
+            TrapVerdict::PotentialTrap
+        },
+    });
 
     if in_bounds {
         if emit_diagnostics {
@@ -6491,6 +6598,105 @@ mod tests {
             trap_verdict(&r, "i32.div_u", TrapKind::DivByZero),
             Some(TrapVerdict::ProvenSafe),
             "the later const-divisor div_u stays live (div_s did not scrub it)"
+        );
+    }
+
+    fn oob_verdict(r: &AnalysisResult, op: &str) -> Option<TrapVerdict> {
+        r.trap_checks
+            .iter()
+            .find(|t| t.op == op && t.kind == TrapKind::OutOfBounds)
+            .map(|t| t.verdict)
+    }
+
+    /// FEAT-046: a constant in-bounds address proves the access safe (memory of
+    /// 1 page = 65536 bytes; `i32.load` at address 0 accesses [0,4) ⊂ memory).
+    #[test]
+    fn feat046_const_in_bounds_proven_safe() {
+        let r = analyze_default(
+            "(module (memory 1) (func (export \"f\") (result i32) \
+               i32.const 0 i32.load))",
+        );
+        assert_eq!(
+            oob_verdict(&r, "i32.load"),
+            Some(TrapVerdict::ProvenSafe),
+            "addr 0 + 4 bytes fits in 65536-byte memory"
+        );
+    }
+
+    /// FEAT-046: a constant address past the memory is a POTENTIAL-TRAP.
+    #[test]
+    fn feat046_const_out_of_bounds_potential_trap() {
+        let r = analyze_default(
+            "(module (memory 1) (func (export \"f\") (result i32) \
+               i32.const 100000 i32.load))",
+        );
+        assert_eq!(
+            oob_verdict(&r, "i32.load"),
+            Some(TrapVerdict::PotentialTrap),
+            "addr 100000 exceeds the 65536-byte memory"
+        );
+    }
+
+    /// FEAT-046: an unknown (parameter) address cannot be proven in-bounds.
+    #[test]
+    fn feat046_unknown_address_potential_trap() {
+        let r = analyze_default(
+            "(module (memory 1) (func (export \"f\") (param i32) (result i32) \
+               local.get 0 i32.load))",
+        );
+        assert_eq!(
+            oob_verdict(&r, "i32.load"),
+            Some(TrapVerdict::PotentialTrap)
+        );
+    }
+
+    /// FEAT-046: a store is classified too (here an in-bounds const address).
+    #[test]
+    fn feat046_store_in_bounds_proven_safe() {
+        let r = analyze_default(
+            "(module (memory 1) (func (export \"f\") \
+               i32.const 8 i32.const 42 i32.store))",
+        );
+        assert_eq!(oob_verdict(&r, "i32.store"), Some(TrapVerdict::ProvenSafe));
+    }
+
+    /// FEAT-046: the access width matters — a const address at the very end of
+    /// memory where the access would spill past the boundary is POTENTIAL-TRAP.
+    #[test]
+    fn feat046_access_width_spills_past_boundary() {
+        // addr 65534 + 4-byte load = bytes [65534, 65538) but memory is [0,65536).
+        let r = analyze_default(
+            "(module (memory 1) (func (export \"f\") (result i32) \
+               i32.const 65534 i32.load))",
+        );
+        assert_eq!(
+            oob_verdict(&r, "i32.load"),
+            Some(TrapVerdict::PotentialTrap),
+            "a 4-byte load at 65534 spills past the 65536 boundary"
+        );
+    }
+
+    /// FEAT-046 (never silently dropped): an unmodelled narrow load (`i32.load8_u`)
+    /// still gets a verdict — conservatively PotentialTrap (the interval
+    /// interpreter does not model the narrow width precisely).
+    #[test]
+    fn feat046_narrow_load_classified_potential_trap() {
+        let r = analyze_default(
+            "(module (memory 1) (func (export \"f\") (result i32) \
+               i32.const 0 i32.load8_u))",
+        );
+        // The function's only memory op is the narrow load; it must be
+        // classified (regardless of the op-name spelling) and PotentialTrap.
+        let oob: alloc::vec::Vec<_> = r
+            .trap_checks
+            .iter()
+            .filter(|t| t.kind == TrapKind::OutOfBounds)
+            .collect();
+        assert_eq!(oob.len(), 1, "the narrow load is classified, not omitted");
+        assert_eq!(
+            oob[0].verdict,
+            TrapVerdict::PotentialTrap,
+            "an unmodelled narrow load cannot be proven in-bounds"
         );
     }
 
