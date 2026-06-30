@@ -1095,6 +1095,13 @@ pub fn analyze(
     // address may be reachable indirectly (or by the host, via an exported or
     // imported table) — which the param-range gate cannot otherwise bound.
     let mut module_has_table: bool = false;
+    // FEAT-043 soundness (clean-room #5): true if table 0 is host-writable —
+    // imported (the host supplies, and may overwrite, its slots) or exported
+    // (the host holds the export and may write through it). scry sees no
+    // `table.*` opcode for a host write, so an active-segment-resolved slot
+    // cannot be trusted: the host may install a callee of arbitrary frame
+    // depth. Forces `contents_known = false` so indirect dispatch is Unknown.
+    let mut table0_host_writable: bool = false;
     // FEAT-036 soundness: true if a `ref.func` appears OUTSIDE a function body —
     // in a global's init expression or an element segment's items. Such a
     // funcref to a defined function can escape (e.g. via an exported global) to
@@ -1167,6 +1174,10 @@ pub fn analyze(
                     // the host can dispatch through it with arbitrary arguments.
                     if matches!(imp.ty, wasmparser::TypeRef::Table(_)) {
                         module_has_table = true;
+                        // Imported tables occupy the low table-index space, so
+                        // the first one is table 0: it is host-supplied and
+                        // host-writable (clean-room #5).
+                        table0_host_writable = true;
                     }
                     // FEAT-038 soundness: an imported memory is host-supplied —
                     // its true size is ≥ the declared minimum and the host may
@@ -1211,6 +1222,12 @@ pub fn analyze(
                     // constant even with no in-module `memory.grow`.
                     if matches!(ex.kind, wasmparser::ExternalKind::Memory) {
                         memory_is_exported = true;
+                    }
+                    // FEAT-043 soundness (clean-room #5): an exported table 0 is
+                    // held by the host, which can overwrite its slots through the
+                    // embedder API with a callee of arbitrary frame depth.
+                    if matches!(ex.kind, wasmparser::ExternalKind::Table) && ex.index == 0 {
+                        table0_host_writable = true;
                     }
                 }
             }
@@ -1584,7 +1601,7 @@ pub fn analyze(
             _ => false,
         })
     });
-    if table0_mutated {
+    if table0_mutated || table0_host_writable {
         func_table.contents_known = false;
     }
 
@@ -3710,6 +3727,17 @@ fn detect_frame(ops: &[Operator<'_>], sp: SpGlobal) -> StackBound {
         SpGlobal::Ambiguous => return StackBound::Unknown,
         SpGlobal::Index(g) => g,
     };
+    // FEAT-043 soundness (clean-room #6): `detect_frame` is otherwise
+    // control-flow-INSENSITIVE — it counts each prologue shape once. A
+    // constant SP decrement that lives INSIDE a `loop` body and is NOT
+    // restored within the same iteration leaks `frame` bytes on every
+    // back-edge, so the live frame is `frame × trip_count` — unbounded from a
+    // bound that cannot prove the trip count. Detect any loop whose body has a
+    // NET-NEGATIVE constant SP delta (more subtracted than added within the
+    // loop) and report `Unbounded`, never the single-iteration `frame`.
+    if loop_leaks_stack(ops, g) {
+        return StackBound::Unbounded;
+    }
     let mut const_decr: u32 = 0;
     let mut dyn_decr: u32 = 0;
     let mut frame: u64 = 0;
@@ -3755,6 +3783,48 @@ fn detect_frame(ops: &[Operator<'_>], sp: SpGlobal) -> StackBound {
     } else {
         StackBound::Bytes(0)
     }
+}
+
+/// FEAT-043 soundness (clean-room #6): true if ANY `loop` body has a
+/// net-negative CONSTANT shadow-stack-pointer delta — i.e. one iteration
+/// subtracts more from SP (`global.get g; i32.const F; i32.sub`) than it adds
+/// back (`global.get g; i32.const F; i32.add`). Such a loop drives SP down on
+/// every back-edge, so the worst-case live frame grows with the (statically
+/// unknown) trip count and is unbounded. Nested loops are covered because an
+/// inner decrement also falls inside the outer loop's range, and an inner leak
+/// is itself flagged at the inner loop. Dynamic (non-constant) SP writes are
+/// handled by the caller's `dyn_decr`/`bad` paths; here we only need the
+/// constant arithmetic, since only that path can otherwise yield a finite
+/// `Bytes(frame)`.
+fn loop_leaks_stack(ops: &[Operator<'_>], g: u32) -> bool {
+    let end_map = build_end_map(ops);
+    for (opener, op) in ops.iter().enumerate() {
+        if !matches!(op, Operator::Loop { .. }) {
+            continue;
+        }
+        let Some(end) = end_map[opener] else { continue };
+        let mut delta: i64 = 0;
+        for k in (opener + 1)..end {
+            if !matches!(ops.get(k), Some(Operator::GlobalGet { global_index }) if *global_index == g)
+            {
+                continue;
+            }
+            if let (Some(Operator::I32Const { value }), Some(kind)) =
+                (ops.get(k + 1), ops.get(k + 2))
+                && *value >= 0
+            {
+                match kind {
+                    Operator::I32Sub => delta -= *value as i64,
+                    Operator::I32Add => delta += *value as i64,
+                    _ => {}
+                }
+            }
+        }
+        if delta < 0 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Compute the module's worst-case shadow-stack usage (FEAT-021 slice-1):
@@ -5918,6 +5988,110 @@ mod tests {
             StackBound::Bytes(264),
             "a void call inside an if must still contribute its callee's frame \
              (8 + 256 = 264, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #6): a constant SP decrement
+    /// inside a `loop` body with no per-iteration restore leaks `frame` bytes on
+    /// every back-edge — the live frame is `frame × trip_count`, unbounded.
+    /// detect_frame was control-flow-insensitive and reported the single-
+    /// iteration frame (16) instead of Unbounded.
+    #[test]
+    fn feat043_sp_decrement_in_loop_is_unbounded() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (func (export \"entry\") (local i32) \
+                 i32.const 10 local.set 0 \
+                 (loop \
+                   global.get $sp i32.const 16 i32.sub global.set $sp \
+                   local.get 0 i32.const 1 i32.sub local.tee 0 br_if 0) \
+                 global.get $sp i32.const 160 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unbounded,
+            "an unrestored SP decrement in a loop body must be Unbounded, not a \
+             single-iteration frame; got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 (clean-room #6 control): a loop that allocates AND restores the
+    /// frame within the SAME iteration (net-zero SP delta) does NOT leak — the
+    /// peak live frame is one iteration's worth, so the finite `Bytes(frame)`
+    /// bound stays correct. Guards the leak detector against over-flagging.
+    #[test]
+    fn feat043_balanced_loop_frame_stays_bytes() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (func (export \"entry\") (local i32) \
+                 i32.const 10 local.set 0 \
+                 (loop \
+                   global.get $sp i32.const 32 i32.sub global.set $sp \
+                   global.get $sp i32.const 32 i32.add global.set $sp \
+                   local.get 0 i32.const 1 i32.sub local.tee 0 br_if 0)))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Bytes(32),
+            "a per-iteration balanced alloc/free must keep the finite single-frame \
+             bound; got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #5): table 0 is HOST-WRITABLE
+    /// when imported — the host supplies its slots and scry sees no `table.*`
+    /// op, so a `call_indirect 0` may dispatch a host-installed callee of any
+    /// frame depth. Must be Unknown, not the function's own frame only.
+    #[test]
+    fn feat043_imported_table_indirect_is_unknown() {
+        let r = analyze_default(
+            "(module \
+               (import \"env\" \"t\" (table 1 1 funcref)) \
+               (global $sp (mut i32) (i32.const 1048576)) \
+               (type $ft (func)) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 4096 i32.sub global.set $sp \
+                 i32.const 0 call_indirect 0 (type $ft) \
+                 global.get $sp i32.const 4096 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unknown,
+            "an imported (host-writable) table-0 call_indirect must be Unknown; \
+             got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #5): an EXPORTED defined table 0
+    /// is held by the host, which can overwrite a slot via the embedder API with
+    /// a deeper-framed callee. The declared active-segment target is no longer a
+    /// sound enumeration — must be Unknown.
+    #[test]
+    fn feat043_exported_table_indirect_is_unknown() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 1048576)) \
+               (table (export \"t\") 1 1 funcref) (elem (i32.const 0) func 0) \
+               (type $ft (func)) \
+               (func $small (type $ft) \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 global.get $sp i32.const 16 i32.add global.set $sp) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 4096 i32.sub global.set $sp \
+                 i32.const 0 call_indirect (type $ft) \
+                 global.get $sp i32.const 4096 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unknown,
+            "an exported (host-writable) table-0 call_indirect must be Unknown; \
+             got {:?}",
             r.stack_usage.max_stack_bytes
         );
     }

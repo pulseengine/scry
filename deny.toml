@@ -18,6 +18,21 @@ ignore = [
     # the released artifact. Re-evaluate when wasmtime is bumped past the
     # patched release.
     "RUSTSEC-2026-0182",
+    # RUSTSEC-2026-0188 — WASI hard links / renames bypass `wasmtime-wasi`'s
+    # `FilePerms` for the destination path. Same reachability as 0182: only via
+    # `wasmtime-wasi`, a DEV-dependency of the `scry-host-tests` harness, and
+    # NOT in the shipped `scry.wasm` (which embeds no wasmtime and grants the
+    # harness no host filesystem the test inputs could abuse). No security
+    # impact on the released artifact. Re-evaluate when wasmtime is bumped.
+    "RUSTSEC-2026-0188",
+    # RUSTSEC-2026-0190 — unsoundness in `anyhow`'s `Error::downcast_mut()`
+    # after `Error::context` (a borrow-rule / UB violation). `anyhow` enters the
+    # graph ONLY through `scry-host-tests` (directly + via wasmtime/jsonschema)
+    # and is in ZERO published `scry-sai-*` libraries; the harness uses it for
+    # terse test-error plumbing and does not exercise the affected
+    # context-then-downcast_mut pattern. No impact on shipped crates or the
+    # analyzer component. Re-evaluate when a patched `anyhow` is pulled in.
+    "RUSTSEC-2026-0190",
 ]
 
 [licenses]
