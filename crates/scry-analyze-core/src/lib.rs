@@ -432,6 +432,15 @@ pub struct AnalysisResult {
     /// `(func_index, pc)`. Library-only (not in the WIT mirror or the frozen v1
     /// JSON contract), like [`AnalysisResult::bit_facts`].
     pub pentagon_facts: Vec<PentagonFact>,
+    /// FEAT-045 (REQ-014, MF-006): division/remainder trap classifications —
+    /// scry's first runtime-error verdict. Every `i32/i64.div_s/div_u/rem_s/
+    /// rem_u` the interval interpreter reaches gets a `DivByZero` verdict (and
+    /// every `div_s` additionally a `SignedOverflow` verdict); `ProvenSafe` is
+    /// emitted only when the divisor (resp. dividend) interval excludes the
+    /// trapping value, else `PotentialTrap`. No reached div/rem is silently
+    /// dropped. Sorted by `(func_index, pc, kind)`. Library-only (not in the
+    /// WIT mirror or the frozen v1 JSON contract), like [`Self::bit_facts`].
+    pub trap_checks: Vec<TrapCheck>,
 }
 
 /// FEAT-040: one analysis-gap record — a site where scry was conservative.
@@ -517,6 +526,48 @@ pub enum PentagonBound {
     Local(u32),
     /// `x < c` — a strict relation against a constant.
     Const(i64),
+}
+
+/// FEAT-045 (REQ-014, MF-006): a runtime-trap classification for one
+/// division/remainder operator. scry's first runtime-error verdict — the
+/// Astrée/Polyspace-style "PROVEN-SAFE vs POTENTIAL-TRAP" judgement, derived
+/// from the interval domain at the operator's program point.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrapCheck {
+    /// Absolute function index.
+    pub func_index: u32,
+    /// Operator index (pc) of the div/rem.
+    pub pc: u32,
+    /// The operator name (e.g. `i32.div_s`).
+    pub op: String,
+    /// Which trap condition this verdict concerns.
+    pub kind: TrapKind,
+    /// The verdict.
+    pub verdict: TrapVerdict,
+}
+
+/// FEAT-045: the trap condition a [`TrapCheck`] classifies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrapKind {
+    /// The divisor may be zero (`div`/`rem` by zero traps in Wasm).
+    DivByZero,
+    /// Signed `div` overflow: `INT_MIN / -1` traps (only `i32/i64.div_s`;
+    /// `rem_s` does NOT trap on this case, so it is never classified for rem).
+    SignedOverflow,
+}
+
+/// FEAT-045: the verdict of a [`TrapCheck`]. SOUND direction: `ProvenSafe` is
+/// emitted only when the interval domain proves the trap CANNOT occur on any
+/// concrete run; every residual possibility (including ⊤/unknown operands) is
+/// `PotentialTrap`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrapVerdict {
+    /// The trap provably cannot occur (the operand interval excludes the
+    /// trapping value).
+    ProvenSafe,
+    /// The trap may occur (the operand interval includes the trapping value,
+    /// or the operand is unknown). The sound default.
+    PotentialTrap,
 }
 
 /// FEAT-027: human-readable metadata for one function index.
@@ -880,6 +931,10 @@ struct FuncCtx {
     /// (every unsupported-op fallback), drained by the caller in phase 2.
     /// Independent of `emit_diagnostics` so the gap report is always available.
     gaps: Vec<Gap>,
+    /// FEAT-045: division/remainder trap-classification records collected during
+    /// this function's walk, drained by the caller in the authoritative pass
+    /// (same as `gaps`). One entry per applicable trap condition per div/rem.
+    trap_checks: Vec<TrapCheck>,
 }
 
 impl FuncCtx {
@@ -891,6 +946,7 @@ impl FuncCtx {
             octagon,
             degraded: false,
             gaps: Vec::new(),
+            trap_checks: Vec::new(),
         }
     }
 
@@ -1732,6 +1788,7 @@ pub fn analyze(
                 /*emit_diagnostics=*/ false,
                 /*depth=*/ 0,
                 /*emit_gaps=*/ None,
+                /*emit_trap_checks=*/ None,
             )?;
             extract_results(&defined_funcs[defined].results, &result_state)
         };
@@ -1772,6 +1829,7 @@ pub fn analyze(
     let mut points: Vec<ProgramPoint> = Vec::new();
     let mut call_graph: Vec<CallEdge> = Vec::new();
     let mut gaps: Vec<Gap> = Vec::new();
+    let mut trap_checks: Vec<TrapCheck> = Vec::new();
     for func in &defined_funcs {
         let init_locals = top_input_locals(func);
         run_function_body(
@@ -1784,9 +1842,29 @@ pub fn analyze(
             config.emit_diagnostics,
             /*depth=*/ 0,
             /*emit_gaps=*/ Some(&mut gaps),
+            /*emit_trap_checks=*/ Some(&mut trap_checks),
         )?;
     }
     gaps.sort_by_key(|g| (g.func_index, g.pc));
+    // FEAT-045 soundness: `classify_div_trap` runs on EVERY fixpoint pass, so a
+    // div/rem in a loop body can collect a stale `ProvenSafe` from an early
+    // (pre-widening) iterate alongside the `PotentialTrap` of the converged
+    // iterate. Reconcile per `(func, pc, kind)` with `PotentialTrap` dominating
+    // `ProvenSafe`: the converged interval is the widest in a widening chain, so
+    // if it excludes the trap value every iterate did (all `ProvenSafe`), and if
+    // it includes it the converged pass contributes the `PotentialTrap` that
+    // dominates. Either way the surviving verdict is the sound (converged) one.
+    trap_checks.sort_by_key(|t| (t.func_index, t.pc, t.kind as u8));
+    trap_checks.dedup_by(|next, kept| {
+        if kept.func_index == next.func_index && kept.pc == next.pc && kept.kind == next.kind {
+            if next.verdict == TrapVerdict::PotentialTrap {
+                kept.verdict = TrapVerdict::PotentialTrap;
+            }
+            true
+        } else {
+            false
+        }
+    });
 
     // ───────────────────────────────────────────────────────────
     // Assemble the per-function-summary output records (FEAT-007).
@@ -2091,6 +2169,7 @@ pub fn analyze(
         bit_facts,
         gaps,
         pentagon_facts,
+        trap_checks,
     })
 }
 
@@ -3482,6 +3561,7 @@ fn run_function_body(
     emit_diagnostics: bool,
     depth: u32,
     emit_gaps: Option<&mut Vec<Gap>>,
+    emit_trap_checks: Option<&mut Vec<TrapCheck>>,
 ) -> Result<Vec<AbstractValue>, AnalyzeError> {
     let mut ctx = FuncCtx::new(init_locals);
     let ops = &func.ops;
@@ -3507,6 +3587,9 @@ fn run_function_body(
     }
     if let Some(g) = emit_gaps {
         g.append(&mut ctx.gaps);
+    }
+    if let Some(t) = emit_trap_checks {
+        t.append(&mut ctx.trap_checks);
     }
     Ok(ctx.operand_stack)
 }
@@ -4154,6 +4237,29 @@ fn interpret_op(
     if ctx.degraded {
         // Once degraded, we still need to scan through to keep the
         // operator iterator advancing — but we don't update state.
+        // FEAT-045 (AC: "never silently dropped"): a div/rem reached in a
+        // degraded state still gets a verdict — necessarily PotentialTrap,
+        // since the operand intervals are no longer tracked (we cannot prove
+        // safety). This keeps every reached div/rem classified even after an
+        // unsupported op upstream scrubbed the function.
+        if let Some((name, _w, is_div_s)) = div_op_info(op) {
+            ctx.trap_checks.push(TrapCheck {
+                func_index,
+                pc,
+                op: name.into(),
+                kind: TrapKind::DivByZero,
+                verdict: TrapVerdict::PotentialTrap,
+            });
+            if is_div_s {
+                ctx.trap_checks.push(TrapCheck {
+                    func_index,
+                    pc,
+                    op: name.into(),
+                    kind: TrapKind::SignedOverflow,
+                    verdict: TrapVerdict::PotentialTrap,
+                });
+            }
+        }
         return Ok(StepOutcome::Continue);
     }
 
@@ -4402,6 +4508,21 @@ fn interpret_op(
             // (untracked) global — locals/stack are unaffected (sound).
             let _ = ctx.operand_stack.pop();
         }
+        // FEAT-045: division / remainder — classify the runtime trap from the
+        // operand intervals, then push ⊤ for the result. Modelling them here
+        // (instead of the `other` fallback) ALSO stops a div/rem from degrading
+        // the whole function to ⊤.
+        Operator::I32DivS
+        | Operator::I32DivU
+        | Operator::I32RemS
+        | Operator::I32RemU
+        | Operator::I64DivS
+        | Operator::I64DivU
+        | Operator::I64RemS
+        | Operator::I64RemU => {
+            let (name, width, is_div_s) = div_op_info(op).expect("div op");
+            classify_div_trap(ctx, func_index, pc, name, width, is_div_s);
+        }
         other => {
             // Anything outside the supported set: emit a fallback
             // diagnostic, scrub state to top to preserve soundness
@@ -4477,6 +4598,111 @@ fn i32_binop(
         }
     }
     Ok(())
+}
+
+/// FEAT-045: `(op-name, width, is-signed-division)` for the eight trapping
+/// div/rem operators, else `None`. `is_div_s` is true only for `div_s` (the
+/// ops that trap on `INT_MIN/-1`); `rem_s` is false (it does not trap there).
+fn div_op_info(op: &Operator<'_>) -> Option<(&'static str, u32, bool)> {
+    Some(match op {
+        Operator::I32DivS => ("i32.div_s", 32, true),
+        Operator::I32DivU => ("i32.div_u", 32, false),
+        Operator::I32RemS => ("i32.rem_s", 32, false),
+        Operator::I32RemU => ("i32.rem_u", 32, false),
+        Operator::I64DivS => ("i64.div_s", 64, true),
+        Operator::I64DivU => ("i64.div_u", 64, false),
+        Operator::I64RemS => ("i64.rem_s", 64, false),
+        Operator::I64RemU => ("i64.rem_u", 64, false),
+        _ => return None,
+    })
+}
+
+/// FEAT-045: classify the runtime trap(s) of a division/remainder operator
+/// from the operand intervals, record the verdict(s) on `ctx.trap_checks`, and
+/// push a ⊤ result. Wasm operand order: the divisor is on top of the stack, the
+/// dividend below it.
+///
+/// SOUNDNESS: `ProvenSafe` is emitted only when the interval domain proves the
+/// trap cannot happen — div-by-zero is safe iff the divisor interval excludes
+/// `0`; signed-division overflow (`INT_MIN / -1`, only `div_s`) is safe iff the
+/// dividend excludes `INT_MIN` OR the divisor excludes `-1`. An unknown (⊤)
+/// operand excludes nothing, so it falls to `PotentialTrap` — the sound
+/// default. Remainder ops never trap on overflow, so `is_div_s` is false for
+/// them and no `SignedOverflow` verdict is produced.
+fn classify_div_trap(
+    ctx: &mut FuncCtx,
+    func_index: u32,
+    pc: u32,
+    op_name: &str,
+    width: u32,
+    is_div_s: bool,
+) {
+    // Pop divisor (top) then dividend (below). Defensive on a short stack:
+    // a missing operand is treated as ⊤ (→ PotentialTrap).
+    let divisor = ctx.operand_stack.pop();
+    let dividend = ctx.operand_stack.pop();
+    let div_iv = div_operand_interval(divisor.as_ref(), width);
+    let dvd_iv = div_operand_interval(dividend.as_ref(), width);
+
+    let dbz = if interval_excludes(div_iv, 0) {
+        TrapVerdict::ProvenSafe
+    } else {
+        TrapVerdict::PotentialTrap
+    };
+    ctx.trap_checks.push(TrapCheck {
+        func_index,
+        pc,
+        op: op_name.into(),
+        kind: TrapKind::DivByZero,
+        verdict: dbz,
+    });
+
+    if is_div_s {
+        let int_min = if width == 32 {
+            i32::MIN as i64
+        } else {
+            i64::MIN
+        };
+        let safe = interval_excludes(dvd_iv, int_min) || interval_excludes(div_iv, -1);
+        ctx.trap_checks.push(TrapCheck {
+            func_index,
+            pc,
+            op: op_name.into(),
+            kind: TrapKind::SignedOverflow,
+            verdict: if safe {
+                TrapVerdict::ProvenSafe
+            } else {
+                TrapVerdict::PotentialTrap
+            },
+        });
+    }
+
+    // The quotient/remainder value is not interval-tracked: push ⊤ of the
+    // op's width. Crucially this does NOT degrade the function.
+    let result = if width == 32 {
+        AbstractValue::I32Interval(domain::top())
+    } else {
+        AbstractValue::I64Interval(domain::top())
+    };
+    ctx.operand_stack.push(result);
+}
+
+/// The interval of a div/rem operand of the given width, or ⊤ when the operand
+/// is absent or not an interval of that width (so it excludes no value).
+fn div_operand_interval(v: Option<&AbstractValue>, width: u32) -> Interval {
+    match v {
+        Some(AbstractValue::I32Interval(iv)) if width == 32 => *iv,
+        Some(AbstractValue::I64Interval(iv)) if width == 64 => *iv,
+        _ => domain::top(),
+    }
+}
+
+/// True iff the interval provably does not contain `val` (`lo > val ∨ hi < val`).
+/// A ⊤ interval excludes nothing; a bottom (empty/dead) interval excludes
+/// everything — both sound for the trap verdict.
+#[inline]
+fn interval_excludes(iv: Interval, val: i64) -> bool {
+    iv.lo > val || iv.hi < val
 }
 
 /// Which kind of value an `i*.load` pushes onto the operand stack.
@@ -4922,6 +5148,7 @@ fn handle_call(
             /*emit_diagnostics=*/ false,
             depth.saturating_add(1),
             /*emit_gaps=*/ None,
+            /*emit_trap_checks=*/ None,
         )?;
         (
             extract_results(&callee.results, &final_stack),
@@ -5747,6 +5974,7 @@ mod tests {
             bit_facts: alloc::vec![],
             gaps: alloc::vec![],
             pentagon_facts: alloc::vec![],
+            trap_checks: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -6150,6 +6378,174 @@ mod tests {
                  local.get 0 local.get 1 i32.lt_u))",
         );
         assert!(r.pentagon_facts.is_empty());
+    }
+
+    fn trap_verdict(r: &AnalysisResult, op: &str, kind: TrapKind) -> Option<TrapVerdict> {
+        r.trap_checks
+            .iter()
+            .find(|t| t.op == op && t.kind == kind)
+            .map(|t| t.verdict)
+    }
+
+    /// FEAT-045: a constant non-zero divisor and a constant dividend prove BOTH
+    /// the div-by-zero and the signed-overflow cases safe.
+    #[test]
+    fn feat045_const_divisor_proven_safe() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (result i32) \
+               i32.const 100 i32.const 4 i32.div_s))",
+        );
+        assert_eq!(
+            trap_verdict(&r, "i32.div_s", TrapKind::DivByZero),
+            Some(TrapVerdict::ProvenSafe)
+        );
+        assert_eq!(
+            trap_verdict(&r, "i32.div_s", TrapKind::SignedOverflow),
+            Some(TrapVerdict::ProvenSafe)
+        );
+    }
+
+    /// FEAT-045: a literal zero divisor is a div-by-zero POTENTIAL-TRAP (it in
+    /// fact always traps; scry soundly flags it).
+    #[test]
+    fn feat045_zero_divisor_potential_trap() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) \
+               local.get 0 i32.const 0 i32.div_u))",
+        );
+        assert_eq!(
+            trap_verdict(&r, "i32.div_u", TrapKind::DivByZero),
+            Some(TrapVerdict::PotentialTrap)
+        );
+    }
+
+    /// FEAT-045: an unknown (parameter) divisor cannot be proven non-zero — the
+    /// sound default is POTENTIAL-TRAP, and the signed-overflow case (unknown
+    /// dividend AND unknown divisor) is also POTENTIAL-TRAP.
+    #[test]
+    fn feat045_unknown_divisor_potential_trap() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) \
+               local.get 0 local.get 1 i32.div_s))",
+        );
+        assert_eq!(
+            trap_verdict(&r, "i32.div_s", TrapKind::DivByZero),
+            Some(TrapVerdict::PotentialTrap)
+        );
+        assert_eq!(
+            trap_verdict(&r, "i32.div_s", TrapKind::SignedOverflow),
+            Some(TrapVerdict::PotentialTrap)
+        );
+    }
+
+    /// FEAT-045: `div_u` and `rem_s`/`rem_u` never trap on INT_MIN/-1, so they
+    /// get a DivByZero verdict but NO SignedOverflow verdict.
+    #[test]
+    fn feat045_only_div_s_has_overflow_verdict() {
+        let r = analyze_default(
+            "(module \
+               (func (export \"u\") (param i32) (result i32) local.get 0 i32.const 3 i32.div_u) \
+               (func (export \"r\") (param i32) (result i32) local.get 0 i32.const 3 i32.rem_s))",
+        );
+        assert!(trap_verdict(&r, "i32.div_u", TrapKind::DivByZero).is_some());
+        assert!(trap_verdict(&r, "i32.div_u", TrapKind::SignedOverflow).is_none());
+        assert!(trap_verdict(&r, "i32.rem_s", TrapKind::DivByZero).is_some());
+        assert!(trap_verdict(&r, "i32.rem_s", TrapKind::SignedOverflow).is_none());
+    }
+
+    /// FEAT-045: a div_s whose dividend is bounded away from INT_MIN is overflow-
+    /// safe even with an unknown divisor (the INT_MIN/-1 case needs BOTH).
+    #[test]
+    fn feat045_bounded_dividend_makes_overflow_safe() {
+        // dividend = 0+0 = const 0 (excludes INT_MIN); divisor = param (unknown).
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) \
+               i32.const 0 local.get 0 i32.div_s))",
+        );
+        assert_eq!(
+            trap_verdict(&r, "i32.div_s", TrapKind::SignedOverflow),
+            Some(TrapVerdict::ProvenSafe),
+            "dividend const 0 excludes INT_MIN ⇒ overflow impossible"
+        );
+        // but div-by-zero is still possible (divisor unknown)
+        assert_eq!(
+            trap_verdict(&r, "i32.div_s", TrapKind::DivByZero),
+            Some(TrapVerdict::PotentialTrap)
+        );
+    }
+
+    /// FEAT-045: a div/rem no longer degrades the whole function (it used to hit
+    /// the unsupported-op fallback and scrub everything to ⊤). A const-divisor
+    /// `div_u` AFTER an earlier `div_s` is still reached and proven safe — only
+    /// possible if the first division left the interpreter live.
+    #[test]
+    fn feat045_div_does_not_degrade_function() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) \
+               local.get 0 i32.const 2 i32.div_s \
+               local.get 0 i32.const 5 i32.div_u \
+               i32.add))",
+        );
+        assert!(trap_verdict(&r, "i32.div_s", TrapKind::DivByZero).is_some());
+        assert_eq!(
+            trap_verdict(&r, "i32.div_u", TrapKind::DivByZero),
+            Some(TrapVerdict::ProvenSafe),
+            "the later const-divisor div_u stays live (div_s did not scrub it)"
+        );
+    }
+
+    /// FEAT-045 SOUNDNESS REGRESSION (clean-room): a div in a LOOP body must not
+    /// keep a stale `ProvenSafe` from an early (pre-widening) iterate. Here the
+    /// counter `i` runs 3→2→1→0 and `100 / i` traps at i=0; the converged
+    /// divisor interval includes 0, so the verdict must be PotentialTrap — and
+    /// there must be exactly ONE DivByZero entry for that op (reconciled).
+    #[test]
+    fn feat045_loop_divisor_reaching_zero_is_potential_trap() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) (local i32) \
+               i32.const 3 local.set 1 \
+               (loop \
+                 local.get 1 i32.const 1 i32.sub local.set 1 \
+                 i32.const 100 local.get 1 i32.div_s drop \
+                 local.get 1 i32.const 0 i32.gt_s br_if 0) \
+               i32.const 0))",
+        );
+        let dbz: alloc::vec::Vec<_> = r
+            .trap_checks
+            .iter()
+            .filter(|t| t.op == "i32.div_s" && t.kind == TrapKind::DivByZero)
+            .collect();
+        assert_eq!(
+            dbz.len(),
+            1,
+            "exactly one reconciled DivByZero verdict per op"
+        );
+        assert_eq!(
+            dbz[0].verdict,
+            TrapVerdict::PotentialTrap,
+            "a loop divisor that reaches 0 must NOT be ProvenSafe (stale pre-widen iterate)"
+        );
+    }
+
+    /// FEAT-045 (AC: "never silently dropped"): even when an unsupported op
+    /// degrades the function, a div/rem reached afterwards still gets a verdict —
+    /// necessarily PotentialTrap (operands no longer tracked). Here a `drop`
+    /// (unmodelled in the interval interpreter) degrades, yet the div_u after it
+    /// is still classified.
+    #[test]
+    fn feat045_degraded_div_still_classified() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) \
+               local.get 0 i32.const 2 i32.div_s drop \
+               i32.const 50 i32.const 5 i32.div_u))",
+        );
+        // div_u after the degrading `drop` is not silently dropped: it is
+        // classified, conservatively as PotentialTrap.
+        assert_eq!(
+            trap_verdict(&r, "i32.div_u", TrapKind::DivByZero),
+            Some(TrapVerdict::PotentialTrap),
+            "reached-while-degraded div/rem is classified PotentialTrap, never omitted"
+        );
     }
 
     // ════════════ ADVERSARIAL THROWAWAY (clean-room FEAT-044 pass) ════════════

@@ -32,7 +32,7 @@ use core::fmt::Write as _;
 use scry_analyze_core::{
     AbstractValue, AnalysisResult, Diagnostic, DiagnosticSeverity, FunctionMeta, FunctionStack,
     GapKind, Interval, PentagonBound, Region, SecurityLabel, SoundnessTag, StackBound,
-    TaintFindingKind,
+    TaintFindingKind, TrapKind, TrapVerdict,
 };
 
 /// FEAT-027: metadata for one function index, if scry resolved any.
@@ -158,6 +158,7 @@ pub fn render_html(result: &AnalysisResult, title: &str) -> String {
     render_call_graph(&mut s, result);
     render_diagnostics(&mut s, &result.diagnostics);
     render_gaps(&mut s, result);
+    render_trap_checks(&mut s, result);
     render_pentagon_facts(&mut s, result);
     render_taint(&mut s, result);
     render_provenance(&mut s, result);
@@ -252,6 +253,7 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
     kv(s, "diagnostics", &r.diagnostics.len().to_string());
     kv(s, "analysis gaps", &r.gaps.len().to_string());
     kv(s, "relational guards", &r.pentagon_facts.len().to_string());
+    kv(s, "trap checks", &r.trap_checks.len().to_string());
     kv(s, "program points", &points.to_string());
     // FEAT-034: scry's own verified fusion premises (independent of meld).
     let vp = &r.verified_premises;
@@ -650,6 +652,48 @@ fn render_gaps(s: &mut String, r: &AnalysisResult) {
             g.func_index,
             g.pc,
             esc(&g.op),
+        );
+    }
+    s.push_str("</ul></section>");
+}
+
+/// FEAT-045: division/remainder trap classifications — scry's first runtime-
+/// error verdict. PROVEN-SAFE divisions are shown alongside POTENTIAL-TRAPs so
+/// an assessor sees the proof obligations discharged, not just the warnings.
+fn render_trap_checks(s: &mut String, r: &AnalysisResult) {
+    s.push_str("<section><h2>Trap checks (div/rem)</h2>");
+    if r.trap_checks.is_empty() {
+        s.push_str("<p class=\"empty\">No division/remainder operators analyzed.</p></section>");
+        return;
+    }
+    let traps = r
+        .trap_checks
+        .iter()
+        .filter(|t| t.verdict == TrapVerdict::PotentialTrap)
+        .count();
+    let _ = write!(
+        s,
+        "<p>{} check(s); {} POTENTIAL-TRAP, {} PROVEN-SAFE.</p><ul class=\"diags\">",
+        r.trap_checks.len(),
+        traps,
+        r.trap_checks.len() - traps,
+    );
+    for t in &r.trap_checks {
+        let (cls, verdict) = match t.verdict {
+            TrapVerdict::ProvenSafe => ("info", "PROVEN-SAFE"),
+            TrapVerdict::PotentialTrap => ("err", "POTENTIAL-TRAP"),
+        };
+        let kind = match t.kind {
+            TrapKind::DivByZero => "div-by-zero",
+            TrapKind::SignedOverflow => "signed-overflow",
+        };
+        let _ = write!(
+            s,
+            "<li class=\"{cls}\"><span class=\"sev\">{verdict}</span> \
+             <code>fn{}:{}</code> {} ({kind})</li>",
+            t.func_index,
+            t.pc,
+            esc(&t.op),
         );
     }
     s.push_str("</ul></section>");

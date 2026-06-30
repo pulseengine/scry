@@ -239,7 +239,7 @@ artifacts:
   - id: FEAT-045
     type: feature
     title: "v2.7 — Trap detection: division-by-zero + integer-overflow classification"
-    status: proposed
+    status: accepted
     release: v2.7.0
     description: >
       Classify every i32/i64 div_s/div_u/rem_s/rem_u as PROVEN-SAFE (the divisor
