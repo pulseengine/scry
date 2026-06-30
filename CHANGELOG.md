@@ -7,6 +7,66 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.7.0] — 2026-06-30
+
+Headline: **"Prove safety" — scry's first runtime-error verdicts.** The
+Astrée/Polyspace-style PROVEN-SAFE vs POTENTIAL-TRAP judgement scry entirely
+lacked (MF-006), built on a new cheap relational domain. Three features
+(FEAT-044/045/046).
+
+### Added — FEAT-044 (REQ-014, AC-014) — Pentagons domain
+
+- New zero-dep `#![no_std]` crate **`scry-sai-pentagon`** (Logozzo–Fähndrich):
+  per-variable intervals + a strict-less-than matrix, with the
+  interval-recovering join. The cheap relational layer (`index < length`)
+  behind OOB detection. Admit-free Rocq (`proofs/rocq/Pentagon.v`) for the join,
+  order, and `close` derivations; exhaustive γ-sweep tests.
+- `close()` returns canonical ⊥ on a strict cycle (self-loop after transitive
+  closure) before interval tightening — without that guard a cycle drives the
+  bounds toward the ±∞ sentinels ~2⁶³ steps (found by the soundness gate).
+- Analyzer pass `compute_pentagon_facts` records the `x < bound` guards from
+  `local.get i; (local.get j | const); lt_u/lt_s; if`, library-only on
+  `AnalysisResult.pentagon_facts`.
+
+### Added — FEAT-045 (REQ-014, MF-006) — division/overflow trap detection
+
+- Every `i32/i64.div_s/div_u/rem_s/rem_u` reached by the interval interpreter
+  gets a `DivByZero` verdict; every `div_s` additionally a `SignedOverflow`
+  verdict. `ProvenSafe` only when the divisor interval excludes `0` (resp. the
+  dividend excludes `INT_MIN` OR the divisor excludes `-1`); else
+  `PotentialTrap`. Surfaced on `AnalysisResult.trap_checks`.
+- Modelling div/rem in the interpreter (was the unsupported-op fallback) **stops
+  a division from degrading the whole function to ⊤**.
+- SOUNDNESS (clean-room): per-pass verdicts are reconciled per `(func, pc, kind)`
+  with `PotentialTrap` dominating `ProvenSafe` — a div in a loop body no longer
+  keeps a stale `ProvenSafe` from a pre-widening iterate.
+
+### Added — FEAT-046 (REQ-014, MF-006) — out-of-bounds memory trap detection
+
+- Every load/store gets an `OutOfBounds` verdict. `ProvenSafe` only when the
+  effective address (operand interval + `memarg.offset`) provably fits:
+  `addr ≥ 0` and `addr_hi + width ≤ size_bytes`, where `size_bytes` is the
+  memory's GUARANTEED size (initial pages × 64 KiB) — a sound floor since memory
+  only grows. Reuses the FEAT-045 reconciliation.
+- The 4 modelled ops (`i32/i64.load/store`) get precise verdicts; every other
+  load/store (narrow / float / degraded-state) gets `PotentialTrap` — never
+  silently dropped.
+
+### Posture
+
+- All three are library-only `AnalysisResult` fields (`pentagon_facts`,
+  `trap_checks`); the `scry.wit` interface and the frozen v1 invariant-JSON
+  contract are unchanged. scry-viz gained relational-guard + trap-check panels.
+- Trap verdicts only ever move toward conservatism (`ProvenSafe` only when
+  proven); precision over-approximations (loop-widened divisors/addresses,
+  imported/growable memory, narrow/float widths) are sound `PotentialTrap`s.
+- **Falsification statement.** scry claims a `ProvenSafe` div/rem never traps on
+  div-by-zero (resp. `INT_MIN/-1`), and a `ProvenSafe` load/store never accesses
+  out of bounds, on any concrete run. FALSE if any `.wat` has a `ProvenSafe`
+  operator that traps at runtime. Each feature was driven through an adversarial
+  clean-room (FEAT-044 found a `close` non-termination; FEAT-045 found a
+  loop-carried stale `ProvenSafe`; both fixed with regressions before merge).
+
 ## [2.6.0] — 2026-06-30
 
 Headline: **"Make the analysis observable" — and harden the shadow-stack bound.**
