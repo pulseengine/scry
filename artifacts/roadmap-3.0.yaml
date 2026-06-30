@@ -261,7 +261,7 @@ artifacts:
   - id: FEAT-046
     type: feature
     title: "v2.7 — Trap detection: out-of-bounds linear-memory access"
-    status: proposed
+    status: accepted
     release: v2.7.0
     description: >
       Classify each load/store as PROVEN-SAFE when the effective address +
