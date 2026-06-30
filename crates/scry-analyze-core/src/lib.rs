@@ -1846,7 +1846,25 @@ pub fn analyze(
         )?;
     }
     gaps.sort_by_key(|g| (g.func_index, g.pc));
+    // FEAT-045 soundness: `classify_div_trap` runs on EVERY fixpoint pass, so a
+    // div/rem in a loop body can collect a stale `ProvenSafe` from an early
+    // (pre-widening) iterate alongside the `PotentialTrap` of the converged
+    // iterate. Reconcile per `(func, pc, kind)` with `PotentialTrap` dominating
+    // `ProvenSafe`: the converged interval is the widest in a widening chain, so
+    // if it excludes the trap value every iterate did (all `ProvenSafe`), and if
+    // it includes it the converged pass contributes the `PotentialTrap` that
+    // dominates. Either way the surviving verdict is the sound (converged) one.
     trap_checks.sort_by_key(|t| (t.func_index, t.pc, t.kind as u8));
+    trap_checks.dedup_by(|next, kept| {
+        if kept.func_index == next.func_index && kept.pc == next.pc && kept.kind == next.kind {
+            if next.verdict == TrapVerdict::PotentialTrap {
+                kept.verdict = TrapVerdict::PotentialTrap;
+            }
+            true
+        } else {
+            false
+        }
+    });
 
     // ───────────────────────────────────────────────────────────
     // Assemble the per-function-summary output records (FEAT-007).
@@ -6473,6 +6491,39 @@ mod tests {
             trap_verdict(&r, "i32.div_u", TrapKind::DivByZero),
             Some(TrapVerdict::ProvenSafe),
             "the later const-divisor div_u stays live (div_s did not scrub it)"
+        );
+    }
+
+    /// FEAT-045 SOUNDNESS REGRESSION (clean-room): a div in a LOOP body must not
+    /// keep a stale `ProvenSafe` from an early (pre-widening) iterate. Here the
+    /// counter `i` runs 3→2→1→0 and `100 / i` traps at i=0; the converged
+    /// divisor interval includes 0, so the verdict must be PotentialTrap — and
+    /// there must be exactly ONE DivByZero entry for that op (reconciled).
+    #[test]
+    fn feat045_loop_divisor_reaching_zero_is_potential_trap() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) (local i32) \
+               i32.const 3 local.set 1 \
+               (loop \
+                 local.get 1 i32.const 1 i32.sub local.set 1 \
+                 i32.const 100 local.get 1 i32.div_s drop \
+                 local.get 1 i32.const 0 i32.gt_s br_if 0) \
+               i32.const 0))",
+        );
+        let dbz: alloc::vec::Vec<_> = r
+            .trap_checks
+            .iter()
+            .filter(|t| t.op == "i32.div_s" && t.kind == TrapKind::DivByZero)
+            .collect();
+        assert_eq!(
+            dbz.len(),
+            1,
+            "exactly one reconciled DivByZero verdict per op"
+        );
+        assert_eq!(
+            dbz[0].verdict,
+            TrapVerdict::PotentialTrap,
+            "a loop divisor that reaches 0 must NOT be ProvenSafe (stale pre-widen iterate)"
         );
     }
 
