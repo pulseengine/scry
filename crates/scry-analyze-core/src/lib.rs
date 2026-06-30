@@ -6179,7 +6179,11 @@ mod tests {
                  local.get 0 local.get 1 i32.lt_u \
                  br_if 0)))",
         );
-        assert!(r.pentagon_facts.is_empty(), "br_if must not emit a fact: {:?}", r.pentagon_facts);
+        assert!(
+            r.pentagon_facts.is_empty(),
+            "br_if must not emit a fact: {:?}",
+            r.pentagon_facts
+        );
     }
 
     /// Probe B(6a): comparison result STORED to a local then later used by `if`.
@@ -6214,7 +6218,11 @@ mod tests {
                i32.const 1 \
                (if (result i32) (then i32.const 1) (else i32.const 0))))",
         );
-        assert!(r.pentagon_facts.is_empty(), "intervening op -> no fact: {:?}", r.pentagon_facts);
+        assert!(
+            r.pentagon_facts.is_empty(),
+            "intervening op -> no fact: {:?}",
+            r.pentagon_facts
+        );
     }
 
     /// Probe B(3): the `if` carries a non-empty block type (params). Does the
@@ -6252,8 +6260,11 @@ mod tests {
                (if (result i32) (then i32.const 1) (else i32.const 0))))",
         );
         assert_eq!(r.pentagon_facts.len(), 1);
-        assert_eq!(r.pentagon_facts[0].bound, PentagonBound::Const(-1),
-            "i32 -1 must sign-extend to i64 -1, not 4294967295");
+        assert_eq!(
+            r.pentagon_facts[0].bound,
+            PentagonBound::Const(-1),
+            "i32 -1 must sign-extend to i64 -1, not 4294967295"
+        );
         assert!(!r.pentagon_facts[0].unsigned);
     }
 
@@ -6287,12 +6298,17 @@ mod tests {
         if let Some(f) = r.pentagon_facts.first() {
             std::eprintln!(
                 "RECORDED: lhs_local={} bound={:?} unsigned={}",
-                f.lhs_local, f.bound, f.unsigned
+                f.lhs_local,
+                f.bound,
+                f.unsigned
             );
             // The literal i64 fact x0 < -1 is FALSE for the entering value x0=0
             // (0 <_u 0xFFFFFFFF holds). So treating Const as a signed i64 bound
             // is unsound. It is only sound under the unsigned reading.
-            assert!(f.unsigned, "MUST flag unsigned so consumer knows the reading");
+            assert!(
+                f.unsigned,
+                "MUST flag unsigned so consumer knows the reading"
+            );
         }
     }
 
