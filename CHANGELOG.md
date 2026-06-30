@@ -7,6 +7,82 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.6.0] — 2026-06-30
+
+Headline: **"Make the analysis observable" — and harden the shadow-stack bound.**
+Four features land the v2.6.0 release (FEAT-040..043): scry stops emitting ⊤ as
+silence (machine-readable gap records), surfaces the relational octagon
+invariants it already proves, widens loops to syntactic thresholds, and weights
+the worst-case shadow-stack bound by the *resolved* `call_indirect` target set —
+the latter hardened against six independently-found soundness holes.
+
+### Added — FEAT-040 (traces REQ-017, evaluates TE-011) — observability
+
+- **Machine-readable gap records.** `AnalysisResult` carries an explicit
+  `gaps: Vec<Gap>` — `Gap { func_index, pc, op, kind }` with
+  `GapKind ∈ {UnsupportedOp, UnmodeledBranch, UnmodeledMemoryAddress,
+  UnmodeledControlFlow}` — emitted at every site where a fact degrades to ⊤
+  (unsupported op, `BrTable`, non-i32 memory address, havocked region with a
+  write or a call). No conservative site is silently omitted: `scrub_to_top`
+  now *requires* a `Gap`. Library-only field; a scry-viz gaps panel renders the
+  records and an aggregated count beside the SVG.
+
+### Added — FEAT-041 (traces REQ-016) — relational output
+
+- **Relational octagon invariants surfaced.** `ProgramPoint` carries
+  `relational: Vec<RelationalConstraint>` — the difference / sum bounds
+  (`RelKind ∈ {Diff, Sum}`) read off the strong-closed DBM, not just the unary
+  interval projection. Cashes in the v1.4–v1.9 octagon arc. Sound by
+  construction (the constraints are the closed DBM scry already proves).
+
+### Added — FEAT-042 (traces REQ-016) — precision
+
+- **Widening with thresholds.** Loop-header widening snaps to the nearest
+  enclosing syntactic threshold (constants + guard bounds in scope) before
+  falling to ±∞, recovering loop bounds the fixed iterate-then-widen
+  over-approximated to ⊤. Sound (widening still terminates).
+
+### Changed — FEAT-043 (traces REQ-001, G-005, FEAT-021, DD-016 slice-3) — SOUNDNESS
+
+- **Shadow-stack bound weighted by resolved `call_indirect` targets.** For a
+  function scry interprets with no gap, the worst-case longest-path is weighted
+  by the *resolved* table-0 target set (FEAT-006 index-interval resolution)
+  instead of the whole table — a precision win over slice-1/2.
+- **Six soundness holes found by adversarial clean-room and closed** (each could
+  report a finite `Bytes(n)` *below* the true peak — the cardinal error):
+  1. `call_ref` / `return_call_ref` ⇒ `Unknown` (unenumerable callee).
+  2. A havocked region containing a call records a gap, so its callee is not
+     dropped from the resolved set.
+  3. `call_indirect` against a **non-zero table** or a **growable** table-0 ⇒
+     `Unknown`.
+  4. A **runtime `table.set`/`copy`/`fill`/`init`/`grow`** on table 0 demotes it
+     to contents-unknown ⇒ `Unknown` (the static elem shape is only the
+     *initial* contents).
+  5. A **host-writable** table 0 — **imported** or **exported** — demotes to
+     contents-unknown ⇒ `Unknown` (the host can install an arbitrary-frame
+     callee with no `table.*` opcode scry can see).
+  6. A **constant SP decrement inside a loop body** with no per-iteration
+     restore ⇒ `Unbounded` (`detect_frame` was control-flow-insensitive; the
+     live frame is `frame × trip_count` — the alloca-in-a-loop pattern). A
+     per-iteration *balanced* alloc/free keeps the finite single-frame bound.
+
+### Posture
+
+- FEAT-040/041 are library-only `AnalysisResult`/`ProgramPoint` fields; the
+  `scry.wit` interface and the frozen v1 invariant-JSON contract are unchanged.
+  FEAT-043 only ever *raises* a reported bound (`Bytes` → `Unknown`/`Unbounded`)
+  where it was unsound; it never lowers one.
+- **Falsification statement.** scry claims `stack_usage.max_stack_bytes` is a
+  sound UPPER bound on the true peak `__stack_pointer` usage across all reachable
+  functions, and that every gap-degraded analysis site appears as an explicit
+  `Gap`. FALSE if any `.wat` exhibits a runtime peak shadow-stack strictly
+  greater than a finite reported `Bytes(n)`, or reaches ⊤ at a site with no
+  emitted `Gap`. Falsifier for the bound: a module with a host-/loop-/indirect-
+  dispatched callee whose measured peak exceeds the reported finite bound.
+- Three independent cold clean-room agents drove the FEAT-043 fixes; the final
+  pass confirmed the remaining surface sound (probes on direct imports, split
+  prologues, nested/dynamic decrements, recursion-through-indirect).
+
 ## [2.5.0] — 2026-06-27
 
 Headline: **`reachable_from_exports` is now sound in the OPEN world (FEAT-039,
