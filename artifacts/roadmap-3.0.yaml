@@ -217,7 +217,7 @@ artifacts:
   - id: FEAT-044
     type: feature
     title: "v2.7 — Pentagons domain (cheap x in [a,b] AND x < y)"
-    status: proposed
+    status: accepted
     release: v2.7.0
     description: >
       Add the Pentagons weakly-relational domain (Logozzo-Fähndrich, AC-014):

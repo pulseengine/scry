@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# scry-pentagon — the pure Pentagons weakly-relational domain (FEAT-044,
+# AC-014): per-variable intervals + strict `x < y` facts. Mirrors
+# scry-octagon / scry-interval / scry-bits: a dependency-free crate that
+# compiles #![no_std] AND native (where scry-host-tests + the crate's own
+# γ-sweep tests falsify the lattice laws + the interval-recovering join's
+# concretization soundness). The join + order soundness is mechanized in
+# //proofs/rocq:pentagon.
+
+rust_library(
+    name = "scry_pentagon",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_pentagon",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    tags = ["feat-044"],
+)
+
+rust_test(
+    name = "scry_pentagon_test",
+    crate = ":scry_pentagon",
+    edition = "2024",
+    tags = ["feat-044"],
+)

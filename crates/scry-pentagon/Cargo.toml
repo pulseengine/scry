@@ -1,0 +1,21 @@
+[package]
+name = "scry-sai-pentagon"
+description = "Pure Pentagons weakly-relational abstract domain for scry (FEAT-044, AC-014; Logozzo-Fähndrich intervals + strict-less-than for sound bounds/OOB-trap detection)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library, intentionally zero dependencies. The same source compiles
+# both #![no_std] (so it can back a future wasm-lattice WIT export, as the
+# octagon / interval / bits crates do) and natively into scry-host-tests, so
+# the lattice laws + concretization soundness are mechanically falsifiable on
+# the native cargo path. Mirrors scry-sai-octagon / scry-sai-interval /
+# scry-sai-bits. The join + order soundness is mechanized in
+# proofs/rocq/Pentagon.v.
+[lib]
+name = "scry_pentagon"
+path = "src/lib.rs"
+
+[dependencies]

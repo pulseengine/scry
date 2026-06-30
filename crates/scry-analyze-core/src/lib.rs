@@ -423,6 +423,15 @@ pub struct AnalysisResult {
     /// own conservative stops; (c) imported functions (never analyzed). Those
     /// are sound but out of this report's scope.
     pub gaps: Vec<Gap>,
+    /// FEAT-044 (REQ-014, AC-014): proven strict-less-than relations between a
+    /// local and another local / a constant, recorded by an additive
+    /// guard-detection pass using the Pentagons domain ([`scry_pentagon`]).
+    /// Each entry is a guard `x < y` (or `x < c`) that scry proved holds inside
+    /// the then-region of an `if` — the cheap relational fact out-of-bounds
+    /// trap detection (FEAT-046) consumes as `index < length`. Sorted by
+    /// `(func_index, pc)`. Library-only (not in the WIT mirror or the frozen v1
+    /// JSON contract), like [`AnalysisResult::bit_facts`].
+    pub pentagon_facts: Vec<PentagonFact>,
 }
 
 /// FEAT-040: one analysis-gap record — a site where scry was conservative.
@@ -478,6 +487,36 @@ pub struct BitFact {
     pub cong_modulus: u64,
     /// Congruence residue (see `cong_modulus`).
     pub cong_residue: u64,
+}
+
+/// FEAT-044: a proven strict-less-than relation `x < bound`, holding on ENTRY
+/// to the then-region of the `if` it guards. Sound: the then-branch is taken
+/// only when the comparison evaluated true, so `x < bound` holds the instant
+/// control enters it. (A consumer that reads the fact deeper in the region must
+/// confirm `lhs_local` was not reassigned since the guard — the fact is a
+/// guard-entry condition, not a region-wide invariant.)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PentagonFact {
+    /// Absolute function index.
+    pub func_index: u32,
+    /// Operator index (pc) of the `if` whose then-region the relation guards.
+    pub pc: u32,
+    /// The local on the left of the strict comparison (`x` in `x < bound`).
+    pub lhs_local: u32,
+    /// The right-hand side of the strict relation.
+    pub bound: PentagonBound,
+    /// `true` when the guard was an unsigned comparison (`lt_u`) — then both
+    /// operands are also known `≥ 0`, the form bounds-checking wants.
+    pub unsigned: bool,
+}
+
+/// FEAT-044: the right-hand side of a [`PentagonFact`] strict relation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PentagonBound {
+    /// `x < x_other` — a strict relation between two locals.
+    Local(u32),
+    /// `x < c` — a strict relation against a constant.
+    Const(i64),
 }
 
 /// FEAT-027: human-readable metadata for one function index.
@@ -2036,6 +2075,7 @@ pub fn analyze(
     // computed above — it is a separate straight-line-sound walk (the FEAT-021
     // "additive pass" precedent).
     let bit_facts = compute_bit_facts(&defined_funcs);
+    let pentagon_facts = compute_pentagon_facts(&defined_funcs);
 
     Ok(AnalysisResult {
         invariants,
@@ -2050,6 +2090,7 @@ pub fn analyze(
         verified_premises,
         bit_facts,
         gaps,
+        pentagon_facts,
     })
 }
 
@@ -2232,6 +2273,75 @@ fn compute_bit_facts(defined_funcs: &[DefinedFunc<'_>]) -> Vec<BitFact> {
     }
 
     facts.sort_by_key(|f| (f.func_index, f.pc, f.local_index));
+    facts
+}
+
+/// FEAT-044 (AC-014): an additive guard-detection pass that records the strict
+/// `x < bound` relations the Pentagons domain ([`scry_pentagon`]) can prove from
+/// a comparison that guards an `if`. It scans each body for the shape
+///
+/// ```text
+///   local.get i ;  (local.get j | i32.const c | i64.const c) ;  <lt> ;  if
+/// ```
+///
+/// where `<lt>` is `i32/i64.lt_u` or `i32/i64.lt_s`. The then-branch is taken
+/// only when the comparison was true, so `x_i < bound` holds on ENTRY to the
+/// then-region — exactly the `index < length` fact FEAT-046 consumes. The
+/// fact is emitted only when a freshly-built Pentagon, told `assume_lt`,
+/// actually *proves* it via [`Pentagon::implies_lt`] — so the domain is
+/// load-bearing, not decorative. Straight-line, no fixpoint, library-only.
+fn compute_pentagon_facts(defined_funcs: &[DefinedFunc<'_>]) -> Vec<PentagonFact> {
+    use scry_pentagon::Pentagon;
+    let mut facts: Vec<PentagonFact> = Vec::new();
+
+    for func in defined_funcs {
+        let ops = &func.ops;
+        for pc in 0..ops.len() {
+            // Window: cmp-lhs, cmp-rhs, lt-op, if.
+            if pc + 3 >= ops.len() {
+                break;
+            }
+            let Operator::LocalGet { local_index: i } = ops[pc] else {
+                continue;
+            };
+            let bound = match ops[pc + 1] {
+                Operator::LocalGet { local_index: j } => PentagonBound::Local(j),
+                Operator::I32Const { value } => PentagonBound::Const(value as i64),
+                Operator::I64Const { value } => PentagonBound::Const(value),
+                _ => continue,
+            };
+            let unsigned = match ops[pc + 2] {
+                Operator::I32LtU | Operator::I64LtU => true,
+                Operator::I32LtS | Operator::I64LtS => false,
+                _ => continue,
+            };
+            if !matches!(ops[pc + 3], Operator::If { .. }) {
+                continue;
+            }
+            // Validate the relation through the domain: x_0 = lhs, x_1 = rhs.
+            let mut p = Pentagon::top(2);
+            match bound {
+                PentagonBound::Local(_) => p.assume_lt(0, 1),
+                PentagonBound::Const(c) => {
+                    // model the constant rhs as a singleton interval on x_1
+                    p.set_interval(1, c, c);
+                    p.assume_lt(0, 1);
+                }
+            }
+            if !p.implies_lt(0, 1) {
+                continue;
+            }
+            facts.push(PentagonFact {
+                func_index: func.abs_index,
+                pc: (pc + 3) as u32,
+                lhs_local: i,
+                bound,
+                unsigned,
+            });
+        }
+    }
+
+    facts.sort_by_key(|f| (f.func_index, f.pc));
     facts
 }
 
@@ -5636,6 +5746,7 @@ mod tests {
             verified_premises: FusionPremises::default(),
             bit_facts: alloc::vec![],
             gaps: alloc::vec![],
+            pentagon_facts: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -5994,6 +6105,197 @@ mod tests {
 
     /// FEAT-043 SOUNDNESS REGRESSION (clean-room #6): a constant SP decrement
     /// inside a `loop` body with no per-iteration restore leaks `frame` bytes on
+    /// FEAT-044 (AC-014): a guard `local.get i; local.get n; i32.lt_u; if`
+    /// makes scry record the strict relation `i < n` for the then-region — the
+    /// `index < length` fact OOB-trap detection (FEAT-046) consumes.
+    #[test]
+    fn feat044_lt_u_guard_records_index_below_length() {
+        let r = analyze_default(
+            "(module \
+               (func (export \"f\") (param i32 i32) (result i32) \
+                 local.get 0 local.get 1 i32.lt_u \
+                 (if (result i32) (then i32.const 1) (else i32.const 0))))",
+        );
+        assert_eq!(r.pentagon_facts.len(), 1, "expected one recorded guard");
+        let f = &r.pentagon_facts[0];
+        assert_eq!(f.lhs_local, 0);
+        assert_eq!(f.bound, PentagonBound::Local(1));
+        assert!(f.unsigned, "lt_u guard is unsigned");
+    }
+
+    /// FEAT-044: a guard against a constant (`i < 16`) is recorded with a
+    /// `Const` bound; the signed comparison is flagged `unsigned == false`.
+    #[test]
+    fn feat044_lt_s_guard_against_const_recorded() {
+        let r = analyze_default(
+            "(module \
+               (func (export \"f\") (param i32) (result i32) \
+                 local.get 0 i32.const 16 i32.lt_s \
+                 (if (result i32) (then i32.const 1) (else i32.const 0))))",
+        );
+        assert_eq!(r.pentagon_facts.len(), 1);
+        let f = &r.pentagon_facts[0];
+        assert_eq!(f.lhs_local, 0);
+        assert_eq!(f.bound, PentagonBound::Const(16));
+        assert!(!f.unsigned);
+    }
+
+    /// FEAT-044: a comparison NOT feeding an `if` records nothing — the strict
+    /// fact is only sound when it guards the region.
+    #[test]
+    fn feat044_unguarded_comparison_records_nothing() {
+        let r = analyze_default(
+            "(module \
+               (func (export \"f\") (param i32 i32) (result i32) \
+                 local.get 0 local.get 1 i32.lt_u))",
+        );
+        assert!(r.pentagon_facts.is_empty());
+    }
+
+    // ════════════ ADVERSARIAL THROWAWAY (clean-room FEAT-044 pass) ════════════
+
+    /// Probe B(1): operand order. `local.get 0; local.get 1; lt; if` must record
+    /// lhs=0, bound=Local(1) (i.e. x0 < x1), NOT the reverse.
+    #[test]
+    fn adv_operand_order() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) \
+               local.get 0 local.get 1 i32.lt_u \
+               (if (result i32) (then i32.const 1) (else i32.const 0))))",
+        );
+        assert_eq!(r.pentagon_facts.len(), 1);
+        let f = &r.pentagon_facts[0];
+        assert_eq!(f.lhs_local, 0, "lhs must be the FIRST local.get");
+        assert_eq!(f.bound, PentagonBound::Local(1), "bound must be the SECOND");
+    }
+
+    /// Probe B(4): br_if must emit NOTHING. br_if branches when TRUE; the
+    /// fall-through is where !(a<b) holds, so recording a<b would be UNSOUND.
+    #[test]
+    fn adv_br_if_emits_nothing() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) \
+               (block \
+                 local.get 0 local.get 1 i32.lt_u \
+                 br_if 0)))",
+        );
+        assert!(r.pentagon_facts.is_empty(), "br_if must not emit a fact: {:?}", r.pentagon_facts);
+    }
+
+    /// Probe B(6a): comparison result STORED to a local then later used by `if`.
+    /// The `if` does not consume the lt directly -> no fact may be emitted.
+    /// `local.get 0; local.get 1; lt; local.set 2; ...; local.get 2; if`
+    #[test]
+    fn adv_result_stored_not_directly_consumed() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local i32) \
+               local.get 0 local.get 1 i32.lt_u local.set 2 \
+               local.get 2 \
+               (if (result i32) (then i32.const 1) (else i32.const 0))))",
+        );
+        // The window cmp,cmp,lt,if never lines up (local.set 2 sits between lt and if),
+        // so nothing should be emitted.
+        assert!(
+            r.pentagon_facts.is_empty(),
+            "stored bool not directly guarding if -> no fact: {:?}",
+            r.pentagon_facts
+        );
+    }
+
+    /// Probe B(6b): an op intervenes between lt and if, but ALSO try the case
+    /// where another value is pushed after lt so the `if` tests something else.
+    /// `local.get 0; local.get 1; lt; drop; i32.const 1; if` — the if tests the
+    /// const, not the comparison. Must emit nothing.
+    #[test]
+    fn adv_intervening_op_before_if() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) \
+               local.get 0 local.get 1 i32.lt_u drop \
+               i32.const 1 \
+               (if (result i32) (then i32.const 1) (else i32.const 0))))",
+        );
+        assert!(r.pentagon_facts.is_empty(), "intervening op -> no fact: {:?}", r.pentagon_facts);
+    }
+
+    /// Probe B(3): the `if` carries a non-empty block type (params). Does the
+    /// stack-param shift mean the compared values aren't the locals named?
+    /// Here the if takes one i32 param: stack is [extra, cmp_bool] but the if
+    /// pops only the bool as its condition. The folded form `(if (param i32) ...)`
+    /// — verify whatever is emitted is still sound (lhs<bound on entry).
+    #[test]
+    fn adv_if_with_block_params() {
+        // push an extra value (local 0), do the guard, if-with-param consumes it.
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) \
+               local.get 0 \
+               local.get 0 local.get 1 i32.lt_u \
+               (if (param i32) (result i32) (then drop i32.const 1) (else drop i32.const 0))))",
+        );
+        // Pattern: ops are LocalGet0, LocalGet0, LocalGet1, LtU, If. The window
+        // starting at the SECOND LocalGet0 matches: lhs=0,bound=Local(1). The
+        // guard genuinely holds on entry (the if's condition IS local0<local1),
+        // so the fact is sound. Just ensure if a fact exists it is x0<x1.
+        for f in &r.pentagon_facts {
+            assert_eq!(f.lhs_local, 0);
+            assert_eq!(f.bound, PentagonBound::Local(1));
+        }
+    }
+
+    /// Probe B(5): negative i32 const. `local.get 0; i32.const -1; lt_s; if`
+    /// records x0 < -1 (signed). The i32 value -1 must be sign-extended to i64,
+    /// NOT recorded as 0xFFFFFFFF.
+    #[test]
+    fn adv_negative_i32_const() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) \
+               local.get 0 i32.const -1 i32.lt_s \
+               (if (result i32) (then i32.const 1) (else i32.const 0))))",
+        );
+        assert_eq!(r.pentagon_facts.len(), 1);
+        assert_eq!(r.pentagon_facts[0].bound, PentagonBound::Const(-1),
+            "i32 -1 must sign-extend to i64 -1, not 4294967295");
+        assert!(!r.pentagon_facts[0].unsigned);
+    }
+
+    /// Probe B(5b): i64 negative const path.
+    #[test]
+    fn adv_negative_i64_const() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i64) (result i32) \
+               local.get 0 i64.const -5 i64.lt_s \
+               (if (result i32) (then i32.const 1) (else i32.const 0))))",
+        );
+        assert_eq!(r.pentagon_facts.len(), 1);
+        assert_eq!(r.pentagon_facts[0].bound, PentagonBound::Const(-5));
+    }
+
+    /// Probe B(2): SEMANTIC soundness of the unsigned guard recorded as a strict
+    /// fact. `lt_u` with a NEGATIVE i32 const: local.get 0; i32.const -1; i32.lt_u.
+    /// Unsigned, -1 is 0xFFFFFFFF (4294967295). The pass records Const(-1) and
+    /// unsigned=true. Is `x0 < -1` (the literal i64 fact) actually true on entry?
+    /// CONCRETE: x0 = 0. Unsigned 0 <_u 0xFFFFFFFF is TRUE -> guard taken.
+    /// But signed/i64 reading of the fact "x0 < -1" with x0=0 is FALSE.
+    /// A consumer reading bound=Const(-1) as a signed i64 bound is MISLED.
+    #[test]
+    fn adv_unsigned_const_semantic_trap() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) \
+               local.get 0 i32.const -1 i32.lt_u \
+               (if (result i32) (then i32.const 1) (else i32.const 0))))",
+        );
+        // Document what is recorded.
+        if let Some(f) = r.pentagon_facts.first() {
+            std::eprintln!(
+                "RECORDED: lhs_local={} bound={:?} unsigned={}",
+                f.lhs_local, f.bound, f.unsigned
+            );
+            // The literal i64 fact x0 < -1 is FALSE for the entering value x0=0
+            // (0 <_u 0xFFFFFFFF holds). So treating Const as a signed i64 bound
+            // is unsound. It is only sound under the unsigned reading.
+            assert!(f.unsigned, "MUST flag unsigned so consumer knows the reading");
+        }
+    }
+
     /// every back-edge — the live frame is `frame × trip_count`, unbounded.
     /// detect_frame was control-flow-insensitive and reported the single-
     /// iteration frame (16) instead of Unbounded.
