@@ -3727,6 +3727,17 @@ fn detect_frame(ops: &[Operator<'_>], sp: SpGlobal) -> StackBound {
         SpGlobal::Ambiguous => return StackBound::Unknown,
         SpGlobal::Index(g) => g,
     };
+    // FEAT-043 soundness (clean-room #6): `detect_frame` is otherwise
+    // control-flow-INSENSITIVE — it counts each prologue shape once. A
+    // constant SP decrement that lives INSIDE a `loop` body and is NOT
+    // restored within the same iteration leaks `frame` bytes on every
+    // back-edge, so the live frame is `frame × trip_count` — unbounded from a
+    // bound that cannot prove the trip count. Detect any loop whose body has a
+    // NET-NEGATIVE constant SP delta (more subtracted than added within the
+    // loop) and report `Unbounded`, never the single-iteration `frame`.
+    if loop_leaks_stack(ops, g) {
+        return StackBound::Unbounded;
+    }
     let mut const_decr: u32 = 0;
     let mut dyn_decr: u32 = 0;
     let mut frame: u64 = 0;
@@ -3772,6 +3783,48 @@ fn detect_frame(ops: &[Operator<'_>], sp: SpGlobal) -> StackBound {
     } else {
         StackBound::Bytes(0)
     }
+}
+
+/// FEAT-043 soundness (clean-room #6): true if ANY `loop` body has a
+/// net-negative CONSTANT shadow-stack-pointer delta — i.e. one iteration
+/// subtracts more from SP (`global.get g; i32.const F; i32.sub`) than it adds
+/// back (`global.get g; i32.const F; i32.add`). Such a loop drives SP down on
+/// every back-edge, so the worst-case live frame grows with the (statically
+/// unknown) trip count and is unbounded. Nested loops are covered because an
+/// inner decrement also falls inside the outer loop's range, and an inner leak
+/// is itself flagged at the inner loop. Dynamic (non-constant) SP writes are
+/// handled by the caller's `dyn_decr`/`bad` paths; here we only need the
+/// constant arithmetic, since only that path can otherwise yield a finite
+/// `Bytes(frame)`.
+fn loop_leaks_stack(ops: &[Operator<'_>], g: u32) -> bool {
+    let end_map = build_end_map(ops);
+    for (opener, op) in ops.iter().enumerate() {
+        if !matches!(op, Operator::Loop { .. }) {
+            continue;
+        }
+        let Some(end) = end_map[opener] else { continue };
+        let mut delta: i64 = 0;
+        for k in (opener + 1)..end {
+            if !matches!(ops.get(k), Some(Operator::GlobalGet { global_index }) if *global_index == g)
+            {
+                continue;
+            }
+            if let (Some(Operator::I32Const { value }), Some(kind)) =
+                (ops.get(k + 1), ops.get(k + 2))
+                && *value >= 0
+            {
+                match kind {
+                    Operator::I32Sub => delta -= *value as i64,
+                    Operator::I32Add => delta += *value as i64,
+                    _ => {}
+                }
+            }
+        }
+        if delta < 0 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Compute the module's worst-case shadow-stack usage (FEAT-021 slice-1):
@@ -5935,6 +5988,57 @@ mod tests {
             StackBound::Bytes(264),
             "a void call inside an if must still contribute its callee's frame \
              (8 + 256 = 264, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #6): a constant SP decrement
+    /// inside a `loop` body with no per-iteration restore leaks `frame` bytes on
+    /// every back-edge — the live frame is `frame × trip_count`, unbounded.
+    /// detect_frame was control-flow-insensitive and reported the single-
+    /// iteration frame (16) instead of Unbounded.
+    #[test]
+    fn feat043_sp_decrement_in_loop_is_unbounded() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (func (export \"entry\") (local i32) \
+                 i32.const 10 local.set 0 \
+                 (loop \
+                   global.get $sp i32.const 16 i32.sub global.set $sp \
+                   local.get 0 i32.const 1 i32.sub local.tee 0 br_if 0) \
+                 global.get $sp i32.const 160 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unbounded,
+            "an unrestored SP decrement in a loop body must be Unbounded, not a \
+             single-iteration frame; got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 (clean-room #6 control): a loop that allocates AND restores the
+    /// frame within the SAME iteration (net-zero SP delta) does NOT leak — the
+    /// peak live frame is one iteration's worth, so the finite `Bytes(frame)`
+    /// bound stays correct. Guards the leak detector against over-flagging.
+    #[test]
+    fn feat043_balanced_loop_frame_stays_bytes() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 65536)) \
+               (func (export \"entry\") (local i32) \
+                 i32.const 10 local.set 0 \
+                 (loop \
+                   global.get $sp i32.const 32 i32.sub global.set $sp \
+                   global.get $sp i32.const 32 i32.add global.set $sp \
+                   local.get 0 i32.const 1 i32.sub local.tee 0 br_if 0)))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Bytes(32),
+            "a per-iteration balanced alloc/free must keep the finite single-frame \
+             bound; got {:?}",
             r.stack_usage.max_stack_bytes
         );
     }
