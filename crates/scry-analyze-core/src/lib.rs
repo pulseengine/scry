@@ -1095,6 +1095,13 @@ pub fn analyze(
     // address may be reachable indirectly (or by the host, via an exported or
     // imported table) — which the param-range gate cannot otherwise bound.
     let mut module_has_table: bool = false;
+    // FEAT-043 soundness (clean-room #5): true if table 0 is host-writable —
+    // imported (the host supplies, and may overwrite, its slots) or exported
+    // (the host holds the export and may write through it). scry sees no
+    // `table.*` opcode for a host write, so an active-segment-resolved slot
+    // cannot be trusted: the host may install a callee of arbitrary frame
+    // depth. Forces `contents_known = false` so indirect dispatch is Unknown.
+    let mut table0_host_writable: bool = false;
     // FEAT-036 soundness: true if a `ref.func` appears OUTSIDE a function body —
     // in a global's init expression or an element segment's items. Such a
     // funcref to a defined function can escape (e.g. via an exported global) to
@@ -1167,6 +1174,10 @@ pub fn analyze(
                     // the host can dispatch through it with arbitrary arguments.
                     if matches!(imp.ty, wasmparser::TypeRef::Table(_)) {
                         module_has_table = true;
+                        // Imported tables occupy the low table-index space, so
+                        // the first one is table 0: it is host-supplied and
+                        // host-writable (clean-room #5).
+                        table0_host_writable = true;
                     }
                     // FEAT-038 soundness: an imported memory is host-supplied —
                     // its true size is ≥ the declared minimum and the host may
@@ -1211,6 +1222,12 @@ pub fn analyze(
                     // constant even with no in-module `memory.grow`.
                     if matches!(ex.kind, wasmparser::ExternalKind::Memory) {
                         memory_is_exported = true;
+                    }
+                    // FEAT-043 soundness (clean-room #5): an exported table 0 is
+                    // held by the host, which can overwrite its slots through the
+                    // embedder API with a callee of arbitrary frame depth.
+                    if matches!(ex.kind, wasmparser::ExternalKind::Table) && ex.index == 0 {
+                        table0_host_writable = true;
                     }
                 }
             }
@@ -1584,7 +1601,7 @@ pub fn analyze(
             _ => false,
         })
     });
-    if table0_mutated {
+    if table0_mutated || table0_host_writable {
         func_table.contents_known = false;
     }
 
@@ -5918,6 +5935,59 @@ mod tests {
             StackBound::Bytes(264),
             "a void call inside an if must still contribute its callee's frame \
              (8 + 256 = 264, not 256); got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #5): table 0 is HOST-WRITABLE
+    /// when imported — the host supplies its slots and scry sees no `table.*`
+    /// op, so a `call_indirect 0` may dispatch a host-installed callee of any
+    /// frame depth. Must be Unknown, not the function's own frame only.
+    #[test]
+    fn feat043_imported_table_indirect_is_unknown() {
+        let r = analyze_default(
+            "(module \
+               (import \"env\" \"t\" (table 1 1 funcref)) \
+               (global $sp (mut i32) (i32.const 1048576)) \
+               (type $ft (func)) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 4096 i32.sub global.set $sp \
+                 i32.const 0 call_indirect 0 (type $ft) \
+                 global.get $sp i32.const 4096 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unknown,
+            "an imported (host-writable) table-0 call_indirect must be Unknown; \
+             got {:?}",
+            r.stack_usage.max_stack_bytes
+        );
+    }
+
+    /// FEAT-043 SOUNDNESS REGRESSION (clean-room #5): an EXPORTED defined table 0
+    /// is held by the host, which can overwrite a slot via the embedder API with
+    /// a deeper-framed callee. The declared active-segment target is no longer a
+    /// sound enumeration — must be Unknown.
+    #[test]
+    fn feat043_exported_table_indirect_is_unknown() {
+        let r = analyze_default(
+            "(module \
+               (global $sp (mut i32) (i32.const 1048576)) \
+               (table (export \"t\") 1 1 funcref) (elem (i32.const 0) func 0) \
+               (type $ft (func)) \
+               (func $small (type $ft) \
+                 global.get $sp i32.const 16 i32.sub global.set $sp \
+                 global.get $sp i32.const 16 i32.add global.set $sp) \
+               (func (export \"entry\") \
+                 global.get $sp i32.const 4096 i32.sub global.set $sp \
+                 i32.const 0 call_indirect (type $ft) \
+                 global.get $sp i32.const 4096 i32.add global.set $sp))",
+        );
+        assert_eq!(
+            r.stack_usage.max_stack_bytes,
+            StackBound::Unknown,
+            "an exported (host-writable) table-0 call_indirect must be Unknown; \
+             got {:?}",
             r.stack_usage.max_stack_bytes
         );
     }
