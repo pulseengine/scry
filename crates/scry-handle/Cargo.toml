@@ -1,0 +1,20 @@
+[package]
+name = "scry-sai-handle"
+description = "Pure affine handle-state lattice for scry (FEAT-049, MF-007; Component-Model own/borrow resource states — detects use-after-drop / double-drop / leaks)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library, intentionally zero dependencies. The same source compiles
+# both #![no_std] (so it can back a future wasm-lattice WIT export, as the
+# octagon / interval / bits / pentagon / float crates do) and natively into
+# scry-host-tests, where its own γ-sweep falsifies the lattice laws +
+# transition soundness. Mirrors the other scry-sai-* domain crates. The
+# lattice soundness is mechanized in proofs/rocq/Handle.v.
+[lib]
+name = "scry_handle"
+path = "src/lib.rs"
+
+[dependencies]

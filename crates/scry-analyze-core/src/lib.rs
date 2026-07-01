@@ -451,6 +451,13 @@ pub struct AnalysisResult {
     /// the frozen v1 JSON contract), like [`Self::bit_facts`]. Only non-⊤ facts
     /// are emitted.
     pub float_facts: Vec<FloatFact>,
+    /// FEAT-049 (REQ-003, MF-007): Component-Model handle-lifetime faults
+    /// (use-after-drop / double-drop) found by the affine handle-state pass over
+    /// the canonical-ABI `[resource-drop]` / `[method]` call sites. Sound
+    /// definite faults only (no false report on correctly owned/borrowed
+    /// handles). Sorted by `(func_index, pc)`. Library-only (not in the WIT
+    /// mirror or the frozen v1 JSON contract), like [`Self::bit_facts`].
+    pub handle_findings: Vec<HandleFinding>,
 }
 
 /// FEAT-040: one analysis-gap record — a site where scry was conservative.
@@ -571,6 +578,33 @@ impl FloatFact {
     pub fn hi(&self) -> f64 {
         f64::from_bits(self.hi_bits)
     }
+}
+
+/// FEAT-049 (REQ-003, MF-007): a Component-Model handle-lifetime fault found by
+/// the affine handle-state pass over [`scry_handle`] — a resource handle used or
+/// dropped after it was already dropped. Sound (a DEFINITE fault): reported only
+/// on a straight-line path where the handle is provably `Dropped` at the site.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HandleFinding {
+    /// Absolute function index.
+    pub func_index: u32,
+    /// Operator index (pc) of the offending `call` (drop/use of a dropped handle).
+    pub pc: u32,
+    /// The local holding the handle.
+    pub local_index: u32,
+    /// The `module.field` name of the canonical-ABI import involved.
+    pub via: String,
+    /// Which fault.
+    pub kind: HandleFindingKind,
+}
+
+/// FEAT-049: the category of a [`HandleFinding`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandleFindingKind {
+    /// A resource method / representation call on an already-dropped handle.
+    UseAfterDrop,
+    /// A second `resource.drop` on an already-dropped handle.
+    DoubleDrop,
 }
 
 /// FEAT-045 (REQ-014, MF-006): a runtime-trap classification for one
@@ -2203,6 +2237,8 @@ pub fn analyze(
     let bit_facts = compute_bit_facts(&defined_funcs);
     let pentagon_facts = compute_pentagon_facts(&defined_funcs);
     let float_facts = compute_float_facts(&defined_funcs);
+    let handle_findings =
+        compute_handle_findings(&defined_funcs, &import_func_meta, import_func_count);
 
     Ok(AnalysisResult {
         invariants,
@@ -2220,6 +2256,7 @@ pub fn analyze(
         pentagon_facts,
         trap_checks,
         float_facts,
+        handle_findings,
     })
 }
 
@@ -2621,6 +2658,127 @@ fn float_unop(
 ) {
     let a = stack.pop().flatten();
     stack.push(a.map(|(fa, w)| (f(fa), w)));
+}
+
+/// FEAT-049: how a canonical-ABI import touches a resource handle passed to it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HandleOp {
+    /// `[resource-drop]T` — drops the handle.
+    Drop,
+    /// `[method]T.m` / `[resource-rep]T` — uses (reads) the handle.
+    Use,
+}
+
+/// FEAT-049: classify an import by its Component-Model canonical-ABI name.
+/// The bracketed tags are the ABI's own convention; a value passed to such an
+/// import is a resource handle being dropped or used.
+fn classify_handle_import(name: &str) -> Option<HandleOp> {
+    if name.contains("[resource-drop]") {
+        Some(HandleOp::Drop)
+    } else if name.contains("[method]") || name.contains("[resource-rep]") {
+        Some(HandleOp::Use)
+    } else {
+        None
+    }
+}
+
+/// FEAT-049 (MF-007): the affine handle-state pass. Tracks each local's handle
+/// state ([`scry_handle::HandleState`]) across the canonical-ABI
+/// `local.get L; call [resource-drop|method|resource-rep] …` sites and reports
+/// DEFINITE use-after-drop / double-drop faults. Straight-line and conservative
+/// at control flow (all locals widen to `Top` — "maybe dropped" — at any
+/// branch/merge, so a definite fault is never reported across paths): sound in
+/// the "no false report" direction the AC requires. `import_func_meta[i]` is the
+/// `module.field` of imported function `i` (`i < import_func_count`).
+fn compute_handle_findings(
+    defined_funcs: &[DefinedFunc<'_>],
+    import_func_meta: &[String],
+    import_func_count: u32,
+) -> Vec<HandleFinding> {
+    use scry_handle::HandleState;
+    let mut findings: Vec<HandleFinding> = Vec::new();
+
+    for func in defined_funcs {
+        let nlocals = func.params.len() + func.declared_locals.len();
+        let mut states: Vec<HandleState> = alloc::vec![HandleState::Alive; nlocals];
+        let ops = &func.ops;
+
+        for i in 0..ops.len() {
+            match &ops[i] {
+                Operator::LocalSet { local_index } | Operator::LocalTee { local_index } => {
+                    // A fresh value is written — reset to Alive (a newly-bound
+                    // handle is live; conservative for no-false-report).
+                    if let Some(s) = states.get_mut(*local_index as usize) {
+                        *s = HandleState::Alive;
+                    }
+                }
+                Operator::LocalGet { local_index } => {
+                    // Canonical shape: `local.get L` immediately consumed by a
+                    // resource `call`.
+                    let Some(Operator::Call { function_index }) = ops.get(i + 1) else {
+                        continue;
+                    };
+                    if *function_index >= import_func_count {
+                        continue;
+                    }
+                    let Some(name) = import_func_meta.get(*function_index as usize) else {
+                        continue;
+                    };
+                    let Some(op) = classify_handle_import(name) else {
+                        continue;
+                    };
+                    let l = *local_index as usize;
+                    let Some(&st) = states.get(l) else { continue };
+                    match op {
+                        HandleOp::Drop => {
+                            // DEFINITE double-drop only when provably Dropped.
+                            if st == HandleState::Dropped {
+                                findings.push(HandleFinding {
+                                    func_index: func.abs_index,
+                                    pc: (i + 1) as u32,
+                                    local_index: *local_index,
+                                    via: name.clone(),
+                                    kind: HandleFindingKind::DoubleDrop,
+                                });
+                            }
+                            states[l] = st.after_drop().0; // → Dropped
+                        }
+                        HandleOp::Use => {
+                            if st.use_is_after_drop() {
+                                findings.push(HandleFinding {
+                                    func_index: func.abs_index,
+                                    pc: (i + 1) as u32,
+                                    local_index: *local_index,
+                                    via: name.clone(),
+                                    kind: HandleFindingKind::UseAfterDrop,
+                                });
+                            }
+                        }
+                    }
+                }
+                // Control flow: widen every local to Top (maybe-dropped) so no
+                // DEFINITE fault is reported across a branch/merge — the sound
+                // "no false report" treatment.
+                Operator::Block { .. }
+                | Operator::Loop { .. }
+                | Operator::If { .. }
+                | Operator::Else
+                | Operator::End
+                | Operator::Br { .. }
+                | Operator::BrIf { .. }
+                | Operator::BrTable { .. }
+                | Operator::Return => {
+                    for s in states.iter_mut() {
+                        *s = HandleState::Top;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    findings.sort_by_key(|f| (f.func_index, f.pc));
+    findings
 }
 
 /// Pop two companion operands, apply a binary transfer when both are modelled
@@ -6279,6 +6437,7 @@ mod tests {
             pentagon_facts: alloc::vec![],
             trap_checks: alloc::vec![],
             float_facts: alloc::vec![],
+            handle_findings: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -6894,6 +7053,73 @@ mod tests {
             oob[0].verdict,
             TrapVerdict::PotentialTrap,
             "an unmodelled narrow load cannot be proven in-bounds"
+        );
+    }
+
+    /// FEAT-049: a resource handle dropped and then USED (a method call) is a
+    /// use-after-drop, reported soundly.
+    #[test]
+    fn feat049_use_after_drop_reported() {
+        let r = analyze_default(
+            "(module \
+               (import \"p/i\" \"[resource-drop]t\" (func $drop (param i32))) \
+               (import \"p/i\" \"[method]t.go\" (func $use (param i32))) \
+               (func (export \"f\") (param i32) \
+                 local.get 0 call $drop \
+                 local.get 0 call $use))",
+        );
+        let uad: alloc::vec::Vec<_> = r
+            .handle_findings
+            .iter()
+            .filter(|h| h.kind == HandleFindingKind::UseAfterDrop)
+            .collect();
+        assert_eq!(
+            uad.len(),
+            1,
+            "one use-after-drop expected: {:?}",
+            r.handle_findings
+        );
+        assert_eq!(uad[0].local_index, 0);
+    }
+
+    /// FEAT-049: dropping the same handle twice is a double-drop.
+    #[test]
+    fn feat049_double_drop_reported() {
+        let r = analyze_default(
+            "(module \
+               (import \"p/i\" \"[resource-drop]t\" (func $drop (param i32))) \
+               (func (export \"f\") (param i32) \
+                 local.get 0 call $drop \
+                 local.get 0 call $drop))",
+        );
+        assert_eq!(
+            r.handle_findings
+                .iter()
+                .filter(|h| h.kind == HandleFindingKind::DoubleDrop)
+                .count(),
+            1,
+            "one double-drop expected: {:?}",
+            r.handle_findings
+        );
+    }
+
+    /// FEAT-049: a handle used BEFORE it is dropped (correct affine lifetime)
+    /// raises NO finding — no false report.
+    #[test]
+    fn feat049_correct_lifetime_no_finding() {
+        let r = analyze_default(
+            "(module \
+               (import \"p/i\" \"[resource-drop]t\" (func $drop (param i32))) \
+               (import \"p/i\" \"[method]t.go\" (func $use (param i32))) \
+               (func (export \"f\") (param i32) \
+                 local.get 0 call $use \
+                 local.get 0 call $use \
+                 local.get 0 call $drop))",
+        );
+        assert!(
+            r.handle_findings.is_empty(),
+            "correct use-then-drop must not report: {:?}",
+            r.handle_findings
         );
     }
 

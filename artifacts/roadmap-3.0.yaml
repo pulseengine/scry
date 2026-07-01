@@ -337,7 +337,7 @@ artifacts:
   - id: FEAT-049
     type: feature
     title: "v3.0 — Component-Model handle-state / use-after-drop (the moat)"
-    status: proposed
+    status: accepted
     release: v3.0.0
     description: >
       The uncontested green field (MF-007 / CA-009): a sound affine handle-state

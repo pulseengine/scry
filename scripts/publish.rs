@@ -44,6 +44,7 @@ const CRATES_TO_PUBLISH: &[(&str, &str)] = &[
     ("scry-bits", "scry-sai-bits"),
     ("scry-pentagon", "scry-sai-pentagon"),
     ("scry-float", "scry-sai-float"),
+    ("scry-handle", "scry-sai-handle"),
     ("scry-provenance", "scry-sai-provenance"),
     // Depends on the pure leaves — publish before its own consumers.
     ("scry-analyze-core", "scry-sai-core"),
