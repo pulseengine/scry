@@ -7,6 +7,73 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-07-01
+
+Headline: **"Qualifiable + differentiated"** — the strategic release. scry gains
+an IEEE-754 float domain, proves its `i32.add` sound against the OFFICIAL
+wrapping Wasm semantics, becomes the first sound analyzer to model
+Component-Model handle lifetimes, and ships an assessor-facing tool-qualification
+dossier. Four features (FEAT-047/048/049/050).
+
+### Added — FEAT-047 (REQ-015, AC-022) — IEEE-754 float domain
+
+- New zero-dep crate **`scry-sai-float`**: a sound f32/f64 abstraction (interval
+  `[lo,hi]` with `±∞` bounds + a `nan` flag). Round-to-nearest-aware transfers
+  (`add/sub/mul/neg/abs`): `f64` needs no widening (RN monotone + exact
+  endpoints), `f32` snaps outward onto the f32 grid + coerces operands; `±∞`/NaN
+  via a 4-corner hull (incl. interior `0·∞`). Exhaustive γ-sweep at f32+f64;
+  admit-free Rocq `Float.v` (lattice). Straight-line `compute_float_facts` pass →
+  library-only `AnalysisResult.float_facts`. Closes the scope hole where float
+  arithmetic was un-analyzed.
+
+### Added — FEAT-048 (REQ-002, G-005, TE-004) — mechanized soundness vs official semantics
+
+- **`proofs/rocq/WrapAdd.v`** (admit-free): scry's shipped `i32_add` is sound
+  against the OFFICIAL two's-complement wraparound semantics (`(z+2³¹) mod 2³² −
+  2³¹`), INCLUDING the wrap case — closing the REQ-002 "no-wrap only" gap. The
+  widen-to-⊤ branch is sound because ⊤ = all i32; the exact branch because an
+  in-range sum cannot wrap. (Models the semantics WasmCert-Coq mechanizes; a
+  literal WasmCert-Coq import remains deferred, per the dossier's honesty note.)
+- The recorded-false Verus join proof is confirmed repaired to the semantic
+  γ-equality statement (CI-verified).
+
+### Added — FEAT-049 (REQ-003, MF-007) — Component-Model handle-state (the moat)
+
+- New zero-dep crate **`scry-sai-handle`**: an affine handle-state lattice
+  (`Alive`/`Dropped`/`Top`) with drop/use transitions; admit-free Rocq
+  `Handle.v`. `compute_handle_findings` tracks handle locals across the
+  canonical-ABI `[resource-drop]` / `[method]` call sites and reports DEFINITE
+  use-after-drop / double-drop on `AnalysisResult.handle_findings`. Conservative
+  at control flow (no false report). The first sound Component-Model
+  handle-lifetime analysis (MF-007).
+
+### Added — FEAT-050 (G-005, CA-011) — tool-qualification dossier
+
+- **`docs/qualification-dossier-v1.md`**: maps every DO-330 TQL-5 and ISO
+  26262-8 §11 (derives TCL1) objective to a concrete scry artifact — the 17
+  admit-free Rocq proofs, the semantic Verus proof, the MC/DC gate, the live
+  kill-criteria, and the FEAT-040 gap report as the per-artifact scope oracle.
+  Honesty-first: test-/γ-sweep-validated evidence is labelled distinctly from
+  mechanized proof; an adversarial overclaim audit caught and fixed three
+  config-row overstatements before merge.
+
+### Posture
+
+- FEAT-047/049 are library-only `AnalysisResult` fields (`float_facts`,
+  `handle_findings`); `scry.wit` + the frozen v1 invariant-JSON contract are
+  unchanged. Two new crates (`scry-sai-float`, `scry-sai-handle`) join the
+  crates.io `scry-sai-*` namespace.
+- **Falsification statement.** scry claims: every float interval
+  over-approximates the IEEE-754 result (incl. rounding/NaN/±∞); `i32_add` is
+  machine-proven sound vs the official wrapping semantics (`WrapAdd.v`); every
+  reported handle fault is a definite use-after-drop / double-drop; and the
+  qualification dossier cites only artifacts that exist and are admit-free. FALSE
+  if any concrete float op escapes its interval, if `WrapAdd.v` does not hold, if
+  a handle fault is reported for a not-provably-dropped handle, or if any
+  dossier "mechanized" claim lacks a backing admit-free artifact. Each feature
+  passed an adversarial clean-room (FEAT-047's γ-sweep found four real numerical
+  bugs; the dossier audit found three overclaims — all fixed before merge).
+
 ## [2.7.0] — 2026-06-30
 
 Headline: **"Prove safety" — scry's first runtime-error verdicts.** The
