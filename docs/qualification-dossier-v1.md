@@ -66,13 +66,13 @@ per DO-330 Table T-0/T-1 (tool operational requirements & verification):
 | DO-330 objective | scry artifact | Kind |
 |---|---|---|
 | T-0(1) Tool Operational Requirements defined | §1 above; `artifacts/` rivet REQ-001..017 | scope |
-| T-0(2) TOR correct & complete | `rivet validate` + `rivet coverage` (CI gate) | gate |
+| T-0(2) TOR correct & complete | `rivet validate` (CI gate); `rivet coverage` traceability report (assessor-run, §8) | gate |
 | T-1(1) Tool operational use verified vs TOR | `crates/scry-host-tests` (host runs the composed `scry.wasm`) + `SCRY_COMPONENT_PATH` release-wasm oracle | test |
 | T-1(3) Robustness of tool operation | γ-sweep tests (interval/octagon/bits/pentagon/float/handle), adversarial clean-room per soundness feature | test |
 | T-1(4) TOR verification complete | `bazel test //...` + `cargo test` + MC/DC gate (all CI) | gate |
 | Soundness of the analysis (credit basis) | admit-free Rocq (§4), Verus join proof, MC/DC truth tables | **proof** |
-| Configuration management | git + version-pinned deps (`Cargo.lock`, Bazel `MODULE.bazel`), `sigil`-signed release artifacts | gate |
-| Tool operational environment defined | `MODULE.bazel` (Bazel+Nix pins: Rocq 9.0.1, wasmparser 0.252), `rust-toolchain` | scope |
+| Configuration management | git + version-pinned deps (`Cargo.lock`, Bazel `MODULE.bazel`); release artifacts **cosign-signed (sigstore keyless OIDC) + SLSA-v1 build-provenance-attested** (`release.yml`) | gate |
+| Tool operational environment defined | `MODULE.bazel` (Bazel+Nix pins: Rocq 9.0, wasmparser 0.252), `rust-toolchain` | scope |
 
 ## 4. Mechanized-soundness inventory (the credit basis)
 
