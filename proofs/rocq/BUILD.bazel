@@ -253,3 +253,21 @@ rocq_proof_test(
     deps = [":float"],
     tags = ["rocq", "verification", "feat-047"],
 )
+
+# FEAT-048 (REQ-002 / G-005 / TE-004): mechanized soundness of scry's i32.add
+# transfer against the OFFICIAL two's-complement wraparound semantics
+# (mod 2^32) — INCLUDING the wrap case, not just the no-wrap core Soundness.v
+# covered. The wrapping semantics is modelled directly (the same function
+# WasmCert-Coq mechanizes; a literal WasmCert-Coq import is deferred). No
+# admits, no axioms (the DD-015 proof-in-slice gate).
+rocq_library(
+    name = "wrapadd",
+    srcs = ["WrapAdd.v"],
+    tags = ["rocq", "verification", "feat-048"],
+)
+
+rocq_proof_test(
+    name = "wrapadd_test",
+    deps = [":wrapadd"],
+    tags = ["rocq", "verification", "feat-048"],
+)
