@@ -34,13 +34,14 @@
 
 From Stdlib Require Import ZArith.
 From Stdlib Require Import Lia.
+From Stdlib Require Import Bool.
 
 Open Scope Z_scope.
 
 Definition W : Z := 4294967296.    (* 2^32 *)
 Definition HALF : Z := 2147483648. (* 2^31 *)
 
-Lemma W_pos : W > 0. Proof. unfold W. lia. Qed.
+Lemma W_pos : 0 < W. Proof. unfold W. lia. Qed.
 
 (** The i32 value range: [-2^31, 2^31 - 1]. *)
 Definition in_i32 (z : Z) : Prop := - HALF <= z <= HALF - 1.
@@ -92,8 +93,7 @@ Proof.
     apply wrap_in_i32.
   - (* exact interval: the real sum cannot leave i32, so no wrap occurs *)
     unfold straddles in E.
-    destruct (alo + blo <? - HALF) eqn:E1; [ simpl in E; discriminate E | ].
-    destruct (HALF - 1 <? ahi + bhi) eqn:E2; [ simpl in E; discriminate E | ].
+    apply orb_false_iff in E. destruct E as [E1 E2].
     apply Z.ltb_ge in E1.   (* - HALF <= alo + blo *)
     apply Z.ltb_ge in E2.   (* ahi + bhi <= HALF - 1 *)
     assert (Hin : in_i32 (x + y)) by (unfold in_i32; lia).
@@ -112,8 +112,7 @@ Corollary i32_add_exact_is_official :
 Proof.
   intros alo ahi blo bhi x y E Hx Hy.
   unfold straddles in E.
-  destruct (alo + blo <? - HALF) eqn:E1; [ simpl in E; discriminate E | ].
-  destruct (HALF - 1 <? ahi + bhi) eqn:E2; [ simpl in E; discriminate E | ].
+  apply orb_false_iff in E. destruct E as [E1 E2].
   apply Z.ltb_ge in E1. apply Z.ltb_ge in E2.
   assert (Hin : in_i32 (x + y)) by (unfold in_i32; lia).
   split; [ apply wrap_id, Hin | lia ].
