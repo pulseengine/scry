@@ -363,7 +363,7 @@ artifacts:
   - id: FEAT-050
     type: feature
     title: "v3.0 — Tool-qualification dossier (DO-330 TQL-5 / ISO 26262-8 TCL)"
-    status: proposed
+    status: accepted
     release: v3.0.0
     description: >
       The G-005 capstone (CA-011): assemble the assessor-facing qualification
