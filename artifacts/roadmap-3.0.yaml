@@ -309,7 +309,7 @@ artifacts:
   - id: FEAT-048
     type: feature
     title: "v3.0 — Mechanized soundness vs WasmCert-Coq + wrap-aware transfers (the differentiator)"
-    status: proposed
+    status: accepted
     release: v3.0.0
     description: >
       Make the G-005 differentiator literally true: prove scry's transfers sound
