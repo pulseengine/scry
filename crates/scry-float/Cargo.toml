@@ -1,0 +1,22 @@
+[package]
+name = "scry-sai-float"
+description = "Pure IEEE-754 float-interval abstract domain for scry (FEAT-047, AC-022; sound f32/f64 abstraction with NaN/±inf tracking and round-to-nearest-aware widening)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library, intentionally zero dependencies. The same source compiles
+# both #![no_std] (so it can back a future wasm-lattice WIT export, as the
+# octagon / interval / bits / pentagon crates do) and natively into
+# scry-host-tests, so the lattice laws + the round-to-nearest-aware transfer
+# soundness are mechanically falsifiable on the native cargo path by an
+# exhaustive γ-sweep over a concrete float grid (incl. NaN / ±inf). Mirrors
+# scry-sai-octagon / scry-sai-interval / scry-sai-bits / scry-sai-pentagon.
+# The lattice soundness is mechanized in proofs/rocq/Float.v.
+[lib]
+name = "scry_float"
+path = "src/lib.rs"
+
+[dependencies]

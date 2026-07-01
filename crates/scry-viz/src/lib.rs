@@ -159,6 +159,7 @@ pub fn render_html(result: &AnalysisResult, title: &str) -> String {
     render_diagnostics(&mut s, &result.diagnostics);
     render_gaps(&mut s, result);
     render_trap_checks(&mut s, result);
+    render_float_facts(&mut s, result);
     render_pentagon_facts(&mut s, result);
     render_taint(&mut s, result);
     render_provenance(&mut s, result);
@@ -254,6 +255,7 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
     kv(s, "analysis gaps", &r.gaps.len().to_string());
     kv(s, "relational guards", &r.pentagon_facts.len().to_string());
     kv(s, "trap checks", &r.trap_checks.len().to_string());
+    kv(s, "float facts", &r.float_facts.len().to_string());
     kv(s, "program points", &points.to_string());
     // FEAT-034: scry's own verified fusion premises (independent of meld).
     let vp = &r.verified_premises;
@@ -697,6 +699,36 @@ fn render_trap_checks(s: &mut String, r: &AnalysisResult) {
             t.func_index,
             t.pc,
             esc(&t.op),
+        );
+    }
+    s.push_str("</ul></section>");
+}
+
+/// FEAT-047: sound float-interval facts for f32/f64 locals — the analyzer no
+/// longer treats float arithmetic as an opaque scope hole.
+fn render_float_facts(s: &mut String, r: &AnalysisResult) {
+    s.push_str("<section><h2>Float intervals (f32/f64)</h2>");
+    if r.float_facts.is_empty() {
+        s.push_str("<p class=\"empty\">No float-interval facts.</p></section>");
+        return;
+    }
+    let _ = write!(
+        s,
+        "<p>{} sound float-interval fact(s).</p><ul class=\"diags\">",
+        r.float_facts.len(),
+    );
+    for f in &r.float_facts {
+        let _ = write!(
+            s,
+            "<li class=\"info\"><span class=\"sev\">f{}</span> \
+             <code>fn{}:{}</code> local{} ∈ [{}, {}]{}</li>",
+            f.width,
+            f.func_index,
+            f.pc,
+            f.local_index,
+            f.lo(),
+            f.hi(),
+            if f.nan { " ∪ NaN" } else { "" },
         );
     }
     s.push_str("</ul></section>");

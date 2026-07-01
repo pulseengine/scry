@@ -1865,6 +1865,7 @@ name = "scry-sai-core"
 version = "2.7.0"
 dependencies = [
  "scry-sai-bits",
+ "scry-sai-float",
  "scry-sai-interval",
  "scry-sai-octagon",
  "scry-sai-pentagon",
@@ -1874,6 +1875,10 @@ dependencies = [
  "wasmparser 0.252.0",
  "wat",
 ]
+
+[[package]]
+name = "scry-sai-float"
+version = "2.7.0"
 
 [[package]]
 name = "scry-sai-interval"

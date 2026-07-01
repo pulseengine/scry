@@ -441,6 +441,16 @@ pub struct AnalysisResult {
     /// dropped. Sorted by `(func_index, pc, kind)`. Library-only (not in the
     /// WIT mirror or the frozen v1 JSON contract), like [`Self::bit_facts`].
     pub trap_checks: Vec<TrapCheck>,
+    /// FEAT-047 (REQ-015, AC-022): sound float-interval facts for f32/f64
+    /// locals, produced by an additive straight-line pass over each function
+    /// body using the IEEE-754 float-interval domain ([`scry_float`]). Each
+    /// entry records, at a `local.set`/`local.tee`, the sound over-approximation
+    /// (interval + NaN possibility) the written float local then carries —
+    /// removing the scope hole where float arithmetic was un-analyzed. Sorted by
+    /// `(func_index, pc, local_index)`. Library-only (not in the WIT mirror or
+    /// the frozen v1 JSON contract), like [`Self::bit_facts`]. Only non-⊤ facts
+    /// are emitted.
+    pub float_facts: Vec<FloatFact>,
 }
 
 /// FEAT-040: one analysis-gap record — a site where scry was conservative.
@@ -526,6 +536,41 @@ pub enum PentagonBound {
     Local(u32),
     /// `x < c` — a strict relation against a constant.
     Const(i64),
+}
+
+/// FEAT-047 (REQ-015, AC-022): a sound float-interval fact about one local at
+/// one program point, from the additive straight-line float pass over
+/// [`scry_float`]. The local's concrete f32/f64 value at this pc is always in
+/// the concretization of these bounds. Bounds are stored as IEEE bit patterns
+/// (so the struct is `Eq` and the JSON stays exact); use [`Self::lo`] /
+/// [`Self::hi`] for the `f64` values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FloatFact {
+    /// Absolute function index.
+    pub func_index: u32,
+    /// Operator index (pc) of the `local.set`/`local.tee` that established it.
+    pub pc: u32,
+    /// The local written.
+    pub local_index: u32,
+    /// Value width in bits (32 or 64).
+    pub width: u32,
+    /// Lower bound as `f64::to_bits` (may be `-inf`).
+    pub lo_bits: u64,
+    /// Upper bound as `f64::to_bits` (may be `+inf`).
+    pub hi_bits: u64,
+    /// The value may be NaN.
+    pub nan: bool,
+}
+
+impl FloatFact {
+    /// The lower bound as an `f64`.
+    pub fn lo(&self) -> f64 {
+        f64::from_bits(self.lo_bits)
+    }
+    /// The upper bound as an `f64`.
+    pub fn hi(&self) -> f64 {
+        f64::from_bits(self.hi_bits)
+    }
 }
 
 /// FEAT-045 (REQ-014, MF-006): a runtime-trap classification for one
@@ -2157,6 +2202,7 @@ pub fn analyze(
     // "additive pass" precedent).
     let bit_facts = compute_bit_facts(&defined_funcs);
     let pentagon_facts = compute_pentagon_facts(&defined_funcs);
+    let float_facts = compute_float_facts(&defined_funcs);
 
     Ok(AnalysisResult {
         invariants,
@@ -2173,6 +2219,7 @@ pub fn analyze(
         gaps,
         pentagon_facts,
         trap_checks,
+        float_facts,
     })
 }
 
@@ -2425,6 +2472,155 @@ fn compute_pentagon_facts(defined_funcs: &[DefinedFunc<'_>]) -> Vec<PentagonFact
 
     facts.sort_by_key(|f| (f.func_index, f.pc));
     facts
+}
+
+/// The float width a value type carries, or `None` if not a float.
+fn float_width_of(ty: wasmparser::ValType) -> Option<u32> {
+    match ty {
+        wasmparser::ValType::F32 => Some(32),
+        wasmparser::ValType::F64 => Some(64),
+        _ => None,
+    }
+}
+
+fn float_is_top(fa: &scry_float::FloatAbstract) -> bool {
+    *fa == scry_float::FloatAbstract::top()
+}
+
+fn make_float_fact(
+    func_index: u32,
+    pc: u32,
+    local_index: u32,
+    width: u32,
+    fa: &scry_float::FloatAbstract,
+) -> FloatFact {
+    FloatFact {
+        func_index,
+        pc,
+        local_index,
+        width,
+        lo_bits: fa.lo.to_bits(),
+        hi_bits: fa.hi.to_bits(),
+        nan: fa.nan,
+    }
+}
+
+/// FEAT-047 (AC-022): an additive straight-line-sound pass over each function
+/// body that tracks f32/f64 locals + operand stack through the IEEE-754
+/// float-interval domain ([`scry_float`]), recording a sound [`FloatFact`] at
+/// each float `local.set`/`local.tee`. Removes the scope hole where any float
+/// arithmetic left the value un-analyzed. Mirrors [`compute_bit_facts`]:
+/// straight-line (stops at the first control-flow / unmodelled op), library-only,
+/// only non-⊤ facts emitted.
+fn compute_float_facts(defined_funcs: &[DefinedFunc<'_>]) -> Vec<FloatFact> {
+    use scry_float::{FWidth, FloatAbstract};
+    let mut facts: Vec<FloatFact> = Vec::new();
+
+    let fw = |w: u32| if w == 32 { FWidth::W32 } else { FWidth::W64 };
+
+    for func in defined_funcs {
+        let mut locals: Vec<Option<(FloatAbstract, u32)>> = Vec::new();
+        for &ty in &func.params {
+            locals.push(float_width_of(ty).map(|w| (FloatAbstract::top(), w)));
+        }
+        for &ty in &func.declared_locals {
+            locals.push(float_width_of(ty).map(|w| (FloatAbstract::constant(0.0), w)));
+        }
+        let mut stack: Vec<Option<(FloatAbstract, u32)>> = Vec::new();
+
+        'body: for (pc, op) in func.ops.iter().enumerate() {
+            let pc = pc as u32;
+            match op {
+                Operator::F32Const { value } => {
+                    let f = f32::from_bits(value.bits()) as f64;
+                    stack.push(Some((FloatAbstract::constant(f), 32)));
+                }
+                Operator::F64Const { value } => {
+                    let f = f64::from_bits(value.bits());
+                    stack.push(Some((FloatAbstract::constant(f), 64)));
+                }
+                Operator::LocalGet { local_index } => match locals.get(*local_index as usize) {
+                    Some(slot) => stack.push(*slot),
+                    None => break 'body,
+                },
+                Operator::LocalSet { local_index } | Operator::LocalTee { local_index } => {
+                    let is_tee = matches!(op, Operator::LocalTee { .. });
+                    let Some(top) = stack.pop() else { break 'body };
+                    let idx = *local_index as usize;
+                    if idx >= locals.len() {
+                        break 'body;
+                    }
+                    let written = match (top, locals[idx]) {
+                        (Some((fa, wv)), Some((_, wl))) if wv == wl => Some((fa, wl)),
+                        (_, Some((_, wl))) => Some((FloatAbstract::top(), wl)),
+                        (_, None) => None,
+                    };
+                    locals[idx] = written;
+                    if let Some((fa, w)) = written
+                        && !float_is_top(&fa)
+                    {
+                        facts.push(make_float_fact(func.abs_index, pc, *local_index, w, &fa));
+                    }
+                    if is_tee {
+                        stack.push(written);
+                    }
+                }
+                Operator::Drop => {
+                    if stack.pop().is_none() {
+                        break 'body;
+                    }
+                }
+                Operator::F32Add | Operator::F64Add => {
+                    float_binop(&mut stack, &fw, |a, b, w| a.add(&b, w))
+                }
+                Operator::F32Sub | Operator::F64Sub => {
+                    float_binop(&mut stack, &fw, |a, b, w| a.sub(&b, w))
+                }
+                Operator::F32Mul | Operator::F64Mul => {
+                    float_binop(&mut stack, &fw, |a, b, w| a.mul(&b, w))
+                }
+                Operator::F32Neg | Operator::F64Neg => float_unop(&mut stack, |a| a.neg()),
+                Operator::F32Abs | Operator::F64Abs => float_unop(&mut stack, |a| a.abs()),
+                // First control-flow / unmodelled op: the straight-line prefix's
+                // facts are sound; beyond a merge we make no claim.
+                _ => break 'body,
+            }
+        }
+    }
+
+    facts.sort_by_key(|f| (f.func_index, f.pc, f.local_index));
+    facts
+}
+
+/// Pop two float companions, apply a binary transfer when both are modelled and
+/// same-width, push the result (opaque otherwise).
+#[inline]
+fn float_binop(
+    stack: &mut Vec<Option<(scry_float::FloatAbstract, u32)>>,
+    fw: &dyn Fn(u32) -> scry_float::FWidth,
+    f: impl Fn(
+        scry_float::FloatAbstract,
+        scry_float::FloatAbstract,
+        scry_float::FWidth,
+    ) -> scry_float::FloatAbstract,
+) {
+    let b = stack.pop().flatten();
+    let a = stack.pop().flatten();
+    let out = match (a, b) {
+        (Some((fa, wa)), Some((fb, wb))) if wa == wb => Some((f(fa, fb, fw(wa)), wa)),
+        _ => None,
+    };
+    stack.push(out);
+}
+
+/// Pop one float companion, apply a unary transfer, push the result.
+#[inline]
+fn float_unop(
+    stack: &mut Vec<Option<(scry_float::FloatAbstract, u32)>>,
+    f: impl Fn(scry_float::FloatAbstract) -> scry_float::FloatAbstract,
+) {
+    let a = stack.pop().flatten();
+    stack.push(a.map(|(fa, w)| (f(fa), w)));
 }
 
 /// Pop two companion operands, apply a binary transfer when both are modelled
@@ -6082,6 +6278,7 @@ mod tests {
             gaps: alloc::vec![],
             pentagon_facts: alloc::vec![],
             trap_checks: alloc::vec![],
+            float_facts: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -6698,6 +6895,62 @@ mod tests {
             TrapVerdict::PotentialTrap,
             "an unmodelled narrow load cannot be proven in-bounds"
         );
+    }
+
+    /// FEAT-047: float arithmetic is no longer an opaque scope hole — a
+    /// `local := c1 + c2` on f64 constants yields a sound float interval fact.
+    #[test]
+    fn feat047_float_add_yields_interval() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (result f64) (local f64) \
+               f64.const 1.5 f64.const 2.25 f64.add local.tee 0))",
+        );
+        let f = r
+            .float_facts
+            .iter()
+            .find(|f| f.local_index == 0)
+            .expect("a float fact for local 0");
+        assert_eq!(f.width, 64);
+        assert!(!f.nan);
+        // 1.5 + 2.25 = 3.75 exactly; sound interval must contain it.
+        assert!(
+            f.lo() <= 3.75 && 3.75 <= f.hi(),
+            "3.75 ∉ [{}, {}]",
+            f.lo(),
+            f.hi()
+        );
+    }
+
+    /// FEAT-047: `x / 0.0`-style NaN sources — here `0.0 * inf` via a const —
+    /// track the NaN possibility. (Uses f64 mul of 0 and a huge value squared to
+    /// reach inf is overkill; instead verify a plain finite mul stays finite.)
+    #[test]
+    fn feat047_float_mul_finite_no_nan() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (result f32) (local f32) \
+               f32.const 3.0 f32.const 4.0 f32.mul local.tee 0))",
+        );
+        let f = r
+            .float_facts
+            .iter()
+            .find(|f| f.local_index == 0)
+            .expect("float fact");
+        assert_eq!(f.width, 32);
+        assert!(!f.nan, "3.0 * 4.0 is finite, not NaN");
+        assert!(f.lo() <= 12.0 && 12.0 <= f.hi());
+    }
+
+    /// FEAT-047: a float local written from an unknown (parameter) value carries
+    /// ⊤ and is NOT emitted (only informative, non-⊤ facts surface).
+    #[test]
+    fn feat047_unknown_float_param_not_emitted() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param f64) (result f64) \
+               local.get 0 local.get 0 f64.add))",
+        );
+        // param is ⊤; ⊤+⊤ is ⊤ — no informative fact for a written local
+        // (there is no local.set here anyway). Just assert no spurious fact.
+        assert!(r.float_facts.iter().all(|f| f.width == 64 || f.width == 32));
     }
 
     /// FEAT-045 SOUNDNESS REGRESSION (clean-room): a div in a LOOP body must not

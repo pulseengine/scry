@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# scry-float — the pure IEEE-754 float-interval abstract domain (FEAT-047,
+# AC-022): f32/f64 intervals + NaN/±inf tracking + round-to-nearest-aware
+# widening. Mirrors scry-octagon / scry-interval / scry-bits / scry-pentagon:
+# a dependency-free crate that compiles #![no_std] AND native (where its own
+# γ-sweep over a concrete float grid — incl. ±0/subnormals/±inf/NaN, at both
+# f32 and f64 widths — falsifies the lattice laws + transfer soundness). The
+# lattice soundness is mechanized in //proofs/rocq:float.
+
+rust_library(
+    name = "scry_float",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_float",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    tags = ["feat-047"],
+)
+
+rust_test(
+    name = "scry_float_test",
+    crate = ":scry_float",
+    edition = "2024",
+    tags = ["feat-047"],
+)
