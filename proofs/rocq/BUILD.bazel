@@ -236,3 +236,20 @@ rocq_proof_test(
     deps = [":pentagon"],
     tags = ["rocq", "verification", "feat-044"],
 )
+
+# FEAT-047 (AC-022): mechanized soundness of the float-interval domain's
+# LATTICE — join over-approximates, the order is sound, meet is a lower bound —
+# over the ordered-interval + NaN-flag structure. The IEEE round-to-nearest
+# arithmetic transfers are falsified by the scry-float γ-sweep (f32+f64 grid).
+# No admits, no axioms (the DD-015 proof-in-slice gate).
+rocq_library(
+    name = "float",
+    srcs = ["Float.v"],
+    tags = ["rocq", "verification", "feat-047"],
+)
+
+rocq_proof_test(
+    name = "float_test",
+    deps = [":float"],
+    tags = ["rocq", "verification", "feat-047"],
+)
