@@ -271,3 +271,20 @@ rocq_proof_test(
     deps = [":wrapadd"],
     tags = ["rocq", "verification", "feat-048"],
 )
+
+# FEAT-049 (MF-007): mechanized soundness of the affine handle-state lattice —
+# join over-approximates, order sound, drop/use transitions sound (a use is
+# flagged a DEFINITE use-after-drop only when the state's γ is exactly
+# {dropped}, so correct owned/borrowed code raises no false definite). No
+# admits, no axioms (the DD-015 proof-in-slice gate).
+rocq_library(
+    name = "handle",
+    srcs = ["Handle.v"],
+    tags = ["rocq", "verification", "feat-049"],
+)
+
+rocq_proof_test(
+    name = "handle_test",
+    deps = [":handle"],
+    tags = ["rocq", "verification", "feat-049"],
+)

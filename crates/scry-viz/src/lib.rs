@@ -31,8 +31,8 @@ use core::fmt::Write as _;
 
 use scry_analyze_core::{
     AbstractValue, AnalysisResult, Diagnostic, DiagnosticSeverity, FunctionMeta, FunctionStack,
-    GapKind, Interval, PentagonBound, Region, SecurityLabel, SoundnessTag, StackBound,
-    TaintFindingKind, TrapKind, TrapVerdict,
+    GapKind, HandleFindingKind, Interval, PentagonBound, Region, SecurityLabel, SoundnessTag,
+    StackBound, TaintFindingKind, TrapKind, TrapVerdict,
 };
 
 /// FEAT-027: metadata for one function index, if scry resolved any.
@@ -159,6 +159,7 @@ pub fn render_html(result: &AnalysisResult, title: &str) -> String {
     render_diagnostics(&mut s, &result.diagnostics);
     render_gaps(&mut s, result);
     render_trap_checks(&mut s, result);
+    render_handle_findings(&mut s, result);
     render_float_facts(&mut s, result);
     render_pentagon_facts(&mut s, result);
     render_taint(&mut s, result);
@@ -255,6 +256,7 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
     kv(s, "analysis gaps", &r.gaps.len().to_string());
     kv(s, "relational guards", &r.pentagon_facts.len().to_string());
     kv(s, "trap checks", &r.trap_checks.len().to_string());
+    kv(s, "handle faults", &r.handle_findings.len().to_string());
     kv(s, "float facts", &r.float_facts.len().to_string());
     kv(s, "program points", &points.to_string());
     // FEAT-034: scry's own verified fusion premises (independent of meld).
@@ -699,6 +701,37 @@ fn render_trap_checks(s: &mut String, r: &AnalysisResult) {
             t.func_index,
             t.pc,
             esc(&t.op),
+        );
+    }
+    s.push_str("</ul></section>");
+}
+
+/// FEAT-049: Component-Model handle-lifetime faults — use-after-drop /
+/// double-drop on affine resource handles (the uncontested green field).
+fn render_handle_findings(s: &mut String, r: &AnalysisResult) {
+    s.push_str("<section><h2>Handle-state faults (component model)</h2>");
+    if r.handle_findings.is_empty() {
+        s.push_str("<p class=\"empty\">No use-after-drop / double-drop faults.</p></section>");
+        return;
+    }
+    let _ = write!(
+        s,
+        "<p>{} handle-lifetime fault(s).</p><ul class=\"diags\">",
+        r.handle_findings.len(),
+    );
+    for h in &r.handle_findings {
+        let kind = match h.kind {
+            HandleFindingKind::UseAfterDrop => "use-after-drop",
+            HandleFindingKind::DoubleDrop => "double-drop",
+        };
+        let _ = write!(
+            s,
+            "<li class=\"err\"><span class=\"sev\">{kind}</span> \
+             <code>fn{}:{}</code> local{} via {}</li>",
+            h.func_index,
+            h.pc,
+            h.local_index,
+            esc(&h.via),
         );
     }
     s.push_str("</ul></section>");

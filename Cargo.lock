@@ -1866,6 +1866,7 @@ version = "2.7.0"
 dependencies = [
  "scry-sai-bits",
  "scry-sai-float",
+ "scry-sai-handle",
  "scry-sai-interval",
  "scry-sai-octagon",
  "scry-sai-pentagon",
@@ -1878,6 +1879,10 @@ dependencies = [
 
 [[package]]
 name = "scry-sai-float"
+version = "2.7.0"
+
+[[package]]
+name = "scry-sai-handle"
 version = "2.7.0"
 
 [[package]]

@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# scry-handle — the pure affine Component-Model handle-state lattice (FEAT-049,
+# MF-007): own/borrow resource-handle states (Alive/Dropped/Top) for
+# use-after-drop / double-drop detection. Mirrors the other scry-sai-* domain
+# crates: dependency-free, compiles #![no_std] AND native (where its γ-sweep
+# falsifies the lattice + transition soundness). Soundness mechanized in
+# //proofs/rocq:handle.
+
+rust_library(
+    name = "scry_handle",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_handle",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    tags = ["feat-049"],
+)
+
+rust_test(
+    name = "scry_handle_test",
+    crate = ":scry_handle",
+    edition = "2024",
+    tags = ["feat-049"],
+)
