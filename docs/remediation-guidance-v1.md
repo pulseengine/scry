@@ -45,6 +45,12 @@ Each entry of `AnalysisResult.advisories` (Rust `Advisory`; sorted by
 | `detail` | string | human rationale — what was found and why it matters |
 | `suggested_action` | string | the concrete change to make |
 | `verification` | string | the **oracle** — what re-running scry should show once the fix lands |
+| `counterexample` | optional | (FEAT-055; `UnprovenObligation` only) a **candidate** trapping operand assignment — `trigger` (string) + `witness` (list of `{operand, value}`), e.g. `divisor = 0`, or `dividend = INT_MIN` + `divisor = -1`, or `address = <memory size>` |
+
+The `counterexample` is a *candidate* derived from scry's abstract state, which
+over-approximates: it is a ready seed for a repro / regression test, **not** a
+proof the trap fires (that the divisor's interval *contains* 0 does not prove 0
+is *reachable*). Confirming reachability is the deferred full-symbolic tier.
 
 Resolve `func_index` to a name via `AnalysisResult.function_meta` (FEAT-027).
 Library-only: not in the WIT mirror or the frozen v1 invariant-JSON contract
@@ -60,6 +66,8 @@ The `verification` field makes each advisory a **checkable task**, closing the
 2. for a chosen advisory A:
      a. apply A.suggested_action as a code edit
      b. re-run scry on the edited module
+     a′. (optional) seed a regression test from A.counterexample.witness — the
+         candidate operand values that would trigger the trap
      c. check A.verification:
           - DefiniteFault    → the handle_findings / trap entry is GONE
           - UnprovenObligation → the trap_check flips PotentialTrap → ProvenSafe
