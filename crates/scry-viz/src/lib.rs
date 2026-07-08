@@ -30,9 +30,9 @@
 use core::fmt::Write as _;
 
 use scry_analyze_core::{
-    AbstractValue, AnalysisResult, Diagnostic, DiagnosticSeverity, FunctionMeta, FunctionStack,
-    GapKind, HandleFindingKind, Interval, PentagonBound, Region, SecurityLabel, SoundnessTag,
-    StackBound, TaintFindingKind, TrapKind, TrapVerdict,
+    AbstractValue, AdvisoryClass, AnalysisResult, Diagnostic, DiagnosticSeverity, FunctionMeta,
+    FunctionStack, GapKind, HandleFindingKind, Interval, PentagonBound, Region, SecurityLabel,
+    SoundnessTag, StackBound, TaintFindingKind, TrapKind, TrapVerdict,
 };
 
 /// FEAT-027: metadata for one function index, if scry resolved any.
@@ -154,6 +154,7 @@ pub fn render_html(result: &AnalysisResult, title: &str) -> String {
 
     let _ = write!(s, "<h1>scry analysis — {}</h1>", esc(title));
     render_header(&mut s, result);
+    render_advisories(&mut s, result);
     render_functions(&mut s, result);
     render_call_graph(&mut s, result);
     render_diagnostics(&mut s, &result.diagnostics);
@@ -257,6 +258,7 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
     kv(s, "relational guards", &r.pentagon_facts.len().to_string());
     kv(s, "trap checks", &r.trap_checks.len().to_string());
     kv(s, "handle faults", &r.handle_findings.len().to_string());
+    kv(s, "advisories", &r.advisories.len().to_string());
     kv(s, "float facts", &r.float_facts.len().to_string());
     kv(s, "program points", &points.to_string());
     // FEAT-034: scry's own verified fusion premises (independent of meld).
@@ -701,6 +703,47 @@ fn render_trap_checks(s: &mut String, r: &AnalysisResult) {
             t.func_index,
             t.pc,
             esc(&t.op),
+        );
+    }
+    s.push_str("</ul></section>");
+}
+
+/// FEAT-059/060: the remediation Guidance panel — the actionable "what to do"
+/// synthesis, prioritised by class (faults first), with a one-line summary. The
+/// headline view for a human; the same records feed the agent JSON schema.
+fn render_advisories(s: &mut String, r: &AnalysisResult) {
+    s.push_str("<section><h2>Guidance — how to improve this code</h2>");
+    if r.advisories.is_empty() {
+        s.push_str("<p class=\"empty\">No advisories — no faults, unproven obligations, precision gaps, or leverageable facts surfaced.</p></section>");
+        return;
+    }
+    let count = |c: AdvisoryClass| r.advisories.iter().filter(|a| a.class == c).count();
+    let _ = write!(
+        s,
+        "<p><b>{}</b> real fault(s) to fix · <b>{}</b> unproven obligation(s) to prove/guard · \
+         <b>{}</b> analyzer precision gap(s) · <b>{}</b> leverageable fact(s).</p><ul class=\"diags\">",
+        count(AdvisoryClass::DefiniteFault),
+        count(AdvisoryClass::UnprovenObligation),
+        count(AdvisoryClass::PrecisionGap),
+        count(AdvisoryClass::LeverageableFact),
+    );
+    for a in &r.advisories {
+        let (cls, label) = match a.class {
+            AdvisoryClass::DefiniteFault => ("err", "FIX"),
+            AdvisoryClass::UnprovenObligation => ("warn", "PROVE/GUARD"),
+            AdvisoryClass::PrecisionGap => ("info", "PRECISION"),
+            AdvisoryClass::LeverageableFact => ("info", "LEVERAGE"),
+        };
+        let _ = write!(
+            s,
+            "<li class=\"{cls}\"><span class=\"sev\">{label}</span> \
+             <code>fn{}:{} {}</code> — {}<br><em>Action:</em> {}<br><em>Verify:</em> {}</li>",
+            a.func_index,
+            a.pc,
+            esc(&a.code),
+            esc(&a.detail),
+            esc(&a.suggested_action),
+            esc(&a.verification),
         );
     }
     s.push_str("</ul></section>");

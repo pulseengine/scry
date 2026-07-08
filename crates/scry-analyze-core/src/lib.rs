@@ -458,6 +458,14 @@ pub struct AnalysisResult {
     /// handles). Sorted by `(func_index, pc)`. Library-only (not in the WIT
     /// mirror or the frozen v1 JSON contract), like [`Self::bit_facts`].
     pub handle_findings: Vec<HandleFinding>,
+    /// FEAT-059 (REQ-018): ranked, actionable remediation guidance synthesised
+    /// from the sound findings above — turning "what scry found" into "what to
+    /// do about it", for a human or an AI agent. Each carries an actionability
+    /// class (fault / unproven / precision-gap / leverageable), a suggested
+    /// action, and a verification oracle. Sorted by `(class rank, func_index,
+    /// pc)`. Library-only (not in the WIT mirror or the frozen v1 JSON
+    /// contract), like [`Self::bit_facts`].
+    pub advisories: Vec<Advisory>,
 }
 
 /// FEAT-040: one analysis-gap record — a site where scry was conservative.
@@ -605,6 +613,63 @@ pub enum HandleFindingKind {
     UseAfterDrop,
     /// A second `resource.drop` on an already-dropped handle.
     DoubleDrop,
+}
+
+/// FEAT-059 (REQ-018): one piece of actionable remediation guidance synthesised
+/// from scry's sound findings — "here is what to do about it", for a human or an
+/// AI agent. The [`AdvisoryClass`] is load-bearing: it separates a proven bug
+/// from a merely-unproven obligation from an analyzer blind spot, so guidance
+/// from a SOUND tool never overclaims a fix. Each advisory names a
+/// [`Self::verification`] oracle — what re-running scry should show once the fix
+/// lands — closing an AI agent's edit→verify loop against a sound checker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Advisory {
+    /// Absolute function index the advisory concerns.
+    pub func_index: u32,
+    /// Operator index (pc) of the site (`0` for a function-level advisory).
+    pub pc: u32,
+    /// Actionability class (governs ranking and how to read the advice).
+    pub class: AdvisoryClass,
+    /// Short machine-stable category code (e.g. `use-after-drop`,
+    /// `div-by-zero`, `unsupported-op`, `unbounded-stack`).
+    pub code: String,
+    /// Human rationale: what the analysis found and why it matters.
+    pub detail: String,
+    /// The concrete action to improve the code.
+    pub suggested_action: String,
+    /// The oracle that confirms the fix — what re-running scry should show.
+    pub verification: String,
+}
+
+/// FEAT-059 (REQ-018): the actionability class of an [`Advisory`]. Ranked
+/// (lower discriminant = higher priority). The split is the honesty guarantee:
+/// a POTENTIAL-TRAP is an `UnprovenObligation` ("prove/guard it"), never a
+/// `DefiniteFault` ("it's a bug").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdvisoryClass {
+    /// A real bug scry PROVED (use-after-drop, double-drop). Fix it.
+    DefiniteFault,
+    /// A trap scry could not discharge (a POTENTIAL-TRAP). Prove / guard / bound
+    /// it — this is NOT a claim that it is a bug.
+    UnprovenObligation,
+    /// A site where scry lost precision (degraded to ⊤). Restructure for
+    /// analyzability, or accept the limitation.
+    PrecisionGap,
+    /// A property scry PROVED (PROVEN-SAFE / a proven bound). A defensive
+    /// runtime check here may be soundly relied on or elided.
+    LeverageableFact,
+}
+
+impl AdvisoryClass {
+    /// Ranking key (0 = highest priority).
+    pub fn rank(self) -> u8 {
+        match self {
+            AdvisoryClass::DefiniteFault => 0,
+            AdvisoryClass::UnprovenObligation => 1,
+            AdvisoryClass::PrecisionGap => 2,
+            AdvisoryClass::LeverageableFact => 3,
+        }
+    }
 }
 
 /// FEAT-045 (REQ-014, MF-006): a runtime-trap classification for one
@@ -2239,6 +2304,9 @@ pub fn analyze(
     let float_facts = compute_float_facts(&defined_funcs);
     let handle_findings =
         compute_handle_findings(&defined_funcs, &import_func_meta, import_func_count);
+    // FEAT-059: synthesise the sound findings into ranked remediation guidance
+    // (pure synthesis over the results above; borrows before they are moved).
+    let advisories = compute_advisories(&gaps, &trap_checks, &handle_findings, &stack_usage);
 
     Ok(AnalysisResult {
         invariants,
@@ -2257,6 +2325,7 @@ pub fn analyze(
         trap_checks,
         float_facts,
         handle_findings,
+        advisories,
     })
 }
 
@@ -2779,6 +2848,173 @@ fn compute_handle_findings(
 
     findings.sort_by_key(|f| (f.func_index, f.pc));
     findings
+}
+
+/// FEAT-059 (REQ-018): synthesise the sound findings into ranked, actionable
+/// remediation advisories. Pure synthesis over already-computed results — it
+/// introduces NO new unsoundness, and each advisory is only as strong as the
+/// finding it derives from (a POTENTIAL-TRAP becomes an `UnprovenObligation`,
+/// never a `DefiniteFault`). Ranked DefiniteFault > UnprovenObligation >
+/// PrecisionGap > LeverageableFact.
+fn compute_advisories(
+    gaps: &[Gap],
+    trap_checks: &[TrapCheck],
+    handle_findings: &[HandleFinding],
+    stack_usage: &StackUsage,
+) -> Vec<Advisory> {
+    let mut out: Vec<Advisory> = Vec::new();
+
+    // (a) DefiniteFault — handle-lifetime bugs scry PROVED.
+    for h in handle_findings {
+        let (code, what, action) = match h.kind {
+            HandleFindingKind::UseAfterDrop => (
+                "use-after-drop",
+                "used after it was already dropped",
+                "remove the post-drop use, or drop the handle only after its last use — an `own` handle is affine (usable many times, dropped exactly once)",
+            ),
+            HandleFindingKind::DoubleDrop => (
+                "double-drop",
+                "dropped a second time after it was already dropped",
+                "remove the redundant `resource.drop`; a handle must be dropped exactly once",
+            ),
+        };
+        out.push(Advisory {
+            func_index: h.func_index,
+            pc: h.pc,
+            class: AdvisoryClass::DefiniteFault,
+            code: code.into(),
+            detail: alloc::format!(
+                "The resource handle in local {} is {} (via `{}`).",
+                h.local_index,
+                what,
+                h.via
+            ),
+            suggested_action: action.into(),
+            verification: "re-run scry: this handle_findings entry disappears".into(),
+        });
+    }
+
+    // (b) UnprovenObligation / (d) LeverageableFact — from trap verdicts.
+    for t in trap_checks {
+        match t.verdict {
+            TrapVerdict::PotentialTrap => {
+                let (code, trap, action) = match t.kind {
+                    TrapKind::DivByZero => (
+                        "div-by-zero",
+                        "divide-by-zero",
+                        "guard the divisor to be non-zero (or constrain its interval to exclude 0) before this operation",
+                    ),
+                    TrapKind::SignedOverflow => (
+                        "signed-overflow",
+                        "INT_MIN / -1 overflow",
+                        "guard against dividend == INT_MIN && divisor == -1, or constrain the operands",
+                    ),
+                    TrapKind::OutOfBounds => (
+                        "out-of-bounds",
+                        "out-of-bounds access",
+                        "bound the effective address (base + offset + width) below the memory size before the access — e.g. a checked index or an `i < len` guard scry can see",
+                    ),
+                };
+                out.push(Advisory {
+                    func_index: t.func_index,
+                    pc: t.pc,
+                    class: AdvisoryClass::UnprovenObligation,
+                    code: code.into(),
+                    detail: alloc::format!(
+                        "scry could not prove `{}` cannot {} on some run (POTENTIAL-TRAP). This is not a proof that it DOES trap — only that safety is not established.",
+                        t.op, trap
+                    ),
+                    suggested_action: action.into(),
+                    verification: alloc::format!(
+                        "re-run scry: the `{}` {} trap_check at this pc becomes ProvenSafe",
+                        t.op, code
+                    ),
+                });
+            }
+            TrapVerdict::ProvenSafe => {
+                let trap = match t.kind {
+                    TrapKind::DivByZero => "divide-by-zero",
+                    TrapKind::SignedOverflow => "INT_MIN/-1 overflow",
+                    TrapKind::OutOfBounds => "out-of-bounds access",
+                };
+                out.push(Advisory {
+                    func_index: t.func_index,
+                    pc: t.pc,
+                    class: AdvisoryClass::LeverageableFact,
+                    code: "proven-safe".into(),
+                    detail: alloc::format!(
+                        "scry PROVED `{}` cannot {} on any run.",
+                        t.op, trap
+                    ),
+                    suggested_action: alloc::format!(
+                        "you may rely on this: a defensive runtime check for {} here is redundant and can be soundly elided",
+                        trap
+                    ),
+                    verification: alloc::format!(
+                        "the `{}` trap_check stays ProvenSafe after the change",
+                        t.op
+                    ),
+                });
+            }
+        }
+    }
+
+    // (c) PrecisionGap — where the interpreter degraded to ⊤.
+    for g in gaps {
+        let (code, action) = match g.kind {
+            GapKind::UnsupportedOp => (
+                "unsupported-op",
+                "this operator is outside scry's modelled set, so the function degrades to ⊤ from here; extract the surrounding analyzable logic into its own function, or accept the precision loss",
+            ),
+            GapKind::UnmodeledBranch => (
+                "unmodeled-branch",
+                "a multi-target branch (`br_table`) is not modelled; refactor to modelled control flow if precision here matters, or accept it",
+            ),
+            GapKind::UnmodeledMemoryAddress => (
+                "unmodeled-memory-address",
+                "the memory address is not an i32-shaped value scry can track, so the region state is scrubbed; compute the address as a tracked i32 if precision here matters",
+            ),
+            GapKind::UnmodeledControlFlow => (
+                "unmodeled-control-flow",
+                "a typed `if`/`block` region is handled by write-set havoc (its written locals widen to ⊤); simplify the region or accept the local precision loss",
+            ),
+        };
+        out.push(Advisory {
+            func_index: g.func_index,
+            pc: g.pc,
+            class: AdvisoryClass::PrecisionGap,
+            code: code.into(),
+            detail: alloc::format!(
+                "scry lost precision (degraded to ⊤) at `{}` — downstream facts in this function are weaker.",
+                g.op
+            ),
+            suggested_action: action.into(),
+            verification: alloc::format!(
+                "re-run scry: the gap at fn{}:{} is gone (or no longer reached)",
+                g.func_index, g.pc
+            ),
+        });
+    }
+
+    // (b′) UnprovenObligation — an unbounded worst-case shadow stack.
+    if stack_usage.max_stack_bytes == StackBound::Unbounded {
+        out.push(Advisory {
+            func_index: 0,
+            pc: 0,
+            class: AdvisoryClass::UnprovenObligation,
+            code: "unbounded-stack".into(),
+            detail:
+                "the module's worst-case shadow-stack usage could not be bounded (recursion, or an unresolvable / growable / host-writable indirect-call table)."
+                    .into(),
+            suggested_action:
+                "break the recursion, or make the dispatch table non-growable and fully enumerable (so call_indirect targets resolve), to obtain a finite bound"
+                    .into(),
+            verification: "re-run scry: stack_usage.max_stack_bytes becomes Bytes(n)".into(),
+        });
+    }
+
+    out.sort_by_key(|a| (a.class.rank(), a.func_index, a.pc));
+    out
 }
 
 /// Pop two companion operands, apply a binary transfer when both are modelled
@@ -6438,6 +6674,7 @@ mod tests {
             trap_checks: alloc::vec![],
             float_facts: alloc::vec![],
             handle_findings: alloc::vec![],
+            advisories: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -7120,6 +7357,88 @@ mod tests {
             r.handle_findings.is_empty(),
             "correct use-then-drop must not report: {:?}",
             r.handle_findings
+        );
+    }
+
+    /// FEAT-059: the advisory engine synthesises all four actionability classes
+    /// from the sound findings, ranked with DefiniteFault first.
+    #[test]
+    fn feat059_synthesizes_ranked_classes() {
+        let r = analyze_default(
+            "(module \
+               (import \"p/i\" \"[resource-drop]t\" (func $drop (param i32))) \
+               (import \"p/i\" \"[method]t.go\" (func $use (param i32))) \
+               (func (export \"bug\") (param i32) \
+                 local.get 0 call $drop local.get 0 call $use) \
+               (func (export \"unproven\") (param i32 i32) (result i32) \
+                 local.get 0 local.get 1 i32.div_s) \
+               (func (export \"safe\") (result i32) i32.const 10 i32.const 2 i32.div_u) \
+               (func (export \"gap\") (param i32) (result i32) local.get 0 i32.popcnt))",
+        );
+        use AdvisoryClass::*;
+        let has = |c: AdvisoryClass| r.advisories.iter().any(|a| a.class == c);
+        assert!(has(DefiniteFault), "use-after-drop → DefiniteFault");
+        assert!(
+            has(UnprovenObligation),
+            "unknown divisor → UnprovenObligation"
+        );
+        assert!(has(PrecisionGap), "unsupported popcnt → PrecisionGap");
+        assert!(
+            has(LeverageableFact),
+            "const-divisor div_u → LeverageableFact"
+        );
+        // ranked: the first advisory is the proven bug.
+        assert_eq!(r.advisories[0].class, DefiniteFault, "faults rank first");
+        // every advisory carries a verification oracle.
+        assert!(
+            r.advisories.iter().all(|a| !a.verification.is_empty()),
+            "every advisory names a verification oracle"
+        );
+    }
+
+    /// FEAT-059 HONESTY INVARIANT: a POTENTIAL-TRAP is only ever an
+    /// UnprovenObligation, NEVER a DefiniteFault — a sound tool must not label an
+    /// unproven obligation a bug. DefiniteFault advisories come only from proven
+    /// faults (handle findings), whose codes are the handle-fault codes.
+    #[test]
+    fn feat059_potential_trap_is_never_a_definite_fault() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) \
+               local.get 0 local.get 1 i32.div_s))",
+        );
+        // there IS a POTENTIAL-TRAP here (unknown divisor)
+        assert!(
+            r.advisories
+                .iter()
+                .any(|a| a.class == AdvisoryClass::UnprovenObligation),
+            "unknown divisor yields an UnprovenObligation"
+        );
+        // and NO advisory calls it a definite fault
+        for a in &r.advisories {
+            if a.class == AdvisoryClass::DefiniteFault {
+                assert!(
+                    a.code == "use-after-drop" || a.code == "double-drop",
+                    "DefiniteFault must be a proven handle fault, not `{}`",
+                    a.code
+                );
+            }
+        }
+    }
+
+    /// FEAT-059: a clean module (no faults, no unproven traps, no gaps) yields no
+    /// fault/obligation advisories — guidance is finding-driven, not noise.
+    #[test]
+    fn feat059_clean_module_no_fault_advisories() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (result i32) i32.const 1 i32.const 2 i32.add))",
+        );
+        assert!(
+            !r.advisories
+                .iter()
+                .any(|a| a.class == AdvisoryClass::DefiniteFault
+                    || a.class == AdvisoryClass::UnprovenObligation),
+            "a clean add-only function raises no fault/obligation advisories: {:?}",
+            r.advisories
         );
     }
 
