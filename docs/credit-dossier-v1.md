@@ -31,15 +31,28 @@ The dossier is creditable now because the soundness story crossed from
 
 - **v0.9 ([[FEAT-010]]):** first Rocq soundness theorem for the interval
   domain (`proofs/rocq/Soundness.v`, γ-soundness of bottom / constant /
-  `⊑` / join / meet / `add`, 0 admits).
+  `⊑` / join / meet / `add`, 0 admits) — proven over the **ℤ integer
+  model**, *not* over the wrapping `i32`/`i64` semantics. The shipped
+  transfer widens to ⊤ on any possibly-wrapping result (trivially sound,
+  γ(⊤)=ℤ); mechanizing the wrap-aware bounded case against the official
+  semantics is deferred (see below).
 - **v1.0 ([[FEAT-011]]) AC#1:** the proof extends to the full shipped
   domain stack — region-memory (`Region.v`), call-graph resolution
   (`CallGraph.v`), and the reachability lattice (`Reachability.v`), each
   0 admits, 0 axioms. `bazel test //proofs/rocq:...` is the gate.
 
-Deferred to v1.1 (named, not hidden): the SpecTec→interval-transfer
-*soundness-by-construction* backend (FEAT-011 AC#2) and the
-WasmCert-Coq-backed wrap-aware bounded `i32.add` proof ([[TE-004]]).
+Deferred beyond v1.0 (named, not hidden): the SpecTec→interval-transfer
+*soundness-by-construction* backend (FEAT-011 AC#2). The wrap-aware
+bounded `i32.add` proof ([[TE-004]]) was **subsequently discharged at
+v3.0** by `proofs/rocq/WrapAdd.v` (sound vs the official two's-complement
+wrapping semantics, incl. the wrap case, modelled directly); *importing*
+the canonical WasmCert-Coq development as the concrete model — rather than
+scry's own re-modeling — remains the open TE-004 slice.
+
+> **This is the v1.0 credit snapshot.** For the current (v3.0+) soundness
+> inventory — including `WrapAdd.v`, the octagon/pentagon/float/handle
+> domains, and the up-to-date honesty notes — see
+> `docs/qualification-dossier-v1.md`, which supersedes this document.
 
 ## Evidence kinds
 
@@ -55,7 +68,7 @@ WasmCert-Coq-backed wrap-aware bounded `i32.add` proof ([[TE-004]]).
 | REQ | What it requires | Evidence | Kind |
 |---|---|---|---|
 | [[REQ-001]] | sound AI pass over Wasm Core | interval/region/call-graph analyzer (`//:scry`) + `Soundness.v`/`Region.v`/`CallGraph.v` | mechanized + runnable |
-| [[REQ-002]] | soundness stated & (long-term) mechanized vs official semantics | `proofs/rocq/*.v` (interval+region+call-graph+reachability, 0 admits) | mechanized |
+| [[REQ-002]] | soundness stated & (long-term) mechanized vs official semantics | *at v1.0:* `proofs/rocq/*.v` (interval+region+call-graph+reachability, 0 admits) over the **ℤ integer model**. *Since v3.0:* `WrapAdd.v` proves `i32.add` vs the *official* wrapping semantics (incl. wrap); other transfers remain ℤ-model / γ-sweep and the WasmCert-Coq *import* is still deferred ([[TE-004]]) — not discharged tool-wide | mechanized (ℤ at v1.0; `i32.add` vs official since v3.0) |
 | REQ-003 | extend to Component Model | `component-provenance` typed boundary (`SCPV` v1, FEAT-002) + projection | contract |
 | REQ-004 | machine-consumable invariants for loom | invariant JSON schema v1 (FEAT-008), bounds-check-elision soundness (`Region.in_bounds_sound`) | contract + mechanized |
 | REQ-005 | attestable end-to-end (sigil) + traceable (rivet) | cosign-signed release assets + SLSA provenance + rivet compliance bundle | runnable |
@@ -94,8 +107,10 @@ discharges it.
   the lattice algebra, not a shipped reachability transfer.
 - The **interval `add` soundness** (`Soundness.v`) models the *no-wrap*
   integer core; the shipped `i32_add` widens to ⊤ on possible 2³² wrap
-  (trivially sound, `γ(⊤)=ℤ`). The WasmCert-Coq-backed wrap-aware proof
-  is named future work ([[TE-004]]).
+  (trivially sound, `γ(⊤)=ℤ`). *(At v1.0 the wrap-aware proof was named
+  future work; it was **discharged at v3.0** by `proofs/rocq/WrapAdd.v`,
+  which models the official two's-complement wrapping semantics directly.
+  A literal WasmCert-Coq *import* remains open — [[TE-004]].)*
 - The **SpecTec soundness-by-construction backend** (FEAT-011 AC#2) is
   deferred to v1.1.
 - Tool qualification (DO-330 / ISO 26262-8 §11 confidence in software

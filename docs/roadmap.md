@@ -26,7 +26,7 @@
 | **v0.6** | sigil signed in-toto attestation per scry run; rivet `verified-by` integration; end-to-end overdo evidence | DD-007; REQ-005; FEAT-004 | provisional: FEAT-004 (already drafted) |
 | **v0.7** | Component Model AI per DD-002 (closed 2026-05-26): scry analyzes original component sources; meld emits `component-provenance` custom section (~300 LOC bolt-on); scry projects invariants onto fused-module locations. Tracks owned/borrowed handle states + capability flow + host-call effects. `scry-component-handles` runnable | DD-002 (closed); AC-009 (Menon & Wagner WAW 2025); MF-002 (Component Model AI gap); REQ-003; FEAT-002 | provisional: FEAT-002 |
 | **v0.8** | taint domain (Wanilla-class noninterference) | AC-007 (Wanilla CCS 2025) | provisional: FEAT-009 |
-| **v0.9** | octagon / relational numerical domains; mechanized soundness proof of the interval domain in Rocq against WasmCert-Coq | AC-011 (Miné octagon); DD-003; TE-004 (WasmCert-Coq + Iris-Wasm) | provisional: FEAT-010 |
+| **v0.9** | octagon / relational numerical domains; admit-free Rocq interval-domain soundness proof over the **ℤ integer model** (proof vs the *official* wrapping semantics landed later at v3.0, `WrapAdd.v`; the WasmCert-Coq *import* is deferred) | AC-011 (Miné octagon); DD-003; TE-004 (WasmCert-Coq + Iris-Wasm) | provisional: FEAT-010 |
 | **v1.0** | six-domain credit dossier; mechanized soundness for the v0.1+v0.2+v0.3 stack; SpecTec-derived transfer-function backend prototype | AC-005 (SpecTec); G-001 (top-level safety goal closes) | provisional: FEAT-011 |
 
 ## How the design decisions compose

@@ -212,21 +212,30 @@ are in `artifacts/requirements.yaml`; provisional ones for v0.2+ carry
 | v0.6 | sigil attestation per scry run; rivet integration; full evidence-to-requirement traceability | DSSE-signed in-toto predicates; `rivet validate` links scry attestations as `verified-by` evidence | (extends v0.3) | FEAT-004 |
 | v0.7 | Component Model AI (per DD-002): scry analyzes original component sources; meld emits `component-provenance` custom section; scry projects invariants onto fused-module locations. Tracks owned/borrowed handle states, capability flow, host-call effects | sound resource-lifetime detection on real WAC compositions; capability-graph soundness check; meld `component-provenance` round-trip test | `scry-component-handles` | FEAT-002 |
 | v0.8 | taint domain (Wanilla-class noninterference) for security-property analysis | proptest on relational noninterference; differential vs Wanilla on shared corpus | (extends v0.3) | FEAT-009 |
-| v0.9 | octagon + relational numerical domains for false-alarm reduction; mechanized soundness proof of interval domain in Rocq against WasmCert-Coq | Rocq build green; reduced false-alarm rate measured on benchmark corpus | (extends v0.3) | FEAT-010 |
+| v0.9 | octagon + relational numerical domains for false-alarm reduction; admit-free Rocq soundness proof of the interval domain over the **ℤ integer model** (the proof vs the *official* wrapping semantics landed later at v3.0, `WrapAdd.v`; the WasmCert-Coq *import* is deferred, TE-004) | Rocq build green, 0 admits; reduced false-alarm rate measured on benchmark corpus | (extends v0.3) | FEAT-010 |
 | v1.0 | six-domain credit dossier; full mechanized soundness for the v0.1+v0.2+v0.3 domain stack; SpecTec-derived transfer-function backend prototype | rivet coverage at 100% across the full G-001 sub-tree; `rivet validate --qualification-mode` green | (HW+dossier) | FEAT-011 |
 
 ## verification matrix (per shipped abstract domain)
 
 each shipped abstract domain carries the full overdo chain. early
-versions allow paper-only soundness; mechanized proof against
-WasmCert-Coq is the v1.0 gate.
+versions allow paper-only soundness. an admit-free Rocq soundness proof of
+the interval domain over the **ℤ integer model** (`Soundness.v`) lands at
+v0.9/v1.0; at v3.0 **`WrapAdd.v` proves `i32.add` sound against the
+*official* two's-complement wrapping semantics — including the wrap case**
+(modelled directly, 0 admits, CI-gated). what remains a named, **not-yet-met**
+target (TE-004) is *importing the canonical WasmCert-Coq development* as the
+concrete model — rather than scry's own faithful re-modeling of it — and
+extending the official-semantics proof beyond `i32.add` to the other
+integer/float transfers (ℤ-model / γ-sweep only today).
 
 | chain layer | interval (v0.1) | region-memory (v0.2) | call-graph (v0.3) | summaries (v0.4) | taint (v0.8) |
 |---|---|---|---|---|---|
 | Lean / Rocq (math) | TBD | TBD | TBD | TBD | TBD |
-| Verus (SMT) | bounds on join/widen | region disjointness | call-target set monotonicity | summary join monotonicity | label-flow monotonicity |
+| Verus (SMT) | interval join commutative + bottom-identity, proven **up to γ** (semantic equality) — repaired from an earlier false structural claim (FEAT-012) | region disjointness | call-target set monotonicity | summary join monotonicity | label-flow monotonicity |
 | Kani (bounded) | wrap-around overflow paths | offset overflow paths | jump-table edge cases | recursion-frontier edge cases | declassification edges |
-| Rocq mechanized proof vs WasmCert-Coq | v0.9 | v1.0 | v1.0 | v1.0 | post-v1.0 |
+| Rocq soundness proof (ℤ integer model, 0 admits) | v0.9 | v1.0 | v1.0 | v1.0 | post-v1.0 |
+| Rocq proof vs *official* wrapping Wasm semantics | `i32.add` ✓ (v3.0, `WrapAdd.v`, direct model) | — | — | — | — |
+| WasmCert-Coq *import* as concrete model (+ other transfers) | deferred (TE-004) | deferred | deferred | deferred | deferred |
 | proptest | random concrete program ⊆ abstract result | random region access patterns | random `call_indirect` programs | random call graphs | random taint flows |
 | differential vs prior art | (none specific) | CRAB ground-truth on translated C | Wassail call-graph diff | Stiévenart summaries diff | Wanilla diff |
 | sigil signed evidence | per analyzer run | per analyzer run | per analyzer run | per analyzer run | per analyzer run |
