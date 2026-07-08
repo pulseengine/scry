@@ -434,7 +434,7 @@ artifacts:
   - id: FEAT-059
     type: feature
     title: "v3.1 — Remediation advisory engine (sound findings -> ranked, actionable guidance)"
-    status: proposed
+    status: accepted
     release: v3.1.0
     description: >
       Synthesise scry's existing sound findings — FEAT-040 gaps, FEAT-045/046
@@ -467,7 +467,7 @@ artifacts:
   - id: FEAT-060
     type: feature
     title: "v3.1 — AI-agent + human guidance surfaces (schema + fix-verify loop + report)"
-    status: proposed
+    status: accepted
     release: v3.1.0
     description: >
       Make FEAT-059's advisories consumable by both audiences. (a) AI agents:
@@ -578,7 +578,7 @@ artifacts:
   - id: FEAT-055
     type: feature
     title: "v3.1 — Counterexample generation for POTENTIAL-TRAP sites (symbolic)"
-    status: proposed
+    status: accepted
     release: v3.1.0
     description: >
       Couple a SeeWasm-style symbolic engine (CA-008) to scry's POTENTIAL-TRAP

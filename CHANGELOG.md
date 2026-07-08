@@ -7,6 +7,59 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-07-08
+
+Headline: **"Actionable"** — scry stops at *reporting* sound findings and starts
+telling a human or an AI agent **what to do about them**. The arc: observable
+(v2.6) → prove-safety (v2.7) → qualifiable (v3.0) → **actionable (v3.1)**. Three
+features (FEAT-059/060/055), all additive / library-only.
+
+### Added — FEAT-059 (REQ-018) — remediation advisory engine
+
+- `AnalysisResult.advisories`: a ranked `Vec<Advisory>` synthesised from the
+  sound findings (gaps, trap_checks, handle_findings, stack bound). Each advisory
+  carries a location, an **actionability class**, a rationale, a suggested
+  action, and a **verification oracle**. The honesty split is the load-bearing
+  design — a sound tool must not overclaim a fix:
+  - `DefiniteFault` (proven bug → fix it),
+  - `UnprovenObligation` (POTENTIAL-TRAP → prove/guard it, **not** "it's a bug"),
+  - `PrecisionGap` (⊤ degradation → restructure / accept),
+  - `LeverageableFact` (PROVEN-SAFE → a defensive check you may soundly elide).
+  Pure synthesis over already-sound results — no new unsoundness; ranked
+  faults-first. Clean-room CONFIRMED HONEST (no overclaim across all classes).
+
+### Added — FEAT-060 (REQ-018) — AI-agent + human guidance surfaces
+
+- Humans: a scry-viz **Guidance** panel (grouped by class, summarised, faults
+  first). Agents: `docs/remediation-guidance-v1.md` — the stable advisory schema
+  + the **fix-verify loop** (apply the action → re-run scry → the verification
+  oracle confirms the finding cleared / a trap_check flips to ProvenSafe),
+  closing `oracle-gate-a-change` against a *sound* checker. Structured-primary
+  (TE-011): agents consume the records, not the HTML.
+
+### Added — FEAT-055 (REQ-018) — candidate counterexamples
+
+- Each `UnprovenObligation` advisory carries an optional `Counterexample` — the
+  candidate operand assignment that would trigger the trap (`divisor = 0`;
+  `dividend = INT_MIN` + `divisor = -1`; `address = <memory size>`). A ready
+  repro / regression-test seed. HONESTLY labelled **candidate**: derived from the
+  over-approximating abstract state, so it is not a proof the trap is reachable
+  (confirming reachability is the deferred full-symbolic tier).
+
+### Posture
+
+- All three are library-only `AnalysisResult` additions (`advisories`, plus the
+  `Advisory`/`AdvisoryClass`/`Counterexample` types); the `scry.wit` interface
+  and the frozen v1 invariant-JSON contract are unchanged. No new crates.
+- **Falsification statement.** scry claims its guidance never overclaims: a
+  `DefiniteFault` is only ever a proven bug, an `UnprovenObligation` is never
+  labelled a bug, a `LeverageableFact` only ever cites a proven-safe property,
+  and a counterexample is labelled a candidate (not a reachability proof). FALSE
+  if any advisory promotes an unproven finding to a definite fault, cites a
+  not-proven property as leverageable, or presents a candidate counterexample as
+  a confirmed trigger. The advisory engine was clean-room-audited for exactly
+  these overclaims (verdict: CONFIRMED HONEST; one oracle-ambiguity nit fixed).
+
 ## [3.0.0] — 2026-07-01
 
 Headline: **"Qualifiable + differentiated"** — the strategic release. scry gains
