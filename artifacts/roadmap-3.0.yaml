@@ -119,6 +119,44 @@ artifacts:
 
       - type: evaluates-tech
         target: TE-011
+
+  - id: REQ-018
+    type: requirement
+    title: "Actionable remediation guidance from the sound analysis (humans + AI agents)"
+    status: proposed
+    description: >
+      scry shall synthesize its sound findings (gaps, trap verdicts, handle
+      faults, stack/reachability bounds, proven relational/interval facts) into
+      ranked, actionable, machine-readable improvement guidance — turning "here
+      is what the analysis found" into "here is what to do about it". Each
+      advisory shall carry: a location (function + pc, resolved to a name /
+      source span where the name section or DWARF permits), an actionability
+      CLASS, a rationale, a concrete suggested action, and a VERIFICATION ORACLE
+      (what re-running scry should show once the fix lands). HONESTY (the
+      soundness discipline carried into remediation — a sound tool must not
+      overclaim a fix any more than a proof): the class strictly separates
+        (a) DEFINITE-FAULT   — a real bug scry proved (use-after-drop, a divisor
+            provably {0}); advice = fix it;
+        (b) UNPROVEN-OBLIGATION — a POTENTIAL-TRAP scry could not discharge;
+            advice = prove/guard/bound it (NOT "this is a bug");
+        (c) PRECISION-GAP    — a ⊤ degradation (unsupported op, growable table);
+            advice = restructure for analyzability or accept the limitation;
+        (d) LEVERAGEABLE-FACT — a PROVEN-SAFE / proven bound; advice = the
+            runtime check / branch you may soundly elide or simplify.
+      Structured-primary (TE-011): agents consume the data schema; the human
+      report is a rendering of the same records, prioritised by class.
+    tags: [remediation, guidance, ai-agent, actionable, ux, v3.x]
+    fields:
+      priority: must
+      category: functional
+    links:
+      - type: traces-to
+        target: G-005
+      - type: traces-to
+        target: REQ-017
+
+      - type: evaluates-tech
+        target: TE-011
   # ══════════════════════════════════════════════════════════════════════
   # RELEASE v2.6.0 — "Make the analysis observable"
   # Cash in computed-but-hidden facts; cheap precision; agent/qual readiness.
@@ -384,6 +422,76 @@ artifacts:
         target: G-005
 
   # ══════════════════════════════════════════════════════════════════════
+  # RELEASE v3.1.0 — "Actionable" (the arc's next step)
+  # observable (v2.6) -> prove-safety (v2.7) -> qualifiable (v3.0) ->
+  # ACTIONABLE: turn sound findings into ranked remediation guidance a human
+  # or an AI agent can act on, with a verification oracle per item. Additive /
+  # library-only (no scry.wit or frozen-v1-JSON change) => a MINOR bump.
+  # WIT-level surfacing of these facts (contract-affecting) is deferred to a
+  # later v4.0.0 "consumable" (backlog FEAT-054).
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: FEAT-059
+    type: feature
+    title: "v3.1 — Remediation advisory engine (sound findings -> ranked, actionable guidance)"
+    status: proposed
+    release: v3.1.0
+    description: >
+      Synthesise scry's existing sound findings — FEAT-040 gaps, FEAT-045/046
+      trap_checks, FEAT-049 handle_findings, FEAT-021/043 stack bounds,
+      FEAT-022/039 reachability, and the proven pentagon/interval/bit facts —
+      into a ranked `Vec<Advisory>` on `AnalysisResult` (library-only, like the
+      other v3.0 fields). Each Advisory carries: location (func_index + pc,
+      resolved to a function name via the FEAT-027 name meta and a source span
+      where DWARF/name-section permits), an actionability CLASS
+      (DefiniteFault | UnprovenObligation | PrecisionGap | LeverageableFact —
+      per REQ-018's honesty split), a rationale, a concrete suggested_action,
+      and a verification field naming the oracle that confirms the fix (e.g.
+      "this i32.div_s becomes trap_checks DivByZero=ProvenSafe" / "this gap at
+      pc N disappears"). Ranked DefiniteFault > UnprovenObligation >
+      PrecisionGap, with LeverageableFact surfaced separately as safe
+      simplifications. Pure synthesis over already-computed results — adds no
+      new unsoundness surface; the advice is only as strong as the finding it
+      derives from, and never upgrades a POTENTIAL-TRAP to "bug".
+    tags: [remediation, guidance, actionable, synthesis, v3.x]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a module with a use-after-drop, a POTENTIAL-TRAP div, and a ⊤-degrading op, When scry analyzes it, Then AnalysisResult.advisories contains one DefiniteFault (fix), one UnprovenObligation (guard/prove), and one PrecisionGap (restructure/accept) advisory — each with a location, a suggested action, and a verification oracle; and NO advisory labels a POTENTIAL-TRAP a definite bug."
+    links:
+      - type: traces-to
+        target: REQ-018
+      - type: traces-to
+        target: REQ-017
+
+  - id: FEAT-060
+    type: feature
+    title: "v3.1 — AI-agent + human guidance surfaces (schema + fix-verify loop + report)"
+    status: proposed
+    release: v3.1.0
+    description: >
+      Make FEAT-059's advisories consumable by both audiences. (a) AI agents:
+      a stable, documented JSON advisory schema (versioned, structured-primary
+      per TE-011) plus a "fix-verify loop" contract — an agent proposes a diff,
+      re-runs scry, and the corresponding advisory's verification oracle
+      confirms the finding cleared (closing the oracle-gate-a-change loop
+      against a SOUND checker). (b) Humans: a prioritised markdown/HTML guidance
+      report (a scry-viz "Guidance" panel + a text `advise` rendering) grouped
+      by actionability class with a one-line summary ("N real faults, M unproven
+      obligations, K analyzer blind spots, J safe simplifications"). Both are
+      renderings of the same FEAT-059 records — no re-derivation.
+    tags: [ai-agent, ux, report, schema, oracle-gate, v3.x]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the advisories, When an AI agent consumes the JSON schema and applies a suggested fix, Then re-running scry clears the advisory per its verification oracle; and When a human opens the report, Then advisories are grouped by class, prioritised, and summarised."
+    links:
+      - type: traces-to
+        target: REQ-018
+      - type: evaluates-tech
+        target: TE-011
+
+  # ══════════════════════════════════════════════════════════════════════
   # BACKLOG — researched, valuable, not yet release-scoped (status proposed,
   # no `release:`). Promote into a release when picked up.
   # ══════════════════════════════════════════════════════════════════════
@@ -469,14 +577,19 @@ artifacts:
 
   - id: FEAT-055
     type: feature
-    title: "Backlog — Counterexample generation for POTENTIAL-TRAP sites (symbolic)"
+    title: "v3.1 — Counterexample generation for POTENTIAL-TRAP sites (symbolic)"
     status: proposed
+    release: v3.1.0
     description: >
       Couple a SeeWasm-style symbolic engine (CA-008) to scry's POTENTIAL-TRAP
       verdicts to turn "cannot prove safe" into "input X may trap" — and the
       SeaHorn pattern (AI invariants seeding an SMT/CHC refinement) to shrink
-      orange->green without losing soundness.
-    tags: [counterexample, symbolic, ux, backlog]
+      orange->green without losing soundness. Pulled into v3.1.0: a concrete
+      trapping witness (or a refinement to PROVEN-SAFE) is exactly what makes an
+      UnprovenObligation advisory (FEAT-059) actionable — "traps on input X"
+      instead of "may trap", and the same witness is a ready-made regression
+      test for the agent's fix (FEAT-060 verify loop).
+    tags: [counterexample, symbolic, ux, remediation, v3.x]
     fields:
       phase: future
       acceptance-criteria:
@@ -484,6 +597,8 @@ artifacts:
     links:
       - type: traces-to
         target: REQ-014
+      - type: traces-to
+        target: REQ-018
 
   - id: FEAT-056
     type: feature
