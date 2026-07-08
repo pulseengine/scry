@@ -2926,8 +2926,8 @@ fn compute_advisories(
                     ),
                     suggested_action: action.into(),
                     verification: alloc::format!(
-                        "re-run scry: this `{}` trap_check becomes ProvenSafe",
-                        t.op
+                        "re-run scry: the `{}` {} trap_check at this pc becomes ProvenSafe",
+                        t.op, code
                     ),
                 });
             }
