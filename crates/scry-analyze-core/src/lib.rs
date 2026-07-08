@@ -639,6 +639,37 @@ pub struct Advisory {
     pub suggested_action: String,
     /// The oracle that confirms the fix — what re-running scry should show.
     pub verification: String,
+    /// FEAT-055: for an `UnprovenObligation`, a candidate counterexample — the
+    /// operand assignment that would trigger the trap, derived from the abstract
+    /// state. `None` for other classes. A ready seed for a repro / regression
+    /// test; see [`Counterexample`] for the reachability caveat.
+    pub counterexample: Option<Counterexample>,
+}
+
+/// FEAT-055 (REQ-018): a candidate counterexample for an `UnprovenObligation`
+/// advisory — the operand value(s) that would make the site trap.
+///
+/// SOUNDNESS CAVEAT (why "candidate"): the values are read off scry's abstract
+/// state, which OVER-approximates. That the divisor's interval *contains* 0 does
+/// not prove 0 is *reachable* on a concrete run. So this is a starting point for
+/// a repro / regression test, NOT a proof the trap fires — consistent with the
+/// `UnprovenObligation` class. Confirming reachability (a genuine
+/// symbolic/SMT-checked input) is the deferred full-counterexample tier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Counterexample {
+    /// Human/agent-readable trapping condition.
+    pub trigger: String,
+    /// Concrete candidate operand assignments (empty when none is derivable).
+    pub witness: Vec<CxAssign>,
+}
+
+/// FEAT-055: one operand assignment in a [`Counterexample`] witness.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CxAssign {
+    /// The operand role (e.g. `divisor`, `dividend`, `address`).
+    pub operand: String,
+    /// The candidate trapping value.
+    pub value: i64,
 }
 
 /// FEAT-059 (REQ-018): the actionability class of an [`Advisory`]. Ranked
@@ -2306,7 +2337,13 @@ pub fn analyze(
         compute_handle_findings(&defined_funcs, &import_func_meta, import_func_count);
     // FEAT-059: synthesise the sound findings into ranked remediation guidance
     // (pure synthesis over the results above; borrows before they are moved).
-    let advisories = compute_advisories(&gaps, &trap_checks, &handle_findings, &stack_usage);
+    let advisories = compute_advisories(
+        &gaps,
+        &trap_checks,
+        &handle_findings,
+        &stack_usage,
+        memory_min_bytes,
+    );
 
     Ok(AnalysisResult {
         invariants,
@@ -2850,6 +2887,53 @@ fn compute_handle_findings(
     findings
 }
 
+/// FEAT-055 (REQ-018): a candidate counterexample for a POTENTIAL-TRAP, derived
+/// from the trap kind (and, for OOB, the memory size). CANDIDATE, not proven
+/// reachable — the abstract state over-approximates (see [`Counterexample`]).
+fn trap_counterexample(kind: TrapKind, op: &str, memory_size_bytes: u64) -> Counterexample {
+    match kind {
+        TrapKind::DivByZero => Counterexample {
+            trigger: "the divisor is 0".into(),
+            witness: alloc::vec![CxAssign {
+                operand: "divisor".into(),
+                value: 0
+            }],
+        },
+        TrapKind::SignedOverflow => {
+            let int_min = if op.starts_with("i64") {
+                i64::MIN
+            } else {
+                i32::MIN as i64
+            };
+            Counterexample {
+                trigger: "the dividend is INT_MIN and the divisor is -1".into(),
+                witness: alloc::vec![
+                    CxAssign {
+                        operand: "dividend".into(),
+                        value: int_min,
+                    },
+                    CxAssign {
+                        operand: "divisor".into(),
+                        value: -1,
+                    },
+                ],
+            }
+        }
+        TrapKind::OutOfBounds => {
+            let addr = memory_size_bytes.min(i64::MAX as u64) as i64;
+            Counterexample {
+                trigger: alloc::format!(
+                    "an effective address at or beyond the memory's current size ({memory_size_bytes} bytes)"
+                ),
+                witness: alloc::vec![CxAssign {
+                    operand: "address".into(),
+                    value: addr,
+                }],
+            }
+        }
+    }
+}
+
 /// FEAT-059 (REQ-018): synthesise the sound findings into ranked, actionable
 /// remediation advisories. Pure synthesis over already-computed results — it
 /// introduces NO new unsoundness, and each advisory is only as strong as the
@@ -2861,6 +2945,7 @@ fn compute_advisories(
     trap_checks: &[TrapCheck],
     handle_findings: &[HandleFinding],
     stack_usage: &StackUsage,
+    memory_size_bytes: u64,
 ) -> Vec<Advisory> {
     let mut out: Vec<Advisory> = Vec::new();
 
@@ -2891,6 +2976,7 @@ fn compute_advisories(
             ),
             suggested_action: action.into(),
             verification: "re-run scry: this handle_findings entry disappears".into(),
+            counterexample: None,
         });
     }
 
@@ -2929,6 +3015,7 @@ fn compute_advisories(
                         "re-run scry: the `{}` {} trap_check at this pc becomes ProvenSafe",
                         t.op, code
                     ),
+                    counterexample: Some(trap_counterexample(t.kind, &t.op, memory_size_bytes)),
                 });
             }
             TrapVerdict::ProvenSafe => {
@@ -2954,6 +3041,7 @@ fn compute_advisories(
                         "the `{}` trap_check stays ProvenSafe after the change",
                         t.op
                     ),
+                    counterexample: None,
                 });
             }
         }
@@ -2993,6 +3081,7 @@ fn compute_advisories(
                 "re-run scry: the gap at fn{}:{} is gone (or no longer reached)",
                 g.func_index, g.pc
             ),
+            counterexample: None,
         });
     }
 
@@ -3010,6 +3099,7 @@ fn compute_advisories(
                 "break the recursion, or make the dispatch table non-growable and fully enumerable (so call_indirect targets resolve), to obtain a finite bound"
                     .into(),
             verification: "re-run scry: stack_usage.max_stack_bytes becomes Bytes(n)".into(),
+            counterexample: None,
         });
     }
 
@@ -7438,6 +7528,69 @@ mod tests {
                 .any(|a| a.class == AdvisoryClass::DefiniteFault
                     || a.class == AdvisoryClass::UnprovenObligation),
             "a clean add-only function raises no fault/obligation advisories: {:?}",
+            r.advisories
+        );
+    }
+
+    /// FEAT-055: a POTENTIAL-TRAP obligation carries a candidate counterexample —
+    /// the operand value that would trigger the trap (a repro/regression seed).
+    #[test]
+    fn feat055_div_by_zero_counterexample_is_divisor_0() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) \
+               local.get 0 local.get 1 i32.div_s))",
+        );
+        let dbz = r
+            .advisories
+            .iter()
+            .find(|a| a.code == "div-by-zero" && a.class == AdvisoryClass::UnprovenObligation)
+            .expect("a div-by-zero obligation");
+        let cx = dbz.counterexample.as_ref().expect("has a counterexample");
+        assert!(
+            cx.witness
+                .iter()
+                .any(|w| w.operand == "divisor" && w.value == 0),
+            "divisor=0 witness expected: {:?}",
+            cx.witness
+        );
+    }
+
+    /// FEAT-055: an OOB obligation's counterexample address is the memory size
+    /// (1 page = 65536 bytes) — the smallest definitely-out-of-bounds address.
+    #[test]
+    fn feat055_oob_counterexample_is_memory_size() {
+        let r = analyze_default(
+            "(module (memory 1) (func (export \"f\") (param i32) (result i32) \
+               local.get 0 i32.load))",
+        );
+        let oob = r
+            .advisories
+            .iter()
+            .find(|a| a.code == "out-of-bounds")
+            .expect("an out-of-bounds obligation");
+        let cx = oob.counterexample.as_ref().expect("has a counterexample");
+        assert!(
+            cx.witness
+                .iter()
+                .any(|w| w.operand == "address" && w.value == 65536),
+            "address=65536 (1 page) witness expected: {:?}",
+            cx.witness
+        );
+    }
+
+    /// FEAT-055: only UnprovenObligation advisories carry a counterexample —
+    /// a proven-safe / precision / fault advisory has none.
+    #[test]
+    fn feat055_non_obligations_have_no_counterexample() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (result i32) i32.const 10 i32.const 2 i32.div_u))",
+        );
+        assert!(
+            r.advisories
+                .iter()
+                .filter(|a| a.class != AdvisoryClass::UnprovenObligation)
+                .all(|a| a.counterexample.is_none()),
+            "non-obligation advisories must not carry a counterexample: {:?}",
             r.advisories
         );
     }

@@ -737,7 +737,7 @@ fn render_advisories(s: &mut String, r: &AnalysisResult) {
         let _ = write!(
             s,
             "<li class=\"{cls}\"><span class=\"sev\">{label}</span> \
-             <code>fn{}:{} {}</code> — {}<br><em>Action:</em> {}<br><em>Verify:</em> {}</li>",
+             <code>fn{}:{} {}</code> — {}<br><em>Action:</em> {}<br><em>Verify:</em> {}",
             a.func_index,
             a.pc,
             esc(&a.code),
@@ -745,6 +745,24 @@ fn render_advisories(s: &mut String, r: &AnalysisResult) {
             esc(&a.suggested_action),
             esc(&a.verification),
         );
+        if let Some(cx) = &a.counterexample {
+            let _ = write!(
+                s,
+                "<br><em>Counterexample (candidate):</em> {}",
+                esc(&cx.trigger)
+            );
+            if !cx.witness.is_empty() {
+                s.push_str(" [");
+                for (i, w) in cx.witness.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    let _ = write!(s, "{}={}", esc(&w.operand), w.value);
+                }
+                s.push(']');
+            }
+        }
+        s.push_str("</li>");
     }
     s.push_str("</ul></section>");
 }
