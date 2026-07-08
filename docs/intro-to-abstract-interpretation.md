@@ -233,9 +233,14 @@ Later versions add:
 - **Component-Model handle lifetimes** ([[FEAT-002]]) — track
   owned/borrowed `resource` handles at link time, catching
   use-after-drop before runtime.
-- **Mechanized soundness** ([[FEAT-010]]) — full Rocq proof against
-  WasmCert-Coq for the interval domain, so the soundness claim
-  isn't paper-only.
+- **Mechanized soundness** ([[FEAT-010]] / [[FEAT-048]]) — an
+  admit-free Rocq soundness proof for the interval domain over the ℤ
+  integer model, plus (v3.0) `WrapAdd.v` proving `i32.add` sound against
+  the *official* two's-complement wrapping semantics incl. the wrap case
+  — so the soundness claim isn't paper-only. (Importing the canonical
+  WasmCert-Coq development as the concrete model, and extending the
+  official-semantics proof to the other transfers, remain named
+  targets — TE-004.)
 
 ## 8. The one-paragraph summary
 

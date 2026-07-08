@@ -102,7 +102,12 @@ admit-free core it extends.
   contract before the live `analyze()` path.
 - Miné's **strong/tight closure** (a precision, not soundness,
   refinement).
-- The **WasmCert-Coq-backed** wrap-aware bounded `i32.add` proof.
+- The wrap-aware bounded `i32.add` proof vs the official wrapping
+  semantics. *(Update: **discharged at v3.0** by `proofs/rocq/WrapAdd.v`,
+  which models the two's-complement wrapping semantics directly and proves
+  the shipped transfer sound incl. the wrap case. The WasmCert-Coq
+  *import* itself — using their mechanization as the concrete model rather
+  than scry's own re-modeling — remains the open TE-004 slice.)*
 
 As with [[FEAT-008]], the live `analyze()` round-trip stays gated by the
 wac_compose / wasmtime-45 root-import limitation, so the octagon algebra

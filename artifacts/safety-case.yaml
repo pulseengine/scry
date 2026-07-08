@@ -204,18 +204,24 @@ artifacts:
 
   - id: Sn-002
     type: safety-solution
-    title: Mechanized Rocq proof of soundness against WasmCert-Coq (longer-term)
+    title: Mechanized Rocq proof of soundness against the official Wasm semantics (partially discharged; WasmCert-Coq import longer-term)
     status: draft
     description: >
-      Future evidence — placeholder for the mechanized proof obligation
-      stated by REQ-002 and DD-003. Confidence will rise from medium
-      to high once the mechanization lands. Until then, this solution
-      stands as the named proof obligation in the safety case rather
-      than as discharged evidence.
+      The proof obligation stated by REQ-002 and DD-003 — soundness proven
+      against the OFFICIAL Wasm operational semantics. PARTIALLY DISCHARGED
+      at v3.0: proofs/rocq/WrapAdd.v (FEAT-048) proves scry's shipped
+      i32.add transfer sound against the official two's-complement wrapping
+      semantics, INCLUDING the wrap case — modelled directly, 0 admits,
+      CI-gated. The residual (the named TE-004 slice) is IMPORTING the
+      canonical WasmCert-Coq development as the concrete model rather than
+      scry's own faithful re-modeling, and extending the official-semantics
+      proof beyond i32.add to the other integer/float transfers (ℤ-model /
+      γ-sweep only today). Confidence rises to high once the import lands
+      and the coverage generalizes.
     fields:
       evidence-type: formal-proof
-      evidence-ref: "TBD — Rocq development atop WasmCert-Coq, tracked separately"
-      confidence: low
+      evidence-ref: "bazel test //proofs/rocq:wrapadd_test — i32.add sound vs the official wrapping semantics incl. wrap, 0 admits; WasmCert-Coq import + other transfers = TBD, tracked TE-004"
+      confidence: medium
     links:
       - type: supports
         target: G-002
@@ -302,9 +308,12 @@ artifacts:
       //proofs/rocq:callgraph_test //proofs/rocq:reachability_test`. This
       upgrades the G-002 soundness evidence from asserted (Sn-001) /
       placeholder (Sn-002) to mechanized, and discharges the REQ-002
-      mechanization obligation for the v0.1–v0.4 domain stack (the
-      WasmCert-Coq-backed wrap-aware bound remains the named TE-004
-      future slice).
+      mechanization obligation for the v0.1–v0.4 domain stack over the ℤ
+      integer model. The wrap-aware i32.add bound was subsequently
+      discharged at v3.0 by proofs/rocq/WrapAdd.v (FEAT-048; sound vs the
+      official two's-complement wrapping semantics, see Sn-002); importing
+      the canonical WasmCert-Coq development as the concrete model remains
+      the named TE-004 slice.
     fields:
       evidence-type: formal-proof
       evidence-ref: "bazel test //proofs/rocq:soundness_test //proofs/rocq:region_test //proofs/rocq:callgraph_test //proofs/rocq:reachability_test — all PASS, 0 admits / 0 axioms"

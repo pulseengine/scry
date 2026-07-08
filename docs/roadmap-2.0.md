@@ -60,9 +60,12 @@ wins:
 
 scry's defensible niche is the intersection no incumbent occupies: **a
 sound analyzer for Wasm whose soundness is mechanically proven in Rocq
-against WasmCert-Coq** ([[REQ-002]]). Not "more domains" — Astrée has
-more and better-tuned domains — but *soundness as a theorem, not a
-brochure*. The 2.0 capability track and the qualification dossier
+against the *official* Wasm semantics** ([[REQ-002]]) — `i32.add` proven
+vs the two's-complement wrapping semantics (`WrapAdd.v`) that WasmCert-Coq
+canonically mechanizes, with the remaining transfers and a literal
+WasmCert-Coq *import* as the tracked next steps ([[TE-004]]). Not "more
+domains" — Astrée has more and better-tuned domains — but *soundness as a
+theorem, not a brochure*. The 2.0 capability track and the qualification dossier
 ([[FEAT-020]]) are built to defend exactly that.
 
 ## How we get there — both gaps, sequenced
