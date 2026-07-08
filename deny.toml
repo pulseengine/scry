@@ -33,6 +33,14 @@ ignore = [
     # context-then-downcast_mut pattern. No impact on shipped crates or the
     # analyzer component. Re-evaluate when a patched `anyhow` is pulled in.
     "RUSTSEC-2026-0190",
+    # RUSTSEC-2026-0204 — invalid pointer deref in `crossbeam-epoch`'s
+    # `fmt::Pointer` impl for `Atomic`/`Shared` (only when printing an already-
+    # invalid pointer). Enters the graph ONLY through `scry-host-tests` →
+    # wasmtime → rayon → crossbeam-deque → crossbeam-epoch; it is in ZERO
+    # published `scry-sai-*` libraries and not in the shipped `scry.wasm`. The
+    # harness does not format crossbeam pointers. No impact on shipped crates or
+    # the analyzer component. Re-evaluate when wasmtime/rayon are bumped.
+    "RUSTSEC-2026-0204",
 ]
 
 [licenses]
