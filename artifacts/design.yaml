@@ -487,3 +487,88 @@ artifacts:
         target: REQ-001
       - type: traces-to
         target: DD-009
+
+  - id: DD-018
+    type: design-decision
+    title: v3.2 — Linear-memory segmentation as a parametric functor (bounds × content), weak-by-default stores
+    status: proposed
+    tags: [memory, segmentation, domain-design, soundness, v3.2]
+    description: >
+      How FEAT-058 abstracts linear-memory content. A memory region becomes an
+      ordered sequence of segments [b0) P1 [b1) P2 ... [bn), where the bounds
+      b_i are symbolic offset expressions from scry's existing numeric domain
+      (interval/octagon) and each P_i is a value from a plugged-in CONTENT
+      domain (intervals for the first slice). The functor is parametric in both
+      the bound domain and the content domain (Cousot-Cousot-Logozzo 2011,
+      AC-015), reusing scry-interval/-octagon rather than a bespoke encoding.
+    fields:
+      decision: >
+        (1) Representation: ordered segment list with symbolic bounds + per-
+        segment content, plus a distinguished "any/uninitialized" content for
+        unwritten ranges. (2) Store: STRONG update (split at the offset,
+        overwrite the covering segment) ONLY when the store offset and width
+        are singletons landing within one segment; otherwise a WEAK update
+        (join the stored value into every possibly-overlapping segment). (3)
+        Load: the join of every possibly-covering segment's content. (4) Join/
+        widen: unify the two partitions to a common coarser partition (merge
+        segments whose bounds cannot be ordered), join content per merged
+        segment; widening caps the segment COUNT to guarantee termination. (5)
+        Escape hatch: growable / imported / shared memory, or a store whose
+        offset is ⊤, collapses the region to today's single-⊤-blob region (no
+        regression, still sound). (6) New pure crate scry-sai-segment; admit-
+        free Rocq (proofs/rocq/Segment.v) for split/merge/join/store/load;
+        library-only output (WIT surfacing deferred to FEAT-054).
+      rationale: >
+        Weak-by-default is the soundness keystone — a strong update on an
+        imprecise offset would DROP concrete states and is unsound; scry only
+        strengthens when the offset is provably a single cell. Capping the
+        segment count keeps the domain of finite height (termination). Reusing
+        the interval/octagon domains for bounds and content keeps the transfer
+        set small and mechanizable, matching the pentagon/float precedent of a
+        new pure crate with its own Rocq file.
+    links:
+      - type: satisfies
+        target: REQ-019
+      - type: traces-to
+        target: FEAT-058
+
+  - id: DD-019
+    type: design-decision
+    title: "v3.3 — Convex polyhedra: ELINA-decomposed; mechanize the lattice, γ-sweep the hull (honest scope)"
+    status: proposed
+    tags: [polyhedra, domain-design, decomposition, soundness, honesty, v3.3]
+    description: >
+      How FEAT-057 represents polyhedra and how far soundness is mechanized.
+      Constraint-form convex polyhedra (Cousot-Halbwachs 1978, AC-012) with
+      ELINA-style online decomposition (TE-012): the variable set is
+      partitioned into independent blocks, each carrying its own small
+      polyhedron, so cost tracks block size not the global dimension.
+    fields:
+      decision: >
+        (1) Representation: constraint form (linear inequalities) partitioned
+        into independent variable blocks; blocks merge lazily only when a
+        transfer relates their variables. (2) Operators: meet = constraint
+        union (re-decompose), join = convex hull per merged block, widening =
+        standard polyhedra widening (drop unstable constraints) with a block-
+        size cap. (3) Mechanization scope (HONEST, carried from the WasmCert-Coq
+        pass): proofs/rocq/Poly.v mechanizes the LATTICE algebra only (order
+        reflexive/transitive, join upper-bound, meet lower-bound) admit-free;
+        the transfer functions and the convex-hull join are γ-SWEEP-VALIDATED,
+        NOT Rocq-mechanized, and are recorded as such in the qualification
+        dossier — never presented as "mechanized". (4) New pure crate
+        scry-sai-poly; wired above the octagon; surfaced via the FEAT-041
+        relational output; sequenced AFTER v3.2.
+      rationale: >
+        Full convex-hull / Fourier-Motzkin soundness in Rocq is a research
+        project in itself; claiming it "mechanized" would be exactly the
+        overclaim the WasmCert-Coq honesty pass removed. Mechanizing the
+        lattice algebra (cheap, true) and γ-sweeping the transfers (a credible
+        falsifier) matches the float precedent (Float.v mechanizes the lattice;
+        rounding transfers are γ-sweep only) and keeps every dossier claim
+        defensible. ELINA decomposition is what makes polyhedra tractable at
+        all — without it the constraint blow-up is prohibitive.
+    links:
+      - type: satisfies
+        target: REQ-016
+      - type: traces-to
+        target: FEAT-057
