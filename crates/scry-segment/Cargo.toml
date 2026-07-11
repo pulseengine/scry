@@ -1,0 +1,23 @@
+[package]
+name = "scry-sai-segment"
+description = "Pure linear-memory segmentation abstract domain for scry (FEAT-058, AC-015; Cousot-Cousot-Logozzo segment functor over interval content — per-segment value tracking instead of one havoc'd ⊤ blob)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library. Like scry-sai-interval / -octagon / -pentagon it compiles both
+# #![no_std] (so it can back a future wasm-lattice WIT export) and native (so
+# the lattice laws + concretization soundness are γ-sweep-falsifiable on the
+# cargo path). It layers on scry-sai-interval as the per-segment CONTENT domain.
+# Soundness of the core ops is mechanized in proofs/rocq/Segment.v.
+[lib]
+name = "scry_segment"
+path = "src/lib.rs"
+
+[dependencies]
+# The per-segment content domain. Path dep carries `version` so `cargo publish`
+# rewrites it to the crates.io coordinate; the version equals the workspace
+# version and is bumped in lockstep.
+scry-sai-interval = { path = "../scry-interval", version = "3.1.0" }

@@ -46,6 +46,9 @@ const CRATES_TO_PUBLISH: &[(&str, &str)] = &[
     ("scry-float", "scry-sai-float"),
     ("scry-handle", "scry-sai-handle"),
     ("scry-provenance", "scry-sai-provenance"),
+    // Depends on scry-sai-interval (its per-segment content domain, FEAT-058) —
+    // publish after that leaf, before any consumer.
+    ("scry-segment", "scry-sai-segment"),
     // Depends on the pure leaves — publish before its own consumers.
     ("scry-analyze-core", "scry-sai-core"),
     // Depends on scry-sai-core — publish last. The `scry-viz` binary/library

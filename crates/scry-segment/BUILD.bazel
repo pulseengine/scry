@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# scry-segment — the pure linear-memory segmentation domain (FEAT-058, AC-015;
+# DD-018): an abstract array mapping offsets to interval content, instead of the
+# region domain's single havoc'd ⊤ blob. Mirrors scry-octagon / scry-interval /
+# scry-pentagon: a crate that compiles #![no_std] AND native (the scry-segment
+# γ-sweep tests falsify the lattice laws + the store/load concretization
+# soundness). Layers on scry-interval as the per-segment CONTENT domain. The
+# core-op soundness is mechanized in //proofs/rocq:segment.
+
+rust_library(
+    name = "scry_segment",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_segment",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = ["//crates/scry-interval:scry_interval"],
+    tags = ["feat-058"],
+)
+
+rust_test(
+    name = "scry_segment_test",
+    crate = ":scry_segment",
+    edition = "2024",
+    deps = ["//crates/scry-interval:scry_interval"],
+    tags = ["feat-058"],
+)
