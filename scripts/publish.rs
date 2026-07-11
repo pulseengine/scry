@@ -45,6 +45,7 @@ const CRATES_TO_PUBLISH: &[(&str, &str)] = &[
     ("scry-pentagon", "scry-sai-pentagon"),
     ("scry-float", "scry-sai-float"),
     ("scry-handle", "scry-sai-handle"),
+    ("scry-poly", "scry-sai-poly"),
     ("scry-provenance", "scry-sai-provenance"),
     // Depends on scry-sai-interval (its per-segment content domain, FEAT-058) —
     // publish after that leaf, before any consumer.

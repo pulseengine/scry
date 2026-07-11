@@ -307,3 +307,21 @@ rocq_proof_test(
     deps = [":segment"],
     tags = ["rocq", "verification", "feat-058"],
 )
+
+# FEAT-057 (AC-012, DD-019): mechanized LATTICE soundness of the convex-polyhedra
+# domain — meet is exact intersection + a lower bound, the order is a preorder,
+# a sound join over-approximates both operands — over constraints modelled as
+# half-space predicates. The Fourier-Motzkin entailment ALGORITHM + the join's
+# hull over-approximation are γ-swept in scry-poly, NOT mechanized here (DD-019
+# honest scope). No admits, no axioms.
+rocq_library(
+    name = "poly",
+    srcs = ["Poly.v"],
+    tags = ["rocq", "verification", "feat-057"],
+)
+
+rocq_proof_test(
+    name = "poly_test",
+    deps = [":poly"],
+    tags = ["rocq", "verification", "feat-057"],
+)
