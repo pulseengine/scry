@@ -12,6 +12,15 @@ artifacts:
   #   v3.0  "Qualifiable + differentiated"  — float domain, mechanized
   #         soundness vs the OFFICIAL Wasm semantics, Component-Model
   #         handle-state (the moat), and the tool-qualification dossier.
+  #   v3.1  "Actionable"                    — sound findings -> ranked
+  #         remediation guidance (honesty-classed) + POTENTIAL-TRAP
+  #         counterexamples, for humans and AI agents. FEAT-059/060/055.
+  #   v3.2  "Content-sensitive memory"      — linear-memory segmentation:
+  #         track values inside memory ranges instead of one havoc'd ⊤
+  #         blob (scry's biggest current precision cliff). FEAT-058.
+  #   v3.3  "Precision ceiling"             — convex polyhedra, ELINA-
+  #         decomposed, for exact linear inequalities above the octagon.
+  #         FEAT-057. Sequenced AFTER v3.2 (segmentation first).
   # Release axis = the top-level `release:` field (rivet >= 0.21). Track with
   # `rivet release status <ver>` / `rivet list --release <ver>`.
   # ══════════════════════════════════════════════════════════════════════
@@ -157,6 +166,38 @@ artifacts:
 
       - type: evaluates-tech
         target: TE-011
+
+  # ── v3.2 domain-bet requirement ───────────────────────────────────────
+
+  - id: REQ-019
+    type: requirement
+    title: "Content-sensitive linear memory: per-segment value tracking, not one havoc'd blob"
+    status: proposed
+    description: >
+      scry shall track the VALUES held in linear memory at per-segment
+      granularity — a memory region abstracted as an ordered sequence of
+      segments [b0) P1 [b1) P2 ... with symbolic bounds b_i drawn from the
+      numeric domain and an abstract content P_i per segment — instead of
+      degrading every memory.load through a non-constant address to ⊤. A
+      store to an in-bounds offset performs a STRONG update when the offset
+      is a singleton (else a weak/join update); a load reads the covering
+      segment. Soundness (over-approximation): γ maps a segmented state to
+      the SET of concrete memories it admits, and split/merge/join may only
+      widen that set. This attacks the biggest current precision cliff — the
+      FEAT-040 gap report flags "non-i32 memory address" and havocked loads
+      as ⊤ today — and because Wasm implements structs/arrays/strings through
+      linear memory, it compounds interval precision, OOB-trap classification
+      (REQ-014), and the region domain (REQ-001).
+    tags: [memory, segmentation, content-sensitivity, precision, v3.2]
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: traces-to
+        target: G-005
+      - type: references-paper
+        target: AC-015
+
   # ══════════════════════════════════════════════════════════════════════
   # RELEASE v2.6.0 — "Make the analysis observable"
   # Cash in computed-but-hidden facts; cheap precision; agent/qual readiness.
@@ -619,20 +660,44 @@ artifacts:
       - type: traces-to
         target: REQ-017
 
+  # ══════════════════════════════════════════════════════════════════════
+  # RELEASE v3.3.0 — "Precision ceiling" (the second big domain bet)
+  # Convex polyhedra above the octagon. Sequenced AFTER v3.2 segmentation.
+  # ══════════════════════════════════════════════════════════════════════
+
   - id: FEAT-057
     type: feature
-    title: "Backlog — Polyhedra domain (ELINA-style decomposition)"
+    title: "v3.3 — Convex polyhedra domain (ELINA-decomposed)"
     status: proposed
+    release: v3.3.0
     description: >
-      Convex polyhedra (Cousot-Halbwachs, AC-012) for exact linear inequalities
-      above the octagon, made tractable via ELINA's online constraint
-      decomposition (TE-012). The precision ceiling; a large domain bet beyond
-      Karr (FEAT-051).
-    tags: [numerical-domain, polyhedra, relational, backlog]
+      Convex polyhedra (Cousot-Halbwachs 1978, AC-012; DD-019) for exact linear
+      inequalities Σ a_i·x_i ≤ c above the octagon, made tractable by ELINA-style
+      online constraint decomposition into independent variable blocks (TE-012).
+      Sequenced AFTER v3.2 segmentation. Planned slices:
+        1. New pure crate `scry-sai-poly` — constraint-form polyhedra with join =
+           convex hull, meet = constraint union, and standard polyhedra widening;
+           ELINA-style block decomposition for cost. Native γ-sweep falsifier.
+           Admit-free Rocq for the LATTICE algebra (proofs/rocq/Poly.v: order /
+           join-upper-bound / meet-glb).
+        2. Wire in as an optional relational domain above the octagon; surface
+           inferred linear invariants through the FEAT-041 relational-invariant
+           output (REQ-016).
+        3. Precision + cost differential vs the octagon on a corpus (falsify the
+           "infers invariants the octagon cannot" claim); a cost gate bounds the
+           decomposition blow-up.
+      HONESTY (carried from the WasmCert-Coq pass): full convex-hull / Fourier-
+      Motzkin soundness is NOT cheaply mechanizable — Poly.v mechanizes the
+      lattice algebra only; the transfer functions are γ-sweep-validated and the
+      dossier records them AS SUCH (not as mechanized), exactly as the float
+      rounding transfers are. No overclaim of "mechanized" for the hull.
+    tags: [numerical-domain, polyhedra, relational, precision-ceiling, v3.3]
     fields:
-      phase: future
+      phase: phase-3
       acceptance-criteria:
-        - "Given a program with linear inequality invariants the octagon cannot express, When scry analyzes it, Then the polyhedra domain infers them soundly at acceptable cost (decomposed), with mechanized soundness."
+        - "Given a program with linear inequality invariants the octagon cannot express, When scry analyzes it, Then the polyhedra domain infers them soundly (decomposed) and surfaces them via the relational-invariant output."
+        - "Given proofs/rocq/Poly.v, When built, Then the polyhedra LATTICE laws (order/join-upper-bound/meet-glb) are proven with 0 admits; the transfer functions are documented as γ-sweep-validated, NOT mechanized (honest scope)."
+        - "Given the precision corpus, When polyhedra is compared to the octagon, Then it is strictly more precise on the targeted inequality cases within a bounded cost budget."
     links:
       - type: traces-to
         target: REQ-016
@@ -641,21 +706,49 @@ artifacts:
         target: AC-012
       - type: evaluates-tech
         target: TE-012
+  # ══════════════════════════════════════════════════════════════════════
+  # RELEASE v3.2.0 — "Content-sensitive memory" (the first big domain bet)
+  # Segmentation first: it attacks scry's biggest current ⊤-cliff and
+  # compounds interval / OOB-trap / region precision. Polyhedra (v3.3) after.
+  # ══════════════════════════════════════════════════════════════════════
+
   - id: FEAT-058
     type: feature
-    title: "Backlog — Array / linear-memory segmentation (content sensitivity)"
+    title: "v3.2 — Linear-memory segmentation (content-sensitive memory)"
     status: proposed
+    release: v3.2.0
     description: >
-      A parametric segmentation functor (Cousot-Cousot-Logozzo, AC-015) giving
-      scry's flat linear-memory region per-segment content sensitivity (track
-      values inside memory ranges, not one havoc'd blob) — a new analysis
-      dimension extending the region domain (REQ-001).
-    tags: [memory, array, segmentation, backlog]
+      Give scry's flat linear-memory region per-segment content sensitivity via
+      a parametric segmentation functor (Cousot-Cousot-Logozzo, AC-015; DD-018):
+      a memory region becomes an ordered sequence of segments with symbolic
+      bounds (from the interval/octagon domain) and a plugged-in content domain
+      (intervals first). Closes REQ-019 and lifts the biggest current ⊤-cliff.
+      Planned slices:
+        1. New pure crate `scry-sai-segment` — the segmentation functor over
+           intervals: split / merge / join / weak+strong store / load, with
+           admit-free Rocq soundness (proofs/rocq/Segment.v) for the core ops
+           and a native γ-sweep falsifier. NOT yet analyzer-wired.
+        2. Wire into the interpreter's memory model: memory.store at a constant
+           /interval offset updates the covering segment (STRONG when the offset
+           is a singleton, WEAK otherwise); memory.load reads it. End-to-end
+           fixture: store a bounded value into a range, then load it — interval
+           preserved, not ⊤.
+        3. Feed segment bounds into OOB-trap classification (FEAT-046) and shrink
+           the FEAT-040 memory-address gaps; live kill-criterion.
+      Soundness discipline: a store through a non-singleton offset is a WEAK
+      update (join into every possibly-touched segment), never strong; unknown /
+      growable / imported memory stays ⊤ (as today). Library-only output
+      initially (AnalysisResult); WIT surfacing deferred to FEAT-054.
+    tags: [memory, array, segmentation, content-sensitivity, v3.2]
     fields:
-      phase: future
+      phase: phase-3
       acceptance-criteria:
-        - "Given a loop that fills a memory range with a bounded value, When scry analyzes it, Then the segmentation domain tracks the per-segment content bound instead of widening loaded values to top."
+        - "Given a loop that fills a memory range with a bounded value, When scry analyzes it, Then the segmentation domain tracks the per-segment content bound instead of widening loaded values to ⊤."
+        - "Given a store through a non-singleton (interval) offset, When scry updates memory, Then it performs a WEAK update over every possibly-touched segment (sound), never a strong overwrite."
+        - "Given proofs/rocq/Segment.v, When built, Then the segmentation core ops (split/merge/join/store/load) are γ-sound with 0 admits / 0 axioms."
     links:
+      - type: traces-to
+        target: REQ-019
       - type: traces-to
         target: REQ-001
       - type: references-paper
