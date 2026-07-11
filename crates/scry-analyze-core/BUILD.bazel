@@ -28,6 +28,7 @@ rust_library(
         "//crates/scry-pentagon:scry_pentagon",
         "//crates/scry-float:scry_float",
         "//crates/scry-handle:scry_handle",
+        "//crates/scry-segment:scry_segment",
         "//crates/scry-provenance:scry_provenance",
         "//crates/scry-taint:scry_taint",
     ],

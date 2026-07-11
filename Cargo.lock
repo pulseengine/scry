@@ -1871,6 +1871,7 @@ dependencies = [
  "scry-sai-octagon",
  "scry-sai-pentagon",
  "scry-sai-provenance",
+ "scry-sai-segment",
  "scry-sai-taint",
  "sha2",
  "wasmparser 0.252.0",

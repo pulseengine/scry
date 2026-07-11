@@ -77,6 +77,11 @@ scry-sai-float = { path = "../scry-float", version = "3.1.0" }
 # surfaces findings library-only on `AnalysisResult.handle_findings`.
 scry-sai-handle = { path = "../scry-handle", version = "3.1.0" }
 
+# FEAT-058: the linear-memory segmentation domain (content-sensitive memory).
+# The interpreter tracks per-offset interval content for i32 loads/stores
+# instead of degrading every load to ⊤.
+scry-sai-segment = { path = "../scry-segment", version = "3.1.0" }
+
 [dev-dependencies]
 # Test-only (the crate is otherwise dep-light + no_std): assemble the .wat
 # corpus fixtures to Wasm bytes so the FEAT-016 loop-fixpoint tests can drive
