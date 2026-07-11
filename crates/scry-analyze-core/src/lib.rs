@@ -136,6 +136,27 @@ pub struct ProgramPoint {
     /// Library-only (the WIT mirror carries only `locals`); sound (each is a
     /// constraint the octagon maintains).
     pub relational: Vec<RelationalConstraint>,
+    /// FEAT-062 (FEAT-058 observability): the tracked linear-memory CONTENT at
+    /// this pc — the segmentation's `[lo, hi) → interval` cells, in ascending
+    /// offset order. Makes the content-sensitive memory (FEAT-058) OBSERVABLE
+    /// (scry-viz renders it; before this it only affected loaded-value
+    /// intervals). Empty = ⊤ (no content tracked). Library-only (WIT mirror
+    /// carries only `locals`); sound (each cell is a constraint the analysis
+    /// maintains — every concrete run's memory respects it).
+    pub memory: Vec<MemSegment>,
+}
+
+/// FEAT-062: a surfaced linear-memory content cell at a program point — every
+/// offset in `[lo, hi)` is constrained to `value`. Mirrors the internal
+/// `scry_segment::Seg`; offsets outside all cells are unconstrained (⊤).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemSegment {
+    /// Inclusive low byte offset.
+    pub lo: i64,
+    /// Exclusive high byte offset (`lo < hi`).
+    pub hi: i64,
+    /// Interval every offset in `[lo, hi)` is constrained to.
+    pub value: Interval,
 }
 
 /// FEAT-041: a surfaced relational octagon constraint between two distinct
@@ -1203,6 +1224,19 @@ fn snapshot_relational(octagon: &Octagon) -> Vec<RelationalConstraint> {
                 scry_octagon::RelKind::Sum => RelKind::Sum,
             },
             bound: r.bound,
+        })
+        .collect()
+}
+
+/// FEAT-062: snapshot the tracked linear-memory content (the segmentation's
+/// cells) as a list of `MemSegment` records, in ascending offset order.
+fn snapshot_memory(mem: &Segmentation) -> Vec<MemSegment> {
+    mem.segments()
+        .iter()
+        .map(|s| MemSegment {
+            lo: s.lo,
+            hi: s.hi,
+            value: s.val,
         })
         .collect()
 }
@@ -3738,6 +3772,7 @@ impl Interp<'_, '_> {
                         locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
                         operand_stack: snapshot_stack(&ctx.operand_stack),
                         relational: snapshot_relational(&ctx.octagon),
+                        memory: snapshot_memory(&ctx.mem),
                     });
                 }
                 pc = next;
@@ -3759,6 +3794,7 @@ impl Interp<'_, '_> {
                         locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
                         operand_stack: snapshot_stack(&ctx.operand_stack),
                         relational: snapshot_relational(&ctx.octagon),
+                        memory: snapshot_memory(&ctx.mem),
                     });
                 }
                 pc = next;
@@ -3829,6 +3865,7 @@ impl Interp<'_, '_> {
                     locals: snapshot_locals(&reduce_locals(&ctx.locals, &ctx.octagon)),
                     operand_stack: snapshot_stack(&ctx.operand_stack),
                     relational: snapshot_relational(&ctx.octagon),
+                    memory: snapshot_memory(&ctx.mem),
                 });
             }
             if stop {
@@ -4259,6 +4296,8 @@ impl Interp<'_, '_> {
                 // were soundly widened to ⊤ above.
                 operand_stack: Vec::new(),
                 relational: snapshot_relational(&ctx.octagon),
+                // havoc reset ctx.mem to ⊤ above, so this is empty (accurate).
+                memory: snapshot_memory(&ctx.mem),
             });
         }
     }
@@ -6828,6 +6867,7 @@ mod tests {
                 }],
                 operand_stack: alloc::vec![av.clone()],
                 relational: alloc::vec![],
+                memory: alloc::vec![],
             }],
         };
         let res = AnalysisResult {
@@ -8666,6 +8706,28 @@ mod tests {
         assert!(
             !local0_is_const(&r, 42),
             "a call must forget memory content; stale [42,42] is UNSOUND; points={:?}",
+            r.invariants.points
+        );
+    }
+
+    /// FEAT-062 — the tracked memory content is SURFACED on the program points
+    /// (so scry-viz can render it). A `i32.store 42 @16` records the cell
+    /// [16,17) → [42,42]; it must appear in `point.memory`.
+    #[test]
+    fn feat062_memory_content_surfaced_in_points() {
+        let r = analyze_default(
+            "(module (memory 1) (func (result i32) (local i32) \
+               i32.const 16 i32.const 42 i32.store \
+               i32.const 16 i32.load local.set 0 local.get 0))",
+        );
+        let found = r.invariants.points.iter().any(|p| {
+            p.memory
+                .iter()
+                .any(|m| m.lo == 16 && m.hi == 17 && m.value.lo == 42 && m.value.hi == 42)
+        });
+        assert!(
+            found,
+            "the [16,17)→[42,42] memory cell must be surfaced on a point; points={:?}",
             r.invariants.points
         );
     }
