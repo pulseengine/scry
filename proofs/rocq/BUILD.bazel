@@ -288,3 +288,22 @@ rocq_proof_test(
     deps = [":handle"],
     tags = ["rocq", "verification", "feat-049"],
 )
+
+# FEAT-058 (AC-015, DD-018): mechanized soundness of the linear-memory
+# segmentation domain's constraint-function semantics — the per-offset join
+# over-approximates, the syntactic order implies γ-inclusion, and the strong
+# (singleton) / weak (range) store transfers + load are γ-sound. The weak store
+# is the soundness keystone for imprecise addresses. The Vec<Seg> list algebra
+# realising this is γ-swept by the scry-segment native tests. No admits, no
+# axioms (the DD-015 proof-in-slice gate).
+rocq_library(
+    name = "segment",
+    srcs = ["Segment.v"],
+    tags = ["rocq", "verification", "feat-058"],
+)
+
+rocq_proof_test(
+    name = "segment_test",
+    deps = [":segment"],
+    tags = ["rocq", "verification", "feat-058"],
+)

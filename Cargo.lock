@@ -1911,6 +1911,13 @@ name = "scry-sai-provenance"
 version = "3.1.0"
 
 [[package]]
+name = "scry-sai-segment"
+version = "3.1.0"
+dependencies = [
+ "scry-sai-interval",
+]
+
+[[package]]
 name = "scry-sai-taint"
 version = "3.1.0"
 
