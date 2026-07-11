@@ -786,3 +786,34 @@ artifacts:
         target: REQ-019
       - type: references-paper
         target: AC-015
+
+  # ── FEAT-058 observability (make the tracked memory visible) ──────────
+
+  - id: FEAT-062
+    type: feature
+    title: "v3.2.1 — Surface + visualize linear-memory content (FEAT-058 observability)"
+    status: accepted
+    release: v3.2.1
+    description: >
+      Make FEAT-058's tracked memory content OBSERVABLE, not just precision-
+      affecting. Adds a library-only `memory: Vec<MemSegment>` field to each
+      `ProgramPoint` (the segmentation's [lo,hi)→interval cells at that pc,
+      snapshotted like `relational` / `operand_stack`), and a
+      "memory (offset → value)" column in the scry-viz program-points table
+      (a stored i32 renders as `@offset=value`; no tracked content shows ⊤).
+      Read-only surfacing — no new analysis, no soundness risk (a faithful
+      projection of what the fixpoint already computed). Same library-only
+      pattern as FEAT-041 relational output; feeds FEAT-054 (WIT surfacing for
+      non-Rust consumers). Before this, FEAT-058's effect was visible only
+      indirectly via tighter loaded-value intervals.
+    tags: [memory, segmentation, observability, viz, v3.2]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given an i32.store of a bounded value to a singleton in-bounds address, When scry analyzes it, Then the tracked cell is surfaced on a ProgramPoint's `memory` field. (Shipped: feat062_memory_content_surfaced_in_points.)"
+        - "Given that AnalysisResult, When scry-viz renders it, Then the program-points table shows the memory cell (e.g. @16=42) under a memory column. (Shipped: scry-viz renders_memory_content_cell.)"
+    links:
+      - type: traces-to
+        target: REQ-013
+      - type: traces-to
+        target: REQ-019

@@ -1014,7 +1014,8 @@ fn render_points(s: &mut String, r: &AnalysisResult) {
         );
         s.push_str(
             "<table><thead><tr><th>pc</th><th>locals</th>\
-             <th>operand stack (bottom → top)</th></tr></thead><tbody>",
+             <th>operand stack (bottom → top)</th>\
+             <th>memory (offset → value)</th></tr></thead><tbody>",
         );
         for p in points.iter().filter(|p| p.func_index == idx) {
             let locals = if p.locals.is_empty() {
@@ -1038,12 +1039,34 @@ fn render_points(s: &mut String, r: &AnalysisResult) {
                     .collect::<Vec<_>>()
                     .join(" · ")
             };
+            // FEAT-062: the tracked linear-memory content (FEAT-058). Empty is
+            // shown as "(⊤)" — the analyzer's honest "no content tracked here",
+            // not a claim that memory is empty. A single-byte cell [o,o+1) (the
+            // strong-store case) renders as "@o"; a wider cell as "[lo, hi)".
+            let mem = if p.memory.is_empty() {
+                "<span class=\"empty\">(⊤)</span>".to_string()
+            } else {
+                p.memory
+                    .iter()
+                    .map(|m| {
+                        let loc = if m.hi == m.lo + 1 {
+                            format!("@{}", m.lo)
+                        } else {
+                            format!("[{}, {})", m.lo, m.hi)
+                        };
+                        format!("{loc}={}", interval(&m.value))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            };
             let _ = write!(
                 s,
-                "<tr><td>{}</td><td><code>{}</code></td><td><code>{}</code></td></tr>",
+                "<tr><td>{}</td><td><code>{}</code></td><td><code>{}</code></td>\
+                 <td><code>{}</code></td></tr>",
                 p.pc,
                 esc(&locals),
                 stack,
+                mem,
             );
         }
         s.push_str("</tbody></table>");
@@ -1244,6 +1267,27 @@ mod tests {
     fn analyze_wat(src: &str) -> AnalysisResult {
         let bytes = wat::parse_str(src).expect("assemble wat");
         analyze(bytes, AnalysisConfig::default()).expect("analyze")
+    }
+
+    #[test]
+    fn renders_memory_content_cell() {
+        // FEAT-062: the tracked memory content (FEAT-058) must be visible in the
+        // rendered page — a store of 42 @16 then load surfaces the [16,17)→42
+        // cell, rendered "@16=42" under the "memory" column.
+        let r = analyze_wat(
+            "(module (memory 1) (func (export \"run\") (result i32) (local i32) \
+             i32.const 16 i32.const 42 i32.store \
+             i32.const 16 i32.load local.set 0 local.get 0))",
+        );
+        let html = render_html(&r, "mem");
+        assert!(
+            html.contains("memory (offset → value)"),
+            "the program-points table must carry a memory column"
+        );
+        assert!(
+            html.contains("@16=42"),
+            "the tracked cell [16,17)→42 must render as @16=42; html omitted it"
+        );
     }
 
     #[test]
