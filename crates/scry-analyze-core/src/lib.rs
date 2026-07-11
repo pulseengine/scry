@@ -86,6 +86,7 @@ use wasmparser::{Operator, Parser, Payload};
 // sha + origins); the `provenance` field below maps it into the mirror types.
 use scry_bits::{BitsCong, Cong};
 use scry_octagon::Octagon;
+use scry_segment::Segmentation;
 
 pub use scry_interval::{Interval, Region};
 // FEAT-032 (scry#63): the fusion premises + code-range types travel with the
@@ -1100,6 +1101,15 @@ struct FuncCtx {
     /// it). Soundness rule: any write to a local that the octagon transfer
     /// does not model must `forget` that variable.
     octagon: Octagon,
+    /// FEAT-058: content-sensitive linear-memory abstraction (scry-sai-segment),
+    /// carried in lockstep with `locals`/`octagon` through the structured-CFG
+    /// fixpoint — joined at every merge and widened at every loop header, or the
+    /// fixpoint would be unsound. Maps byte offsets to interval content for i32
+    /// (4-byte) accesses; `top` means "no memory content known" (every load ⊤,
+    /// the pre-FEAT-058 behaviour). Soundness rule: any store scry cannot pin to
+    /// a single in-bounds i32 cell must invalidate (⊤) the possibly-touched byte
+    /// window, never record content; any degrade resets it to `top`.
+    mem: Segmentation,
     /// Once we see an unsupported construct in a function, we stop
     /// emitting fresh program-points for it — the abstract state has
     /// become uninformative (all-top) and further records would just
@@ -1122,6 +1132,7 @@ impl FuncCtx {
             locals,
             operand_stack: Vec::new(),
             octagon,
+            mem: scry_segment::top(),
             degraded: false,
             gaps: Vec::new(),
             trap_checks: Vec::new(),
@@ -1146,6 +1157,9 @@ impl FuncCtx {
         }
         self.operand_stack.clear();
         self.octagon = scry_octagon::top(self.locals.len() as u32);
+        // FEAT-058: a degrade means we can no longer track control flow, so any
+        // subsequent store could land anywhere — forget all memory content.
+        self.mem = scry_segment::top();
         self.degraded = true;
     }
 }
@@ -3609,6 +3623,9 @@ enum Flow {
 struct BreakState {
     locals: Vec<AbstractValue>,
     octagon: Octagon,
+    /// FEAT-058: memory content carried to the branch target, joined across all
+    /// branches to the same label (in lockstep with `locals`/`octagon`).
+    mem: Segmentation,
 }
 
 /// A structured label (an enclosing `block` or `loop`) and the joined state
@@ -3619,15 +3636,17 @@ struct Label {
 }
 
 impl Label {
-    fn record(&mut self, locals: &[AbstractValue], octagon: &Octagon) {
+    fn record(&mut self, locals: &[AbstractValue], octagon: &Octagon, mem: &Segmentation) {
         self.breaks = Some(match self.breaks.take() {
             Some(acc) => BreakState {
                 locals: join_locals(&acc.locals, locals),
                 octagon: scry_octagon::join(&acc.octagon, octagon),
+                mem: acc.mem.join(mem),
             },
             None => BreakState {
                 locals: locals.to_vec(),
                 octagon: octagon.clone(),
+                mem: mem.clone(),
             },
         });
     }
@@ -3749,8 +3768,11 @@ impl Interp<'_, '_> {
             // ── Branches: contribute to the targeted label ──────────
             match &self.ops[pc] {
                 Operator::Br { relative_depth } => {
-                    self.target(labels, *relative_depth)
-                        .record(&ctx.locals, &ctx.octagon);
+                    self.target(labels, *relative_depth).record(
+                        &ctx.locals,
+                        &ctx.octagon,
+                        &ctx.mem,
+                    );
                     return Ok(Flow::Diverged);
                 }
                 Operator::BrIf { relative_depth } => {
@@ -3758,8 +3780,11 @@ impl Interp<'_, '_> {
                     // locals reach the target, on the not-taken edge we fall
                     // through (both modelled — sound).
                     let _ = ctx.operand_stack.pop();
-                    self.target(labels, *relative_depth)
-                        .record(&ctx.locals, &ctx.octagon);
+                    self.target(labels, *relative_depth).record(
+                        &ctx.locals,
+                        &ctx.octagon,
+                        &ctx.mem,
+                    );
                     pc += 1;
                     continue;
                 }
@@ -3873,7 +3898,7 @@ impl Interp<'_, '_> {
         let mut taken_locals = ctx.locals.clone();
         taken_locals[local as usize] = AbstractValue::I32Interval(taken_iv);
         self.target(labels, depth)
-            .record(&taken_locals, &ctx.octagon);
+            .record(&taken_locals, &ctx.octagon, &ctx.mem);
 
         // Not-taken edge (guard false) → fall through.
         ctx.locals[local as usize] = AbstractValue::I32Interval(not_taken_iv);
@@ -3917,7 +3942,8 @@ impl Interp<'_, '_> {
         let taken_oct = refine_octagon_rel(&ctx.octagon, a, b, op, true);
         let not_taken_oct = refine_octagon_rel(&ctx.octagon, a, b, op, false);
         // Taken edge (guard true) → label D (locals unchanged).
-        self.target(labels, depth).record(&ctx.locals, &taken_oct);
+        self.target(labels, depth)
+            .record(&ctx.locals, &taken_oct, &ctx.mem);
         // Not-taken edge (guard false) → fall through.
         ctx.octagon = not_taken_oct;
         Some(next)
@@ -3972,11 +3998,13 @@ impl Interp<'_, '_> {
             (Flow::Fall, Some(b)) => {
                 ctx.locals = join_locals(&ctx.locals, &b.locals);
                 ctx.octagon = scry_octagon::join(&ctx.octagon, &b.octagon);
+                ctx.mem = ctx.mem.join(&b.mem);
             }
             (Flow::Fall, None) => {}
             (Flow::Diverged, Some(b)) => {
                 ctx.locals = b.locals;
                 ctx.octagon = b.octagon;
+                ctx.mem = b.mem;
             }
             (Flow::Diverged, None) => {
                 // Post-block unreachable (body always branched elsewhere).
@@ -4001,6 +4029,9 @@ impl Interp<'_, '_> {
         emit: bool,
     ) -> Result<(), AnalyzeError> {
         let entry = ctx.locals.clone();
+        // FEAT-058: memory content rides the fixpoint in lockstep too — joined
+        // at back-edges, widened at the header (segment-count cap ⇒ termination).
+        let entry_mem = ctx.mem.clone();
         // Seed the entry octagon with the entry interval bounds (FEAT-016
         // slice-2b-ii): without this the octagon does not relate the loop
         // counter to its bound at entry (e.g. `i = 0`, `n = 10` ⇒ `i − n ≤
@@ -4025,11 +4056,13 @@ impl Interp<'_, '_> {
         // exactly as interval widening drops a counter, and narrowing is what
         // re-derives it from the guard.
         let mut header_oct = entry_oct.clone();
-        let mut exit: Option<(Vec<AbstractValue>, Octagon)> = None;
+        let mut header_mem = entry_mem.clone();
+        let mut exit: Option<(Vec<AbstractValue>, Octagon, Segmentation)> = None;
         let mut iter = 0u32;
         loop {
             ctx.locals = header.clone();
             ctx.octagon = header_oct.clone();
+            ctx.mem = header_mem.clone();
             ctx.operand_stack = saved_stack.clone();
             labels.push(Label { breaks: None });
             // Suppress point emission until the header has converged; the
@@ -4038,29 +4071,36 @@ impl Interp<'_, '_> {
             let label = labels.pop().expect("pushed above");
             if body_flow == Flow::Fall {
                 exit = Some(match exit.take() {
-                    Some((el, eo)) => (
+                    Some((el, eo, em)) => (
                         join_locals(&el, &ctx.locals),
                         scry_octagon::join(&eo, &ctx.octagon),
+                        em.join(&ctx.mem),
                     ),
-                    None => (ctx.locals.clone(), ctx.octagon.clone()),
+                    None => (ctx.locals.clone(), ctx.octagon.clone(), ctx.mem.clone()),
                 });
             }
-            let (mut next, mut next_oct) = match &label.breaks {
+            let (mut next, mut next_oct, mut next_mem) = match &label.breaks {
                 Some(b) => (
                     join_locals(&entry, &b.locals),
                     scry_octagon::join(&entry_oct, &b.octagon),
+                    entry_mem.join(&b.mem),
                 ),
-                None => (entry.clone(), entry_oct.clone()),
+                None => (entry.clone(), entry_oct.clone(), entry_mem.clone()),
             };
             if iter >= LOOP_WIDEN_THRESHOLD {
                 next = widen_locals(&header, &next, &self.widen_thresholds);
                 next_oct = scry_octagon::widen(&header_oct, &next_oct);
+                next_mem = header_mem.widen(&next_mem);
             }
-            if locals_leq(&next, &header) && scry_octagon::leq(&next_oct, &header_oct) {
+            if locals_leq(&next, &header)
+                && scry_octagon::leq(&next_oct, &header_oct)
+                && next_mem.leq(&header_mem)
+            {
                 break;
             }
             header = next;
             header_oct = next_oct;
+            header_mem = next_mem;
             iter += 1;
             if iter > LOOP_ITER_CAP {
                 // Termination safety net: widen every local + relation to ⊤.
@@ -4069,6 +4109,7 @@ impl Interp<'_, '_> {
                     .map(|_| AbstractValue::I32Interval(domain::top()))
                     .collect();
                 header_oct = scry_octagon::top(header.len() as u32);
+                header_mem = scry_segment::top();
                 break;
             }
         }
@@ -4081,6 +4122,7 @@ impl Interp<'_, '_> {
         loop {
             ctx.locals = header.clone();
             ctx.octagon = header_oct.clone();
+            ctx.mem = header_mem.clone();
             ctx.operand_stack = saved_stack.clone();
             labels.push(Label { breaks: None });
             let _ = self.seq(start, end, ctx, labels, false)?;
@@ -4113,17 +4155,19 @@ impl Interp<'_, '_> {
         // fixpoint program points inside the loop body.
         ctx.locals = header.clone();
         ctx.octagon = header_oct.clone();
+        ctx.mem = header_mem.clone();
         ctx.operand_stack = saved_stack.clone();
         labels.push(Label { breaks: None });
         let final_flow = self.seq(start, end, ctx, labels, emit)?;
         let final_label = labels.pop().expect("pushed above");
         if final_flow == Flow::Fall {
             exit = Some(match exit.take() {
-                Some((el, eo)) => (
+                Some((el, eo, em)) => (
                     join_locals(&el, &ctx.locals),
                     scry_octagon::join(&eo, &ctx.octagon),
+                    em.join(&ctx.mem),
                 ),
-                None => (ctx.locals.clone(), ctx.octagon.clone()),
+                None => (ctx.locals.clone(), ctx.octagon.clone(), ctx.mem.clone()),
             });
         }
         // Drop this loop's own back-edge breaks — they targeted this loop only
@@ -4133,9 +4177,10 @@ impl Interp<'_, '_> {
         let _ = final_label;
         // Post-loop state: fall-through-exit if any, else the fixpoint header
         // (sound: covers the otherwise-unreachable fall-through).
-        let (post_locals, post_oct) = exit.unwrap_or((header, header_oct));
+        let (post_locals, post_oct, post_mem) = exit.unwrap_or((header, header_oct, header_mem));
         ctx.locals = post_locals;
         ctx.octagon = post_oct;
+        ctx.mem = post_mem;
         ctx.operand_stack = saved_stack;
         Ok(())
     }
@@ -4183,6 +4228,10 @@ impl Interp<'_, '_> {
                 ctx.octagon = scry_octagon::forget(&ctx.octagon, *idx);
             }
         }
+        // FEAT-058: havoc does NOT interpret the region body, so any store (or
+        // call that writes shared linear memory) inside it is unmodelled — forget
+        // all tracked memory content (sound: every later load falls back to ⊤).
+        ctx.mem = scry_segment::top();
         if self.emit_diagnostics {
             self.diagnostics.push(Diagnostic {
                 severity: DiagnosticSeverity::Info,
@@ -5608,15 +5657,29 @@ fn handle_memory_load(
         });
     }
 
-    // The loaded value itself is `top` for v0.3 (per-region
-    // content tracking lands in v0.4+).
+    // FEAT-058: for a SINGLETON, in-bounds i32 (4-byte) address, return the
+    // tracked segment content — the store→load round-trip that lifts the ⊤
+    // cliff. Any other case (non-singleton address, i64/wider width, or an
+    // out-of-bounds address that may not have been written) stays ⊤, exactly as
+    // before (the i32-content scope; type-punning stays sound because every
+    // store invalidates the overlapping byte window — see handle_memory_store).
     let loaded = match pushed_kind {
+        MemValKind::I32 if in_bounds && width == 4 && effective.lo == effective.hi => {
+            AbstractValue::I32Interval(ctx.mem.load(effective.lo))
+        }
         MemValKind::I32 => AbstractValue::I32Interval(domain::top()),
         MemValKind::I64 => AbstractValue::I64Interval(domain::top()),
     };
     ctx.operand_stack.push(loaded);
     Ok(())
 }
+
+/// FEAT-058: the widest linear-memory access scry models (i64/f64 = 8 bytes).
+/// A store at base `a` width `w` invalidates the byte window
+/// `[a − (MEM_MAX_ACCESS_WIDTH − 1), a + w)` so that no tracked cell of ANY
+/// width whose bytes overlap the store can survive it — the invariant that
+/// keeps the address-keyed content model sound under type-punning.
+const MEM_MAX_ACCESS_WIDTH: i64 = 8;
 
 /// Handle a v0.3 region-aware store (`i32.store` / `i64.store`).
 /// Pops the value (top of stack) then the address (below). On
@@ -5638,7 +5701,7 @@ fn handle_memory_store(
     op_label: &'static str,
 ) -> Result<(), AnalyzeError> {
     // Stack order: address is pushed first, value second; pop value first.
-    let _value_v = ctx.operand_stack.pop().ok_or_else(|| {
+    let value_v = ctx.operand_stack.pop().ok_or_else(|| {
         AnalyzeError::Internal(format!(
             "func {func_index} pc {pc}: {op_label} with empty stack (no value)"
         ))
@@ -5732,7 +5795,28 @@ fn handle_memory_store(
             ),
         });
     }
-    // Per v0.3 scope, stored value is not modelled. Sound.
+    // FEAT-058: update tracked memory content.
+    //
+    // First INVALIDATE (⊤) every offset whose byte range could overlap this
+    // store — the window `[effective.lo − (MAX_ACCESS − 1), effective.hi + width)`
+    // — so no stale cell of any width survives an overlapping write (the
+    // type-punning soundness keystone). Invalidation is unconditional on the
+    // in-bounds verdict: if the store executes it wrote here; if it traps, the
+    // following code is unreachable — either way, forgetting content is sound.
+    let inval_lo = effective.lo.saturating_sub(MEM_MAX_ACCESS_WIDTH - 1);
+    let inval_hi = effective.hi.saturating_add(width as i64);
+    ctx.mem = ctx.mem.weak_store(inval_lo, inval_hi, domain::top());
+
+    // Then RECORD precise content only for a singleton, in-bounds i32 (4-byte)
+    // store of a plain i32 value (a region-pointer's projected offset interval
+    // is NOT the stored bit pattern, so it must not be recorded — unsound).
+    if in_bounds
+        && width == 4
+        && effective.lo == effective.hi
+        && let AbstractValue::I32Interval(v_iv) = value_v
+    {
+        ctx.mem = ctx.mem.strong_store(effective.lo, v_iv);
+    }
     Ok(())
 }
 
@@ -5860,6 +5944,11 @@ fn handle_call(
     callee_func_index: u32,
     depth: u32,
 ) -> Result<(), AnalyzeError> {
+    // FEAT-058: a callee may write shared linear memory, and scry does not track
+    // callee memory effects — so forget all tracked memory content across any
+    // call (sound: subsequent loads fall back to ⊤). Interprocedural memory
+    // summaries are future work. Applies on every path below.
+    ctx.mem = scry_segment::top();
     // The call edge is recorded in each branch below, once the argument
     // values are known (FEAT-036: `arg_ranges`). For a signature-unknown
     // import the args can't be popped, so the edge carries empty `arg_ranges`.
@@ -6015,6 +6104,9 @@ fn handle_call_indirect(
     type_index: u32,
     table_index: u32,
 ) {
+    // FEAT-058: an indirect callee may write shared linear memory — forget all
+    // tracked memory content (sound; see handle_call).
+    ctx.mem = scry_segment::top();
     // Pop the table-index operand (top of stack).
     let index_v = ctx.operand_stack.pop();
     let index_iv = index_v.as_ref().and_then(as_i32_interval);
@@ -8512,6 +8604,68 @@ mod tests {
         assert!(
             found,
             "memory.grow result must be the bounded [-1,10] (modelled, not degraded); points={:?}",
+            r.invariants.points
+        );
+    }
+
+    /// Does any emitted point bind local 0 to exactly `[v, v]`?
+    fn local0_is_const(r: &AnalysisResult, v: i64) -> bool {
+        r.invariants.points.iter().any(|p| {
+            p.locals.iter().any(|l| {
+                l.local_index == 0
+                    && matches!(&l.value, AbstractValue::I32Interval(iv) if iv.lo == v && iv.hi == v)
+            })
+        })
+    }
+
+    /// FEAT-058 (slice 2) — the headline capability: store a constant to a
+    /// singleton in-bounds i32 address, load it back, and the loaded value is
+    /// the tracked interval `[42,42]` instead of the pre-FEAT-058 ⊤.
+    #[test]
+    fn feat058_store_then_load_round_trips() {
+        let r = analyze_default(
+            "(module (memory 1) (func (result i32) (local i32) \
+               i32.const 16 i32.const 42 i32.store \
+               i32.const 16 i32.load local.set 0 local.get 0))",
+        );
+        assert!(
+            local0_is_const(&r, 42),
+            "store 42 @16 then load @16 must yield local0=[42,42]; points={:?}",
+            r.invariants.points
+        );
+    }
+
+    /// FEAT-058 soundness — type-punning: an overlapping WIDER store (i64 at 14
+    /// covers bytes [14,22) ⊇ 16) must INVALIDATE the tracked i32 cell at 16, so
+    /// the later i32 load returns ⊤ — never the stale [42,42].
+    #[test]
+    fn feat058_overlapping_wider_store_invalidates() {
+        let r = analyze_default(
+            "(module (memory 1) (func (result i32) (local i32) \
+               i32.const 16 i32.const 42 i32.store \
+               i32.const 14 i64.const 0 i64.store \
+               i32.const 16 i32.load local.set 0 local.get 0))",
+        );
+        assert!(
+            !local0_is_const(&r, 42),
+            "overlapping i64 store must invalidate mem[16]; stale [42,42] is UNSOUND; points={:?}",
+            r.invariants.points
+        );
+    }
+
+    /// FEAT-058 soundness — a call between store and load forgets memory content
+    /// (a callee may write shared linear memory), so the load returns ⊤.
+    #[test]
+    fn feat058_call_forgets_memory() {
+        let r = analyze_default(
+            "(module (memory 1) (func $f) (func (result i32) (local i32) \
+               i32.const 16 i32.const 42 i32.store \
+               call $f \
+               i32.const 16 i32.load local.set 0 local.get 0))",
+        );
+        assert!(
+            !local0_is_const(&r, 42),
+            "a call must forget memory content; stale [42,42] is UNSOUND; points={:?}",
             r.invariants.points
         );
     }
