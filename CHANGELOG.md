@@ -7,6 +7,30 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.2.1] — 2026-07-11
+
+Headline: **make the new memory tracking visible.** FEAT-062 surfaces FEAT-058's
+content-sensitive memory into the analysis output and the scry-viz dashboard —
+before this, segmentation was only visible *indirectly* via tighter loaded-value
+intervals. Additive / library-only observability; no analysis change.
+
+### Added — FEAT-062 (REQ-013, REQ-019) — surface + visualize memory content
+
+- `ProgramPoint.memory: Vec<MemSegment>` (new public `MemSegment` type): the
+  segmentation's `[lo,hi) → interval` cells at each pc, snapshotted like
+  `relational` / `operand_stack`. Library-only (WIT / frozen-JSON mirror
+  unchanged); feeds FEAT-054 (WIT surfacing for non-Rust consumers).
+- **scry-viz**: a new **"memory (offset → value)"** column in the program-points
+  table — a stored i32 renders as `@offset=value`; no tracked content shows ⊤.
+  The GitHub Pages dashboard now shows tracked linear-memory content.
+
+### Soundness
+
+- Read-only surfacing — a faithful projection of what the FEAT-058 fixpoint
+  already computes. No new analysis, no new claims, no soundness risk. Verified:
+  `feat062_memory_content_surfaced_in_points` (core), `renders_memory_content_cell`
+  (viz).
+
 ## [3.2.0] — 2026-07-11
 
 Headline: **"Content-sensitive memory"** — scry stops treating linear memory as
