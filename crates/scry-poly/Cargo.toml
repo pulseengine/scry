@@ -1,0 +1,19 @@
+[package]
+name = "scry-sai-poly"
+description = "Pure convex-polyhedra abstract domain for scry (FEAT-057, AC-012; Cousot-Halbwachs linear inequalities above the octagon, with Fourier-Motzkin entailment — a sound over-approximation; join is entailed-by-both, not the exact hull)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Pure library, zero dependencies — like scry-interval / -octagon / -pentagon it
+# compiles both #![no_std] and native (the γ-sweep tests falsify the lattice laws
+# + the entailment/join/widen soundness on the cargo path). The LATTICE algebra
+# soundness is mechanized in proofs/rocq/Poly.v; the Fourier-Motzkin transfer
+# functions are γ-sweep-validated, NOT Rocq-mechanized (DD-019 honest scope).
+[lib]
+name = "scry_poly"
+path = "src/lib.rs"
+
+[dependencies]

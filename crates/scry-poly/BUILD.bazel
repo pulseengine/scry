@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# scry-poly — the pure convex-polyhedra domain (FEAT-057, AC-012; DD-019):
+# arbitrary-coefficient linear inequalities above the octagon, decided by
+# Fourier-Motzkin entailment. Dependency-free, dual-compile #![no_std] + native;
+# the γ-sweep tests falsify the lattice laws + entailment / join / widen
+# soundness on the cargo path. The LATTICE algebra is mechanized in
+# //proofs/rocq:poly — the FM transfer functions are γ-swept, NOT mechanized
+# (DD-019 honest scope; no "mechanized" claim for the hull/entailment).
+
+rust_library(
+    name = "scry_poly",
+    srcs = ["src/lib.rs"],
+    crate_name = "scry_poly",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    tags = ["feat-057"],
+)
+
+rust_test(
+    name = "scry_poly_test",
+    crate = ":scry_poly",
+    edition = "2024",
+    tags = ["feat-057"],
+)
