@@ -478,9 +478,7 @@ mod tests {
         bytes[1] = b'X';
         assert_eq!(
             decode(&bytes),
-            Err(DecodeError::BadMagic {
-                found: *b"SXPV"
-            })
+            Err(DecodeError::BadMagic { found: *b"SXPV" })
         );
     }
 

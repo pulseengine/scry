@@ -215,7 +215,11 @@ impl Segmentation {
             let (x, y) = (w[0], w[1]);
             let old = self.constraint_at(x);
             let v = if x >= lo && x < hi { f(old) } else { old };
-            ranges.push(Seg { lo: x, hi: y, val: v });
+            ranges.push(Seg {
+                lo: x,
+                hi: y,
+                val: v,
+            });
         }
         Self::from_sorted_ranges(ranges)
     }
@@ -327,13 +331,7 @@ mod tests {
     }
 
     fn small_ivals() -> Vec<Interval> {
-        vec![
-            ival(0, 0),
-            ival(-1, 1),
-            ival(1, 2),
-            ival(0, 2),
-            iv::TOP,
-        ]
+        vec![ival(0, 0), ival(-1, 1), ival(1, 2), ival(0, 2), iv::TOP]
     }
 
     #[test]
@@ -511,6 +509,13 @@ mod tests {
         let s = seg(&[(0, 2, ival(0, 1)), (2, 4, ival(0, 1)), (4, 6, iv::TOP)]);
         // adjacent equal [0,2)+[2,4) coalesce; the ⊤ range drops
         assert_eq!(s.segments().len(), 1);
-        assert_eq!(s.segments()[0], Seg { lo: 0, hi: 4, val: ival(0, 1) });
+        assert_eq!(
+            s.segments()[0],
+            Seg {
+                lo: 0,
+                hi: 4,
+                val: ival(0, 1)
+            }
+        );
     }
 }
