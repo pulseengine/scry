@@ -715,7 +715,7 @@ artifacts:
   - id: FEAT-058
     type: feature
     title: "v3.2 — Linear-memory segmentation (content-sensitive memory)"
-    status: proposed
+    status: accepted
     release: v3.2.0
     description: >
       Give scry's flat linear-memory region per-segment content sensitivity via
@@ -723,33 +723,66 @@ artifacts:
       a memory region becomes an ordered sequence of segments with symbolic
       bounds (from the interval/octagon domain) and a plugged-in content domain
       (intervals first). Closes REQ-019 and lifts the biggest current ⊤-cliff.
-      Planned slices:
+      Slices as shipped (v3.2.0):
         1. New pure crate `scry-sai-segment` — the segmentation functor over
-           intervals: split / merge / join / weak+strong store / load, with
+           intervals: top / leq / join / widen / strong+weak store / load, with
            admit-free Rocq soundness (proofs/rocq/Segment.v) for the core ops
-           and a native γ-sweep falsifier. NOT yet analyzer-wired.
-        2. Wire into the interpreter's memory model: memory.store at a constant
-           /interval offset updates the covering segment (STRONG when the offset
-           is a singleton, WEAK otherwise); memory.load reads it. End-to-end
-           fixture: store a bounded value into a range, then load it — interval
-           preserved, not ⊤.
-        3. Feed segment bounds into OOB-trap classification (FEAT-046) and shrink
-           the FEAT-040 memory-address gaps; live kill-criterion.
-      Soundness discipline: a store through a non-singleton offset is a WEAK
-      update (join into every possibly-touched segment), never strong; unknown /
-      growable / imported memory stays ⊤ (as today). Library-only output
-      initially (AnalysisResult); WIT surfacing deferred to FEAT-054.
+           and a native γ-sweep falsifier. (#99)
+        2. Wired into the interpreter's memory model: `i32.store` to a SINGLETON
+           in-bounds address records the stored interval; `i32.load` at a
+           singleton in-bounds address returns it (the round-trip that lifts the
+           ⊤ cliff). Carried through the CFG fixpoint in lockstep with the
+           octagon. (#100)
+      Soundness discipline (as shipped): content is recorded ONLY for a singleton
+      in-bounds i32 (4-byte) store of a plain i32 value; every store first
+      INVALIDATES the overlapping byte window `[a−7, a+w)` to ⊤ (the type-punning
+      keystone — no stale/mis-punned cell survives an overlapping write); any
+      call, degrade, havoc, or non-singleton/other-width/unknown address forgets
+      or ⊤s content. Library-only output (loads return tighter intervals into the
+      existing result); WIT surfacing deferred to FEAT-054.
+      DEFERRED (not v3.2.0): recording content for a loop-range (non-singleton)
+      fill — needs stride/alignment info to be sound (FEAT-037), tracked as
+      FEAT-061; and feeding segment facts into OOB-trap/gap reduction beyond the
+      precision that already falls out of tighter loaded values.
     tags: [memory, array, segmentation, content-sensitivity, v3.2]
     fields:
       phase: phase-3
       acceptance-criteria:
-        - "Given a loop that fills a memory range with a bounded value, When scry analyzes it, Then the segmentation domain tracks the per-segment content bound instead of widening loaded values to ⊤."
-        - "Given a store through a non-singleton (interval) offset, When scry updates memory, Then it performs a WEAK update over every possibly-touched segment (sound), never a strong overwrite."
-        - "Given proofs/rocq/Segment.v, When built, Then the segmentation core ops (split/merge/join/store/load) are γ-sound with 0 admits / 0 axioms."
+        - "Given an i32.store of a bounded value to a SINGLETON in-bounds address followed by an i32.load at that address, When scry analyzes it, Then the loaded value is the tracked interval (e.g. [42,42]) instead of ⊤. (Shipped v3.2.0: feat058_store_then_load_round_trips.)"
+        - "Given a store whose bytes may overlap a tracked cell (a wider store, a non-singleton/unknown address, or an intervening call), When scry updates memory, Then every possibly-overlapping cell is INVALIDATED to ⊤ — a stale or mis-punned value is never read (the soundness keystone). (Shipped v3.2.0: feat058_overlapping_wider_store_invalidates, feat058_call_forgets_memory.)"
+        - "Given proofs/rocq/Segment.v, When built, Then the segmentation core ops (join/leq/strong+weak store/load) are γ-sound with 0 admits / 0 axioms. (Shipped v3.2.0: //proofs/rocq:segment_test.)"
+        - "DEFERRED (not v3.2.0, tracked FEAT-061): a loop that fills a memory RANGE with a bounded value tracks the per-segment content bound — requires stride/alignment integration (FEAT-037) to record range content soundly."
     links:
       - type: traces-to
         target: REQ-019
       - type: traces-to
         target: REQ-001
+      - type: references-paper
+        target: AC-015
+
+  # ── FEAT-058 follow-up (deferred from v3.2.0) ─────────────────────────
+
+  - id: FEAT-061
+    type: feature
+    title: "Backlog — Alignment-aware range-fill memory content (FEAT-058 follow-up)"
+    status: proposed
+    description: >
+      Record segmentation CONTENT for a loop-range (non-singleton address) fill
+      rather than only invalidating it — closing FEAT-058's deferred AC. Sound
+      range-fill needs stride/alignment: writing a value V to every byte offset in
+      the range is unsound (a mis-aligned load could read V where the real value
+      spans two slots), so the store must know the access is width-aligned to
+      record V only at genuine value bases. scry already computes alignment/stride
+      via the known-bits × congruence domain (FEAT-037); this feeds that into the
+      segmentation weak store so an array-fill loop tracks its per-segment content
+      bound instead of ⊤.
+    tags: [memory, segmentation, alignment, content-sensitivity, backlog]
+    fields:
+      phase: future
+      acceptance-criteria:
+        - "Given a loop that fills an i32 array with a bounded value at a width-aligned stride, When scry analyzes it, Then a load from the filled range returns the per-segment content bound instead of ⊤ — soundly, using the FEAT-037 alignment facts."
+    links:
+      - type: traces-to
+        target: REQ-019
       - type: references-paper
         target: AC-015

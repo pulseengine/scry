@@ -7,6 +7,55 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-07-11
+
+Headline: **"Content-sensitive memory"** — scry stops treating linear memory as
+one havoc'd ⊤ blob and starts tracking the **values stored at individual
+offsets**. First of the two big-domain-bet releases (v3.2 segmentation → v3.3
+polyhedra), FEAT-058 (REQ-019). Additive / library-only.
+
+### Added — FEAT-058 (REQ-019, DD-018) — linear-memory segmentation
+
+- New published crate **`scry-sai-segment`** (the 11th `scry-sai-*` crate): a
+  pure, Wasm-agnostic content-sensitive memory abstraction — an ordered map from
+  byte offsets to `scry-interval` content, with `top / leq / join / widen /
+  strong+weak store / load` via a boundary-walk range algebra.
+- **Wired into the interpreter** (`scry-analyze-core`): an `i32.store` of a
+  bounded value to a **singleton in-bounds** address is recorded; an `i32.load`
+  at that address returns the tracked interval instead of ⊤ — the struct-field /
+  spill round-trip. The memory abstraction rides the CFG fixpoint in lockstep
+  with the octagon (joined at every merge, widened at every loop header).
+
+### Soundness
+
+- **Type-punning keystone:** every store first invalidates the overlapping byte
+  window `[a−7, a+w)` to ⊤, so no stale or mis-punned cell of any width survives
+  an overlapping write. Any call, degrade, havoc, or non-singleton / other-width
+  / unknown address forgets or ⊤s content.
+- **Mechanized:** `proofs/rocq/Segment.v` (admit-free, `//proofs/rocq:segment_test`)
+  proves the constraint-function join / order / strong+weak store / load γ-sound.
+- **γ-sweep:** the crate exhaustively enumerates concrete memories to falsify the
+  lattice laws + store/load soundness (10 tests).
+- Two independent **clean-room** reviews (the pure domain, and the fixpoint
+  wiring) each **CONFIRMED SOUND** — no under-approximation; every octagon-merge
+  site verified to merge memory in lockstep.
+
+### Scope (honest)
+
+- Content is tracked for **singleton in-bounds i32 (4-byte)** accesses. A
+  loop-range (non-singleton) fill is soundly **invalidated to ⊤**, not recorded —
+  recording range content needs stride/alignment integration (FEAT-037) and is
+  deferred to **FEAT-061**. FEAT-058's original range-fill AC is explicitly marked
+  deferred; v3.2.0 does not claim it.
+
+### Falsification
+
+- An `i32.store; i32.load` at the same singleton in-bounds address must yield the
+  stored interval, not ⊤ (`feat058_store_then_load_round_trips`). An overlapping
+  wider store, or an intervening call, must make the later load ⊤ — a retained
+  `[42,42]` would be **unsound** (`feat058_overlapping_wider_store_invalidates`,
+  `feat058_call_forgets_memory`). `Segment.v` must build with 0 admits / 0 axioms.
+
 ## [3.1.0] — 2026-07-08
 
 Headline: **"Actionable"** — scry stops at *reporting* sound findings and starts
