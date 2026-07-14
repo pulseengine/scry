@@ -35,6 +35,21 @@ use scry_analyze_core::{
     SoundnessTag, StackBound, TaintFindingKind, TrapKind, TrapVerdict,
 };
 
+/// Neutral placeholder hero / page title. The maintainer finalizes the tagline
+/// here (SCOPE_TAGLINE_PLACEHOLDER) — used in both the `<title>` and the `<h1>`.
+const HERO_TITLE: &str = "scry — sound WebAssembly analyzer (SCOPE_TAGLINE_PLACEHOLDER)";
+
+/// Program-points cap: the number of per-function points rendered inline. Above
+/// this, a function shows its first `POINTS_PER_FN_CAP` points and a "… showing
+/// N of M; full data in the JSON feed" note. This keeps the whole HTML small
+/// (the un-capped points section is ~90% of the bytes on scry-on-scry).
+const POINTS_PER_FN_CAP: usize = 20;
+
+/// Guidance cap: for every advisory class EXCEPT `DefiniteFault` (always shown
+/// in full — proven bugs), render at most this many rows, then a "… and N more"
+/// line. Faults are never elided.
+const ADVISORY_PER_CLASS_CAP: usize = 10;
+
 /// FEAT-027: metadata for one function index, if scry resolved any.
 fn fn_meta(r: &AnalysisResult, idx: u32) -> Option<&FunctionMeta> {
     r.function_meta.iter().find(|m| m.func_index == idx)
@@ -148,12 +163,15 @@ fn kind_badges(m: Option<&FunctionMeta>) -> String {
 pub fn render_html(result: &AnalysisResult, title: &str) -> String {
     let mut s = String::with_capacity(8 * 1024);
     let _ = write!(s, "{}", DOCTYPE_AND_HEAD_OPEN);
-    let _ = write!(s, "<title>scry-viz — {}</title>", esc(title));
+    // SCOPE_TAGLINE_PLACEHOLDER: neutral placeholder title. The maintainer
+    // finalizes the tagline in `HERO_TITLE` (below).
+    let _ = write!(s, "<title>{} — {}</title>", esc(HERO_TITLE), esc(title));
     let _ = write!(s, "{}", STYLE);
     s.push_str("</head><body>");
 
-    let _ = write!(s, "<h1>scry analysis — {}</h1>", esc(title));
+    let _ = write!(s, "<h1>{} — {}</h1>", esc(HERO_TITLE), esc(title));
     render_header(&mut s, result);
+    render_scope(&mut s, result);
     render_advisories(&mut s, result);
     render_functions(&mut s, result);
     render_call_graph(&mut s, result);
@@ -198,9 +216,12 @@ pub fn render_index(site_title: &str, entries: &[IndexEntry]) -> String {
     let _ = write!(s, "{}", STYLE);
     s.push_str("</head><body>");
     let _ = write!(s, "<h1>{}</h1>", esc(site_title));
+    // SCOPE_TAGLINE_PLACEHOLDER: the maintainer finalizes the lead tagline for
+    // the landing page here.
     s.push_str(
-        "<p class=\"muted\">scry verification dashboard — a faithful projection \
-         of the analyzer's own output. Nothing here is re-derived.</p>",
+        "<p class=\"muted\">scry — sound WebAssembly analyzer \
+         (SCOPE_TAGLINE_PLACEHOLDER). A faithful projection of the analyzer's \
+         own output; nothing here is re-derived.</p>",
     );
     if entries.is_empty() {
         s.push_str("<p class=\"empty\">No views available.</p>");
@@ -273,6 +294,17 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
         ),
     );
     s.push_str("</dl></section>");
+}
+
+/// A scope & limitations block. The copy is intentionally a placeholder — the
+/// maintainer writes the precise soundness claims (what scry proves, its
+/// abstract-domain limits, what a gap/advisory does and does NOT assert). We
+/// only lay out the section so the page has a home for it.
+fn render_scope(s: &mut String, _r: &AnalysisResult) {
+    s.push_str(
+        "<section id=\"scope\"><h2>Scope &amp; limitations</h2>\
+         <!-- SCOPE_COPY_PLACEHOLDER: to be filled by maintainer --></section>",
+    );
 }
 
 fn render_functions(s: &mut String, r: &AnalysisResult) {
@@ -727,44 +759,86 @@ fn render_advisories(s: &mut String, r: &AnalysisResult) {
         count(AdvisoryClass::PrecisionGap),
         count(AdvisoryClass::LeverageableFact),
     );
-    for a in &r.advisories {
-        let (cls, label) = match a.class {
-            AdvisoryClass::DefiniteFault => ("err", "FIX"),
-            AdvisoryClass::UnprovenObligation => ("warn", "PROVE/GUARD"),
-            AdvisoryClass::PrecisionGap => ("info", "PRECISION"),
-            AdvisoryClass::LeverageableFact => ("info", "LEVERAGE"),
+    // The boilerplate problem: on a real module, thousands of identical
+    // `UnprovenObligation` rows drown the handful of proven-fault items. So we
+    // render every `DefiniteFault` (a proven bug — never elide), but cap every
+    // OTHER class at `ADVISORY_PER_CLASS_CAP` rows and print a "… and N more"
+    // line pointing at the JSON feed, which carries the full set.
+    for class in [
+        AdvisoryClass::DefiniteFault,
+        AdvisoryClass::UnprovenObligation,
+        AdvisoryClass::PrecisionGap,
+        AdvisoryClass::LeverageableFact,
+    ] {
+        let cap = if class == AdvisoryClass::DefiniteFault {
+            usize::MAX
+        } else {
+            ADVISORY_PER_CLASS_CAP
         };
-        let _ = write!(
-            s,
-            "<li class=\"{cls}\"><span class=\"sev\">{label}</span> \
-             <code>fn{}:{} {}</code> — {}<br><em>Action:</em> {}<br><em>Verify:</em> {}",
-            a.func_index,
-            a.pc,
-            esc(&a.code),
-            esc(&a.detail),
-            esc(&a.suggested_action),
-            esc(&a.verification),
-        );
-        if let Some(cx) = &a.counterexample {
+        let total = r.advisories.iter().filter(|a| a.class == class).count();
+        for a in r.advisories.iter().filter(|a| a.class == class).take(cap) {
+            render_advisory_row(s, a);
+        }
+        if total > cap {
             let _ = write!(
                 s,
-                "<br><em>Counterexample (candidate):</em> {}",
-                esc(&cx.trigger)
+                "<li class=\"muted\">… and {} more {} (see the JSON feed)</li>",
+                total - cap,
+                advisory_class_name(class),
             );
-            if !cx.witness.is_empty() {
-                s.push_str(" [");
-                for (i, w) in cx.witness.iter().enumerate() {
-                    if i > 0 {
-                        s.push_str(", ");
-                    }
-                    let _ = write!(s, "{}={}", esc(&w.operand), w.value);
-                }
-                s.push(']');
-            }
         }
-        s.push_str("</li>");
     }
     s.push_str("</ul></section>");
+}
+
+/// A machine-stable class name used in the collapse note and the JSON feed.
+fn advisory_class_name(c: AdvisoryClass) -> &'static str {
+    match c {
+        AdvisoryClass::DefiniteFault => "definite-fault",
+        AdvisoryClass::UnprovenObligation => "unproven-obligation",
+        AdvisoryClass::PrecisionGap => "precision-gap",
+        AdvisoryClass::LeverageableFact => "leverageable-fact",
+    }
+}
+
+/// Render one advisory as a `<li>` — the shared body of the (capped) HTML
+/// Guidance list.
+fn render_advisory_row(s: &mut String, a: &scry_analyze_core::Advisory) {
+    let (cls, label) = match a.class {
+        AdvisoryClass::DefiniteFault => ("err", "FIX"),
+        AdvisoryClass::UnprovenObligation => ("warn", "PROVE/GUARD"),
+        AdvisoryClass::PrecisionGap => ("info", "PRECISION"),
+        AdvisoryClass::LeverageableFact => ("info", "LEVERAGE"),
+    };
+    let _ = write!(
+        s,
+        "<li class=\"{cls}\"><span class=\"sev\">{label}</span> \
+         <code>fn{}:{} {}</code> — {}<br><em>Action:</em> {}<br><em>Verify:</em> {}",
+        a.func_index,
+        a.pc,
+        esc(&a.code),
+        esc(&a.detail),
+        esc(&a.suggested_action),
+        esc(&a.verification),
+    );
+    if let Some(cx) = &a.counterexample {
+        let _ = write!(
+            s,
+            "<br><em>Counterexample (candidate):</em> {}",
+            esc(&cx.trigger)
+        );
+        if !cx.witness.is_empty() {
+            s.push_str(" [");
+            for (i, w) in cx.witness.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                let _ = write!(s, "{}={}", esc(&w.operand), w.value);
+            }
+            s.push(']');
+        }
+    }
+    s.push_str("</li>");
 }
 
 /// FEAT-049: Component-Model handle-lifetime faults — use-after-drop /
@@ -1007,17 +1081,25 @@ fn render_points(s: &mut String, r: &AnalysisResult) {
             Some(n) => format!("func {idx} · {}", name_span(&demangle(n))),
             None => format!("func {idx}"),
         };
+        // Per-function summary + cap. The un-capped points section is ~90% of
+        // the bytes on scry-on-scry (16k+ points), so we render a SUMMARY
+        // (name, #points, #locals) and only the first `POINTS_PER_FN_CAP`
+        // points per function; the full per-point data lives in the JSON feed.
+        let fn_points: Vec<_> = points.iter().filter(|p| p.func_index == idx).collect();
+        let n_points = fn_points.len();
+        let n_locals = fn_points.iter().map(|p| p.locals.len()).max().unwrap_or(0);
         let _ = write!(
             s,
             "<h3 id=\"pts-{idx}\" class=\"fn-points\">{heading} \
-             <a class=\"backref\" href=\"#fn-{idx}\">↑ row</a></h3>",
+             <a class=\"backref\" href=\"#fn-{idx}\">↑ row</a></h3>\
+             <p class=\"muted\">{n_points} program point(s) · up to {n_locals} local(s) tracked.</p>",
         );
         s.push_str(
             "<table><thead><tr><th>pc</th><th>locals</th>\
              <th>operand stack (bottom → top)</th>\
              <th>memory (offset → value)</th></tr></thead><tbody>",
         );
-        for p in points.iter().filter(|p| p.func_index == idx) {
+        for p in fn_points.iter().take(POINTS_PER_FN_CAP) {
             let locals = if p.locals.is_empty() {
                 "(none)".to_string()
             } else {
@@ -1070,6 +1152,14 @@ fn render_points(s: &mut String, r: &AnalysisResult) {
             );
         }
         s.push_str("</tbody></table>");
+        if n_points > POINTS_PER_FN_CAP {
+            let _ = write!(
+                s,
+                "<p class=\"muted\">… showing {} of {} points; full data in the JSON feed \
+                 (<code>guidance.json</code>).</p>",
+                POINTS_PER_FN_CAP, n_points,
+            );
+        }
     }
     s.push_str("</section>");
 }
@@ -1201,6 +1291,123 @@ fn esc(raw: &str) -> String {
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#39;"),
             _ => out.push(c),
+        }
+    }
+    out
+}
+
+// ── structured guidance feed ────────────────────────────────────────────────
+
+/// Serialize the actionable findings as a machine-consumable JSON document — the
+/// feed an AI-agent consumer reads instead of scraping the (now capped) HTML.
+///
+/// Shape (stable): a top-level object
+/// `{ "module_sha256": "…", "schema": "…", "advisories": [ … ], "trap_checks": [ … ] }`.
+/// Each advisory is
+/// `{ "func_index", "pc", "class", "code", "detail", "suggested_action",
+///    "verification", "counterexample"? }`, mirroring the [`Advisory`] fields
+/// (`class` uses the machine-stable name, e.g. `"unproven-obligation"`). Each
+/// trap check is `{ "func_index", "pc", "op", "kind", "verdict" }`.
+///
+/// The crate has no serde dependency, so this is hand-rolled with proper JSON
+/// string escaping ([`json_esc`]) — the full (un-capped) set is emitted, unlike
+/// the HTML.
+pub fn render_guidance_json(result: &AnalysisResult) -> String {
+    let mut s = String::with_capacity(4 * 1024);
+    s.push('{');
+    let _ = write!(
+        s,
+        "\"module_sha256\":\"{}\",\"schema\":\"{}\",",
+        json_esc(&result.invariants.module_sha256),
+        json_esc(&result.invariants.schema),
+    );
+    // advisories
+    s.push_str("\"advisories\":[");
+    for (i, a) in result.advisories.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let _ = write!(
+            s,
+            "{{\"func_index\":{},\"pc\":{},\"class\":\"{}\",\"code\":\"{}\",\
+             \"detail\":\"{}\",\"suggested_action\":\"{}\",\"verification\":\"{}\"",
+            a.func_index,
+            a.pc,
+            advisory_class_name(a.class),
+            json_esc(&a.code),
+            json_esc(&a.detail),
+            json_esc(&a.suggested_action),
+            json_esc(&a.verification),
+        );
+        if let Some(cx) = &a.counterexample {
+            let _ = write!(
+                s,
+                ",\"counterexample\":{{\"trigger\":\"{}\",\"witness\":[",
+                json_esc(&cx.trigger)
+            );
+            for (j, w) in cx.witness.iter().enumerate() {
+                if j > 0 {
+                    s.push(',');
+                }
+                let _ = write!(
+                    s,
+                    "{{\"operand\":\"{}\",\"value\":{}}}",
+                    json_esc(&w.operand),
+                    w.value,
+                );
+            }
+            s.push_str("]}");
+        }
+        s.push('}');
+    }
+    s.push_str("],");
+    // trap checks
+    s.push_str("\"trap_checks\":[");
+    for (i, t) in result.trap_checks.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let kind = match t.kind {
+            TrapKind::DivByZero => "div-by-zero",
+            TrapKind::SignedOverflow => "signed-overflow",
+            TrapKind::OutOfBounds => "out-of-bounds",
+        };
+        let verdict = match t.verdict {
+            TrapVerdict::ProvenSafe => "proven-safe",
+            TrapVerdict::PotentialTrap => "potential-trap",
+        };
+        let _ = write!(
+            s,
+            "{{\"func_index\":{},\"pc\":{},\"op\":\"{}\",\"kind\":\"{}\",\"verdict\":\"{}\"}}",
+            t.func_index,
+            t.pc,
+            json_esc(&t.op),
+            kind,
+            verdict,
+        );
+    }
+    s.push_str("]}");
+    s
+}
+
+/// JSON string-content escaping (RFC 8259): the two mandatory escapes `"` and
+/// `\`, plus all control chars U+0000–U+001F as `\uXXXX` (with the short forms
+/// for the common ones). The caller supplies the surrounding quotes.
+fn json_esc(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
         }
     }
     out
@@ -1629,5 +1836,205 @@ mod tests {
         let html = render_html(&r, "empty");
         assert!(html.contains("No functions.") || html.contains("Functions"));
         assert!(html.ends_with("</html>"));
+    }
+
+    #[test]
+    fn hero_and_scope_placeholders_present() {
+        // Retitle: the neutral hero placeholder replaces the bare
+        // "verification dashboard", and the scope block leaves its copy
+        // placeholder for the maintainer.
+        let r = analyze_wat("(module (func (export \"run\") nop))");
+        let html = render_html(&r, "demo");
+        assert!(
+            html.contains("SCOPE_TAGLINE_PLACEHOLDER"),
+            "hero tagline placeholder present"
+        );
+        assert!(
+            html.contains("<section id=\"scope\">"),
+            "scope section present"
+        );
+        assert!(
+            html.contains("SCOPE_COPY_PLACEHOLDER"),
+            "scope copy placeholder present for the maintainer"
+        );
+        assert!(html.contains("Scope &amp; limitations"), "scope heading");
+    }
+
+    #[test]
+    fn points_section_is_capped_and_page_stays_small() {
+        // Page-size sanity: a function with far more than the cap of program
+        // points must render only the first `POINTS_PER_FN_CAP`, plus a summary
+        // and a "showing N of M" note — and the whole page must stay well under
+        // 1 MB. We synthesize a large point set on a real result (the analyzer's
+        // own point count depends on its fixpoint, so we don't rely on it).
+        let mut r = analyze_wat(
+            "(module (func (export \"run\") (result i32) i32.const 42 i32.const 7 i32.add))",
+        );
+        let template = r.invariants.points[0].clone();
+        r.invariants.points.clear();
+        for pc in 0..3000u32 {
+            let mut p = template.clone();
+            p.func_index = 0;
+            p.pc = pc;
+            r.invariants.points.push(p);
+        }
+        let total = r.invariants.points.len();
+        assert!(
+            total > POINTS_PER_FN_CAP * 5,
+            "fixture must produce many points (got {total})"
+        );
+        let html = render_html(&r, "big");
+        // The cap note is present …
+        assert!(
+            html.contains("full data in the JSON feed"),
+            "capped points note present"
+        );
+        assert!(
+            html.contains("program point(s)"),
+            "per-function summary line"
+        );
+        // … and the page is small despite thousands of points.
+        assert!(
+            html.len() < 1_000_000,
+            "page must stay under 1 MB even for many points; was {} bytes",
+            html.len()
+        );
+    }
+
+    #[test]
+    fn guidance_json_is_well_formed_and_carries_advisories() {
+        // A div by an unknown divisor yields an UnprovenObligation advisory +
+        // a POTENTIAL-TRAP check; both must appear in the JSON feed, and the
+        // document must be structurally well-formed JSON.
+        let r = analyze_wat(
+            "(module (func (export \"run\") (param i32) (result i32) \
+             i32.const 10 local.get 0 i32.div_s))",
+        );
+        assert!(
+            !r.advisories.is_empty(),
+            "fixture must produce at least one advisory"
+        );
+        let json = render_guidance_json(&r);
+        assert!(json.starts_with('{') && json.ends_with('}'), "JSON object");
+        assert!(json.contains("\"advisories\":["), "advisories array");
+        assert!(json.contains("\"trap_checks\":["), "trap_checks array");
+        assert!(json.contains("\"module_sha256\":\""), "carries module hash");
+        // The class name is the machine-stable form.
+        assert!(
+            json.contains("\"class\":\"unproven-obligation\""),
+            "expected advisory class present, json was: {json}"
+        );
+        assert!(json.contains("\"code\":\""), "advisory code field present");
+        assert!(json.contains("\"verification\":\""), "verification field");
+        // Structural well-formedness: balanced braces/brackets and balanced
+        // quotes (accounting for escapes).
+        assert_json_balanced(&json);
+    }
+
+    #[test]
+    fn guidance_json_escapes_control_and_quote_chars() {
+        // The JSON escaper must handle `"`, `\`, and control chars. We drive an
+        // advisory through and additionally unit-test the escaper directly.
+        assert_eq!(json_esc("a\"b\\c"), "a\\\"b\\\\c");
+        assert_eq!(json_esc("line\nbreak\ttab"), "line\\nbreak\\ttab");
+        assert_eq!(json_esc("\u{01}"), "\\u0001");
+    }
+
+    #[test]
+    fn guidance_html_collapses_boilerplate_but_keeps_faults() {
+        // The Guidance panel keeps the tally line and does not inline thousands
+        // of identical non-fault rows: with more than the cap of one non-fault
+        // class, a "… and N more" line must appear.
+        let mut r = analyze_wat("(module (func (export \"run\") nop))");
+        // Synthesize many UnprovenObligation advisories.
+        let mk = |i: u32| scry_analyze_core::Advisory {
+            func_index: 0,
+            pc: i,
+            class: AdvisoryClass::UnprovenObligation,
+            code: "div-by-zero".into(),
+            detail: "divisor may be zero".into(),
+            suggested_action: "guard it".into(),
+            verification: "re-run scry".into(),
+            counterexample: None,
+        };
+        for i in 0..(ADVISORY_PER_CLASS_CAP as u32 + 25) {
+            r.advisories.push(mk(i));
+        }
+        let html = render_html(&r, "many");
+        assert!(
+            html.contains("unproven obligation(s) to prove/guard"),
+            "tally line kept"
+        );
+        assert!(
+            html.contains("more unproven-obligation"),
+            "boilerplate collapsed with a 'and N more' line"
+        );
+        // The capped HTML must NOT inline all of them.
+        let shown = html.matches("PROVE/GUARD").count();
+        assert!(
+            shown <= ADVISORY_PER_CLASS_CAP,
+            "at most the cap of non-fault rows inlined, got {shown}"
+        );
+        // …but the JSON feed carries the full set.
+        let json = render_guidance_json(&r);
+        let in_json = json.matches("\"class\":\"unproven-obligation\"").count();
+        assert_eq!(
+            in_json,
+            ADVISORY_PER_CLASS_CAP + 25,
+            "JSON feed carries every advisory"
+        );
+    }
+
+    #[test]
+    fn existing_panels_still_render() {
+        // Regression: the redesign is additive — the core panels must survive.
+        let r = analyze_wat(
+            "(module (func $compute (export \"run\") (result i32) call $helper i32.const 7) \
+             (func $helper nop))",
+        );
+        let html = render_html(&r, "panels");
+        for needle in [
+            "Summary",
+            "Functions",
+            "Call graph",
+            "Diagnostics",
+            "Program points",
+            "Guidance — how to improve this code",
+            "Trap checks",
+        ] {
+            assert!(html.contains(needle), "panel missing: {needle}");
+        }
+        assert!(html.starts_with("<!DOCTYPE html>"));
+        assert!(html.ends_with("</html>"));
+    }
+
+    /// Minimal structural JSON validator: braces/brackets balance and string
+    /// quotes are balanced (respecting `\"` escapes). Enough to catch a
+    /// hand-rolled-emitter mistake without pulling in a JSON parser dep.
+    fn assert_json_balanced(json: &str) {
+        let mut depth: i32 = 0;
+        let mut in_str = false;
+        let mut escaped = false;
+        for c in json.chars() {
+            if in_str {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == '"' {
+                    in_str = false;
+                }
+                continue;
+            }
+            match c {
+                '"' => in_str = true,
+                '{' | '[' => depth += 1,
+                '}' | ']' => depth -= 1,
+                _ => {}
+            }
+            assert!(depth >= 0, "unbalanced closer in JSON");
+        }
+        assert_eq!(depth, 0, "unbalanced braces/brackets in JSON");
+        assert!(!in_str, "unterminated string in JSON");
     }
 }

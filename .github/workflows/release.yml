@@ -404,6 +404,8 @@ jobs:
           # FEAT-031 gate first: a malformed self-analysis fails the deploy.
           cargo run --release -p scry-sai-viz -- check \
             crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm
+          # Emits BOTH dist/self-analysis.html (capped, human) and
+          # dist/self-analysis.guidance.json (full, machine-consumable feed).
           cargo run --release -p scry-sai-viz -- \
             crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm \
             -o "$GITHUB_WORKSPACE/dist/self-analysis.html" \
@@ -421,6 +423,10 @@ jobs:
           set -euo pipefail
           test -f dist/index.html
           test -f dist/self-analysis.html
+          # The structured feed must exist, be non-empty, and start as a JSON object.
+          test -s dist/self-analysis.guidance.json
+          head -c 1 dist/self-analysis.guidance.json | grep -q '{' \
+            || (echo "::error::guidance.json is not a JSON object" && exit 1)
           find dist -name '*.html' -print0 \
             | xargs -0 -I{} sh -c 'head -c 64 "{}" | grep -qi "<!doctype html>" || (echo "::error::{} missing doctype" && exit 1)'
           echo "=== site tree (top level) ===" && find dist -maxdepth 1
