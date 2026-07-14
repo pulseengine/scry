@@ -35,9 +35,9 @@ use scry_analyze_core::{
     SoundnessTag, StackBound, TaintFindingKind, TrapKind, TrapVerdict,
 };
 
-/// Neutral placeholder hero / page title. The maintainer finalizes the tagline
-/// here (SCOPE_TAGLINE_PLACEHOLDER) — used in both the `<title>` and the `<h1>`.
-const HERO_TITLE: &str = "scry — sound WebAssembly analyzer (SCOPE_TAGLINE_PLACEHOLDER)";
+/// The hero / page title — a precise, scoped one-liner (not "verification
+/// dashboard"). Used in both the `<title>` and the `<h1>`.
+const HERO_TITLE: &str = "scry — a sound static analyzer for WebAssembly";
 
 /// Program-points cap: the number of per-function points rendered inline. Above
 /// this, a function shows its first `POINTS_PER_FN_CAP` points and a "… showing
@@ -163,8 +163,7 @@ fn kind_badges(m: Option<&FunctionMeta>) -> String {
 pub fn render_html(result: &AnalysisResult, title: &str) -> String {
     let mut s = String::with_capacity(8 * 1024);
     let _ = write!(s, "{}", DOCTYPE_AND_HEAD_OPEN);
-    // SCOPE_TAGLINE_PLACEHOLDER: neutral placeholder title. The maintainer
-    // finalizes the tagline in `HERO_TITLE` (below).
+    // The scoped hero title (`HERO_TITLE`), then the per-page title.
     let _ = write!(s, "<title>{} — {}</title>", esc(HERO_TITLE), esc(title));
     let _ = write!(s, "{}", STYLE);
     s.push_str("</head><body>");
@@ -216,12 +215,14 @@ pub fn render_index(site_title: &str, entries: &[IndexEntry]) -> String {
     let _ = write!(s, "{}", STYLE);
     s.push_str("</head><body>");
     let _ = write!(s, "<h1>{}</h1>", esc(site_title));
-    // SCOPE_TAGLINE_PLACEHOLDER: the maintainer finalizes the lead tagline for
-    // the landing page here.
     s.push_str(
-        "<p class=\"muted\">scry — sound WebAssembly analyzer \
-         (SCOPE_TAGLINE_PLACEHOLDER). A faithful projection of the analyzer's \
-         own output; nothing here is re-derived.</p>",
+        "<p class=\"muted\">scry is a <strong>sound</strong> (over-approximating) \
+         static analyzer for WebAssembly core modules: it proves properties that \
+         hold on <em>every</em> run. It catches out-of-bounds / divide-by-zero / \
+         overflow traps (proven-safe vs potential), use-after-drop on component \
+         handles, and bounds on the shadow stack. A ⊤ (\"top\") or POTENTIAL-TRAP \
+         verdict means <em>unknown</em> — never \"safe\". These pages are a \
+         faithful projection of the analyzer's own output; nothing is re-derived.</p>",
     );
     if entries.is_empty() {
         s.push_str("<p class=\"empty\">No views available.</p>");
@@ -303,7 +304,40 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
 fn render_scope(s: &mut String, _r: &AnalysisResult) {
     s.push_str(
         "<section id=\"scope\"><h2>Scope &amp; limitations</h2>\
-         <!-- SCOPE_COPY_PLACEHOLDER: to be filled by maintainer --></section>",
+         <p>scry is a <strong>sound</strong> abstract interpreter: every reported \
+         invariant, bound, and PROVEN-SAFE verdict holds on all runs — it never \
+         misses a real behaviour. The price is over-approximation: \
+         <strong>⊤ (\"top\") and POTENTIAL-TRAP mean \"scry could not decide\", never \
+         \"safe\"</strong>. An analysis <em>gap</em> records where a domain gave up; \
+         it asserts nothing about the code, only that scry was imprecise there.</p>\
+         <h3>Evidence kinds (strongest first)</h3>\
+         <ul>\
+         <li><strong>Mechanized (Rocq, admit-free, CI-gated):</strong> the \
+         abstract-domain lattices and core transfers — interval soundness over ℤ; \
+         <code>i32.add</code> vs the OFFICIAL two's-complement wrapping semantics \
+         including the wrap case (<code>WrapAdd.v</code>); region, call-graph, \
+         reachability, octagon, pentagon, float-lattice, known-bits, handle-state, \
+         linear-memory segmentation, and convex-polyhedra <em>lattice</em> proofs.</li>\
+         <li><strong>γ-sweep-validated (tested, NOT mechanized):</strong> the harder \
+         transfer algorithms — float round-to-nearest arithmetic, known-bits value \
+         transfers at w=32/64 (tracked: issue #105), and the polyhedra \
+         Fourier–Motzkin entailment + hull over-approximation. Exhaustively checked \
+         against a concrete oracle on a value grid, but not machine-proven.</li>\
+         <li><strong>Runnable / attested:</strong> the shadow-stack bound is \
+         cross-checked against a real wasmtime run; releases are cosign-signed.</li>\
+         </ul>\
+         <h3>What scry does NOT (yet) prove / where it is conservative</h3>\
+         <ul>\
+         <li>It models the official Wasm semantics <em>directly</em>; it does not \
+         yet <em>import</em> the canonical WasmCert-Coq mechanization, and the \
+         official-semantics proof so far covers <code>i32.add</code>, not every \
+         transfer.</li>\
+         <li>Linear-memory content is tracked only for singleton in-bounds i32 \
+         accesses; a loop-range fill is soundly forgotten (⊤), and any call forgets \
+         memory content.</li>\
+         <li>scry ships a DO-330 / ISO 26262 evidence <em>dossier</em> but is not \
+         itself a qualified tool — this dashboard makes no TQL / TCL claim.</li>\
+         </ul></section>",
     );
 }
 
@@ -1839,25 +1873,43 @@ mod tests {
     }
 
     #[test]
-    fn hero_and_scope_placeholders_present() {
-        // Retitle: the neutral hero placeholder replaces the bare
-        // "verification dashboard", and the scope block leaves its copy
-        // placeholder for the maintainer.
+    fn hero_and_scope_copy_finalized() {
+        // Retitle away from bare "verification dashboard", and the scope block
+        // carries the precise soundness copy (mechanized vs γ-swept, ⊤=unknown).
         let r = analyze_wat("(module (func (export \"run\") nop))");
         let html = render_html(&r, "demo");
+        // No leftover placeholders.
         assert!(
-            html.contains("SCOPE_TAGLINE_PLACEHOLDER"),
-            "hero tagline placeholder present"
+            !html.contains("SCOPE_TAGLINE_PLACEHOLDER"),
+            "tagline filled"
+        );
+        assert!(
+            !html.contains("SCOPE_COPY_PLACEHOLDER"),
+            "scope copy filled"
+        );
+        assert!(!html.contains("verification dashboard"), "retitled");
+        // Precise, scoped claims present.
+        assert!(
+            html.contains("sound static analyzer for WebAssembly"),
+            "hero states the scoped claim"
         );
         assert!(
             html.contains("<section id=\"scope\">"),
             "scope section present"
         );
-        assert!(
-            html.contains("SCOPE_COPY_PLACEHOLDER"),
-            "scope copy placeholder present for the maintainer"
-        );
         assert!(html.contains("Scope &amp; limitations"), "scope heading");
+        assert!(
+            html.contains("Mechanized (Rocq, admit-free"),
+            "evidence-kind: mechanized"
+        );
+        assert!(
+            html.contains("γ-sweep-validated (tested, NOT mechanized)"),
+            "evidence-kind: γ-swept vs mechanized distinction is legible"
+        );
+        assert!(
+            html.contains("never \"safe\""),
+            "the ⊤=unknown-not-safe soundness caveat is stated"
+        );
     }
 
     #[test]
