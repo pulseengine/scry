@@ -162,6 +162,14 @@ fn run(args: &[String]) -> Result<PathBuf, CliError> {
     let html = scry_viz::render_html(&result, &title);
     let out = output.unwrap_or_else(|| input.with_extension("html"));
     std::fs::write(&out, html).map_err(|e| err(4, format!("writing {}: {e}", out.display())))?;
+
+    // Structured, machine-consumable feed alongside the HTML: `<stem>.guidance.json`
+    // (the full, un-capped advisories + trap verdicts an AI-agent consumer reads).
+    let json = scry_viz::render_guidance_json(&result);
+    let json_out = out.with_extension("guidance.json");
+    std::fs::write(&json_out, json)
+        .map_err(|e| err(4, format!("writing {}: {e}", json_out.display())))?;
+    eprintln!("scry-viz: wrote {}", json_out.display());
     Ok(out)
 }
 
