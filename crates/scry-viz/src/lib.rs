@@ -39,11 +39,18 @@ use scry_analyze_core::{
 /// dashboard"). Used in both the `<title>` and the `<h1>`.
 const HERO_TITLE: &str = "scry — a sound static analyzer for WebAssembly";
 
-/// Program-points cap: the number of per-function points rendered inline. Above
-/// this, a function shows its first `POINTS_PER_FN_CAP` points and a "… showing
-/// N of M; full data in the JSON feed" note. This keeps the whole HTML small
-/// (the un-capped points section is ~90% of the bytes on scry-on-scry).
+/// Program-points cap: the number of per-function points rendered inline in a
+/// detailed table. Above this, a function shows its first `POINTS_PER_FN_CAP`
+/// points and a "… showing N of M" note.
 const POINTS_PER_FN_CAP: usize = 20;
+
+/// Cap on the number of FUNCTIONS rendered with a detailed per-point table.
+/// scry-on-scry has ~800 functions, so a per-function cap alone still yields a
+/// multi-MB dump (800 × 20 rows). All four persona reviews found the raw
+/// per-point dump is noise for readers, so every function appears in a cheap
+/// one-row summary and only the first `FUNCS_WITH_DETAIL_CAP` get a detailed
+/// table; the full per-point invariants are scry's library `AnalysisResult`.
+const FUNCS_WITH_DETAIL_CAP: usize = 12;
 
 /// Guidance cap: for every advisory class EXCEPT `DefiniteFault` (always shown
 /// in full — proven bugs), render at most this many rows, then a "… and N more"
@@ -1110,15 +1117,37 @@ fn render_points(s: &mut String, r: &AnalysisResult) {
     let mut func_indices: Vec<u32> = points.iter().map(|p| p.func_index).collect();
     func_indices.sort_unstable();
     func_indices.dedup();
-    for idx in func_indices {
+    let n_funcs = func_indices.len();
+
+    // Compact summary over EVERY function (one cheap row each — small even for
+    // scry-on-scry's ~800 functions). The detailed per-point tables below are
+    // capped by function count AND points/function, or the section is a dump.
+    let _ = write!(
+        s,
+        "<p class=\"muted\">{n_funcs} function(s) with program points — summary below; \
+         detailed per-point invariants for the first {FUNCS_WITH_DETAIL_CAP}. The full \
+         per-point data is scry's library <code>AnalysisResult</code>; the actionable \
+         subset is in <code>guidance.json</code>.</p>\
+         <table><thead><tr><th>function</th><th>points</th><th>max locals</th>\
+         </tr></thead><tbody>",
+    );
+    for &idx in &func_indices {
+        let fp = points.iter().filter(|p| p.func_index == idx);
+        let count = fp.clone().count();
+        let nloc = fp.map(|p| p.locals.len()).max().unwrap_or(0);
+        let _ = write!(
+            s,
+            "<tr><td>{}</td><td>{count}</td><td>{nloc}</td></tr>",
+            fn_link(r, idx),
+        );
+    }
+    s.push_str("</tbody></table>");
+
+    for &idx in func_indices.iter().take(FUNCS_WITH_DETAIL_CAP) {
         let heading = match fn_meta(r, idx).and_then(|m| m.name.as_deref()) {
             Some(n) => format!("func {idx} · {}", name_span(&demangle(n))),
             None => format!("func {idx}"),
         };
-        // Per-function summary + cap. The un-capped points section is ~90% of
-        // the bytes on scry-on-scry (16k+ points), so we render a SUMMARY
-        // (name, #points, #locals) and only the first `POINTS_PER_FN_CAP`
-        // points per function; the full per-point data lives in the JSON feed.
         let fn_points: Vec<_> = points.iter().filter(|p| p.func_index == idx).collect();
         let n_points = fn_points.len();
         let n_locals = fn_points.iter().map(|p| p.locals.len()).max().unwrap_or(0);
@@ -1189,8 +1218,8 @@ fn render_points(s: &mut String, r: &AnalysisResult) {
         if n_points > POINTS_PER_FN_CAP {
             let _ = write!(
                 s,
-                "<p class=\"muted\">… showing {} of {} points; full data in the JSON feed \
-                 (<code>guidance.json</code>).</p>",
+                "<p class=\"muted\">… showing {} of {} points for this function \
+                 (full per-point invariants are scry's library output).</p>",
                 POINTS_PER_FN_CAP, n_points,
             );
         }
@@ -1914,41 +1943,43 @@ mod tests {
 
     #[test]
     fn points_section_is_capped_and_page_stays_small() {
-        // Page-size sanity: a function with far more than the cap of program
-        // points must render only the first `POINTS_PER_FN_CAP`, plus a summary
-        // and a "showing N of M" note — and the whole page must stay well under
-        // 1 MB. We synthesize a large point set on a real result (the analyzer's
-        // own point count depends on its fixpoint, so we don't rely on it).
+        // Page-size sanity: scry-on-scry has ~800 FUNCTIONS each with points, so
+        // a per-function cap alone is not enough (800 × 20 rows is still ~10 MB).
+        // Synthesize points across many functions and assert (a) only the first
+        // `FUNCS_WITH_DETAIL_CAP` functions get a detailed table, and (b) the
+        // whole page stays well under 1 MB.
         let mut r = analyze_wat(
             "(module (func (export \"run\") (result i32) i32.const 42 i32.const 7 i32.add))",
         );
         let template = r.invariants.points[0].clone();
         r.invariants.points.clear();
-        for pc in 0..3000u32 {
-            let mut p = template.clone();
-            p.func_index = 0;
-            p.pc = pc;
-            r.invariants.points.push(p);
+        const FUNCS: u32 = 500;
+        const PTS_PER_FN: u32 = 30;
+        for f in 0..FUNCS {
+            for pc in 0..PTS_PER_FN {
+                let mut p = template.clone();
+                p.func_index = f;
+                p.pc = pc;
+                r.invariants.points.push(p);
+            }
         }
-        let total = r.invariants.points.len();
-        assert!(
-            total > POINTS_PER_FN_CAP * 5,
-            "fixture must produce many points (got {total})"
-        );
+        assert_eq!(r.invariants.points.len() as u32, FUNCS * PTS_PER_FN);
         let html = render_html(&r, "big");
-        // The cap note is present …
+        // Every function appears in the cheap summary line …
         assert!(
-            html.contains("full data in the JSON feed"),
-            "capped points note present"
+            html.contains("function(s) with program points"),
+            "per-function summary present"
         );
+        // … but only the first FUNCS_WITH_DETAIL_CAP get a detailed table.
+        let detailed = html.matches("class=\"fn-points\"").count();
         assert!(
-            html.contains("program point(s)"),
-            "per-function summary line"
+            detailed <= FUNCS_WITH_DETAIL_CAP,
+            "detailed tables capped at {FUNCS_WITH_DETAIL_CAP}, got {detailed}"
         );
-        // … and the page is small despite thousands of points.
+        // … and the whole page stays under 1 MB despite 15k points / 500 funcs.
         assert!(
             html.len() < 1_000_000,
-            "page must stay under 1 MB even for many points; was {} bytes",
+            "page must stay under 1 MB across many functions; was {} bytes",
             html.len()
         );
     }

@@ -7,6 +7,22 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.2.3] — 2026-07-15
+
+Fix: **the v3.2.2 program-points cap was per-function only**, so scry-on-scry's
+~800 functions still produced a ~10 MB `self-analysis.html` (800 × 20 rows).
+
+### Fixed — scry-viz
+
+- Program points now render a **cheap one-row summary for every function**, and a
+  detailed per-point table only for the first `FUNCS_WITH_DETAIL_CAP` (12)
+  functions — so the page stays well under 1 MB regardless of function count.
+- The page-size test now synthesizes points across **many functions** (500 × 30),
+  not just many points in one function, so this regression is caught.
+- Corrected an inaccurate cap note: the capped per-point rows are scry's library
+  `AnalysisResult` output, not the `guidance.json` feed (which carries advisories
+  + trap verdicts, not per-point invariants).
+
 ## [3.2.2] — 2026-07-15
 
 Headline: **make the dashboard readable.** A four-persona review of the deployed
