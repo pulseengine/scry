@@ -674,18 +674,30 @@ artifacts:
       Convex polyhedra (Cousot-Halbwachs 1978, AC-012; DD-019) for exact linear
       inequalities Σ a_i·x_i ≤ c above the octagon, made tractable by ELINA-style
       online constraint decomposition into independent variable blocks (TE-012).
-      Sequenced AFTER v3.2 segmentation. Planned slices:
-        1. New pure crate `scry-sai-poly` — constraint-form polyhedra with join =
-           convex hull, meet = constraint union, and standard polyhedra widening;
-           ELINA-style block decomposition for cost. Native γ-sweep falsifier.
-           Admit-free Rocq for the LATTICE algebra (proofs/rocq/Poly.v: order /
-           join-upper-bound / meet-glb).
-        2. Wire in as an optional relational domain above the octagon; surface
-           inferred linear invariants through the FEAT-041 relational-invariant
-           output (REQ-016).
-        3. Precision + cost differential vs the octagon on a corpus (falsify the
-           "infers invariants the octagon cannot" claim); a cost gate bounds the
-           decomposition blow-up.
+      Sequenced AFTER v3.2 segmentation. Slices:
+        1. SHIPPED (#104, published 3.2.1): pure crate `scry-sai-poly` —
+           constraint-form polyhedra with meet = constraint union (exact),
+           Fourier-Motzkin entailment, a sound entailed-by-both join
+           (over-approximation of the hull; the exact double-description hull +
+           ELINA decomposition are deferred), and widening. Native γ-sweep;
+           admit-free Rocq LATTICE proof (proofs/rocq/Poly.v). Clean-room SOUND.
+        2. REFRAMED — wire into the analyzer. **Discovery (2026-07-14):** the
+           intended additive STRAIGHT-LINE pass (mirroring the bits/float passes)
+           is near-VACUOUS for polyhedra, and for a SOUND reason. Polyhedra's
+           value is general-coefficient facts (`z = x + y`), but over Wasm's
+           WRAPPING i32 that equality is unsound unless no-wrap is proven — which
+           needs value BOUNDS, which come from GUARDS, which need the FIXPOINT.
+           On straight-line code with unbounded params, every arithmetic result
+           may wrap ⇒ no octagon-beating fact is soundly emittable. (Unlike
+           bits/float, which are wrap-internal.) So the poly BODY requires the
+           full fixpoint integration: a `Poly` on FuncCtx threaded in LOCKSTEP
+           with the octagon (join/widen at every merge), wrap-AWARE assignment
+           transfers gated on the interval domain's no-wrap result (scry_interval
+           i32_add returns ⊤ exactly when wrap is possible), guard refinement,
+           and `Poly::project` (FM variable elimination) for reassignments. This
+           is a multi-slice arc like the octagon's v1.7–1.9 — tracked as its own
+           sub-arc, not crammed. Surface via the FEAT-041 relational output.
+        3. Precision + cost differential vs the octagon on a corpus.
       HONESTY (carried from the WasmCert-Coq pass): full convex-hull / Fourier-
       Motzkin soundness is NOT cheaply mechanizable — Poly.v mechanizes the
       lattice algebra only; the transfer functions are γ-sweep-validated and the
