@@ -7,6 +7,44 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.2.2] — 2026-07-15
+
+Headline: **make the dashboard readable.** A four-persona review of the deployed
+GitHub Pages dashboard (assessor, AI-agent, skeptic, first-time engineer) found
+it unusable — an 18.8 MB self-analysis page, an inverted pyramid, no structured
+feed, and no legible scope. This release fixes the `scry-viz` output. No analyzer
+change.
+
+### Changed — scry-viz dashboard
+
+- **Capped the Program points section** — was ~90% of the page bytes (the 18.8 MB
+  culprit). Each function now shows a summary + the first 20 points + a pointer to
+  the JSON feed; the whole HTML stays well under 1 MB (test-enforced).
+- **Collapsed the Guidance boilerplate** — every DefiniteFault in full (proven
+  bugs are never elided), other classes capped with a "… and N more" pointer, so
+  the real fixes no longer drown under thousands of identical rows.
+- **Retitled** from "verification dashboard" to **"scry — a sound static analyzer
+  for WebAssembly"**, with a lead that states what it catches and the soundness
+  caveat: **⊤ / POTENTIAL-TRAP mean "unknown", never "safe".**
+- **New Scope & limitations block** — the mechanized-vs-γ-sweep-validated evidence
+  distinction, and what scry does NOT prove (no WasmCert-Coq import yet;
+  official-semantics proof covers `i32.add` only; memory content singleton-i32
+  only; not a qualified tool — no TQL/TCL claim).
+
+### Added — structured guidance feed
+
+- **`scry-viz::render_guidance_json`** + a `<stem>.guidance.json` written alongside
+  the HTML (and emitted + sanity-checked in `release.yml`): the full, un-capped
+  advisories + trap verdicts as machine-consumable JSON — the structured-primary
+  feed an AI agent should consume instead of scraping HTML.
+
+### Notes
+
+- FEAT-057 slice-2 reframed (rivet): a straight-line polyhedra pass is near-vacuous
+  over Wasm's wrapping i32 (general-coefficient facts need no-wrap → bounds →
+  guards → the fixpoint), so the polyhedra body is scoped to a fixpoint-integration
+  arc, tracked honestly rather than shipped vacuous.
+
 ## [3.2.1] — 2026-07-11
 
 Headline: **make the new memory tracking visible.** FEAT-062 surfaces FEAT-058's

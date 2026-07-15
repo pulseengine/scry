@@ -829,3 +829,42 @@ artifacts:
         target: REQ-013
       - type: traces-to
         target: REQ-019
+
+  # ── Dashboard usability (four-persona review) ─────────────────────────
+
+  - id: FEAT-063
+    type: feature
+    title: "v3.2.2 — Readable dashboard redesign + structured guidance feed"
+    status: accepted
+    release: v3.2.2
+    description: >
+      A four-persona review of the deployed Pages dashboard (DO-178C assessor,
+      AI-agent consumer, skeptical Wasm academic, first-time engineer) found it
+      unusable: an 18.8 MB self-analysis page (the un-capped program-points dump
+      was ~90% of the bytes), an inverted pyramid (thin landing, bottomless
+      dump), no structured/machine-consumable feed, and no legible soundness
+      scope. This redesigns the scry-viz OUTPUT (no analyzer change):
+        - cap the program-points section (summary + first N per function + a
+          pointer to the JSON feed) so the HTML stays < 1 MB;
+        - collapse the guidance boilerplate (every DefiniteFault in full; other
+          classes capped) so real fixes are not drowned;
+        - emit a structured `guidance.json` (advisories + trap verdicts, full/
+          un-capped) alongside the HTML — the structured-primary feed (TE-011)
+          an AI agent consumes instead of scraping HTML;
+        - retitle to a precise scoped claim + a Scope & limitations block making
+          the mechanized-vs-γ-swept evidence distinction and the honest
+          not-proven list legible (skeptic + assessor asks).
+    tags: [viz, dashboard, observability, ai-agent, ux, v3.2]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given scry's self-analysis, When scry-viz renders it, Then the HTML stays under 1 MB (program points capped) instead of the 18.8 MB dump. (Shipped: points_section_is_capped_and_page_stays_small.)"
+        - "Given the AnalysisResult, When scry-viz emits the guidance feed, Then a well-formed guidance.json carries the full advisories + trap verdicts for machine consumption. (Shipped: guidance_json_is_well_formed_and_carries_advisories.)"
+        - "Given the dashboard, When a reader loads it, Then it states scry is a SOUND analyzer (⊤ = unknown, never safe) and distinguishes mechanized from γ-sweep-validated evidence. (Shipped: hero_and_scope_copy_finalized.)"
+    links:
+      - type: traces-to
+        target: REQ-013
+      - type: traces-to
+        target: REQ-017
+      - type: evaluates-tech
+        target: TE-011
