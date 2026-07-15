@@ -44,6 +44,14 @@ const HERO_TITLE: &str = "scry — a sound static analyzer for WebAssembly";
 /// points and a "… showing N of M" note.
 const POINTS_PER_FN_CAP: usize = 20;
 
+/// Row cap for the flat list/table sections (Diagnostics, Call graph, Trap
+/// checks, Functions, gaps, …). scry-on-scry produces thousands of rows in each
+/// (Info diagnostics per bounds-check, 1349 call edges, thousands of trap
+/// checks); un-capped they are megabytes of noise. Each section shows the first
+/// `SECTION_ROW_CAP` rows and a "showing N of M" note; the actionable subset is
+/// in the guidance.json feed.
+const SECTION_ROW_CAP: usize = 100;
+
 /// Cap on the number of FUNCTIONS rendered with a detailed per-point table.
 /// scry-on-scry has ~800 functions, so a per-function cap alone still yields a
 /// multi-MB dump (800 × 20 rows). All four persona reviews found the raw
@@ -383,7 +391,8 @@ fn render_functions(s: &mut String, r: &AnalysisResult) {
         .collect();
     indices.sort_unstable();
     indices.dedup();
-    for idx in indices {
+    let n_funcs = indices.len();
+    for idx in indices.into_iter().take(SECTION_ROW_CAP) {
         let meta = fn_meta(r, idx);
         let summary = r.function_summaries.iter().find(|f| f.func_index == idx);
         let stack: Option<&FunctionStack> =
@@ -428,7 +437,9 @@ fn render_functions(s: &mut String, r: &AnalysisResult) {
             yesno(recursive),
         );
     }
-    s.push_str("</tbody></table></section>");
+    s.push_str("</tbody></table>");
+    cap_note(s, n_funcs, "functions");
+    s.push_str("</section>");
 }
 
 fn render_call_graph(s: &mut String, r: &AnalysisResult) {
@@ -441,7 +452,7 @@ fn render_call_graph(s: &mut String, r: &AnalysisResult) {
         "<table><thead><tr><th>caller</th><th>pc</th><th>kind</th>\
          <th>resolved targets</th><th>soundness</th></tr></thead><tbody>",
     );
-    for e in &r.call_graph {
+    for e in r.call_graph.iter().take(SECTION_ROW_CAP) {
         // FEAT-027: resolve caller + target indices to named links so an edge
         // reads `1 $compute → 2 $helper`, and each end jumps to its row.
         let targets = if e.resolved_targets.is_empty() {
@@ -466,9 +477,14 @@ fn render_call_graph(s: &mut String, r: &AnalysisResult) {
         );
     }
     s.push_str("</tbody></table>");
-    // FEAT-028: a call-graph DIAGRAM. Inline SVG (self-contained, zero-JS) for
-    // graphs small enough to lay out cleanly; the Mermaid source for any size.
-    render_callgraph_diagram(s, r);
+    cap_note(s, r.call_graph.len(), "call edges");
+    // FEAT-028: a call-graph DIAGRAM. Inline SVG for graphs small enough to lay
+    // out cleanly; the Mermaid source otherwise. Skipped entirely for very large
+    // graphs (a Mermaid source of thousands of edges is itself megabytes of noise
+    // — the edge table above + guidance.json feed carry the data).
+    if r.call_graph.len() <= SECTION_ROW_CAP {
+        render_callgraph_diagram(s, r);
+    }
     s.push_str("</section>");
 }
 
@@ -717,7 +733,7 @@ fn render_gaps(s: &mut String, r: &AnalysisResult) {
         "<p>{} site(s) where scry degraded a function to \u{22a4} (gave up).</p><ul class=\"diags\">",
         r.gaps.len(),
     );
-    for g in &r.gaps {
+    for g in r.gaps.iter().take(SECTION_ROW_CAP) {
         let kind = match g.kind {
             GapKind::UnsupportedOp => "unsupported-op",
             GapKind::UnmodeledBranch => "unmodeled-branch",
@@ -733,7 +749,9 @@ fn render_gaps(s: &mut String, r: &AnalysisResult) {
             esc(&g.op),
         );
     }
-    s.push_str("</ul></section>");
+    s.push_str("</ul>");
+    cap_note(s, r.gaps.len(), "gaps");
+    s.push_str("</section>");
 }
 
 /// FEAT-045: division/remainder trap classifications — scry's first runtime-
@@ -759,7 +777,20 @@ fn render_trap_checks(s: &mut String, r: &AnalysisResult) {
         traps,
         r.trap_checks.len() - traps,
     );
-    for t in &r.trap_checks {
+    // POTENTIAL-TRAPs first (the actionable proof obligations), then
+    // PROVEN-SAFE, capped — so the cap never hides a potential trap behind
+    // thousands of proven-safe rows. The tally above is exact; the full set is
+    // in the guidance.json feed.
+    let ordered = r
+        .trap_checks
+        .iter()
+        .filter(|t| t.verdict == TrapVerdict::PotentialTrap)
+        .chain(
+            r.trap_checks
+                .iter()
+                .filter(|t| t.verdict == TrapVerdict::ProvenSafe),
+        );
+    for t in ordered.take(SECTION_ROW_CAP) {
         let (cls, verdict) = match t.verdict {
             TrapVerdict::ProvenSafe => ("info", "PROVEN-SAFE"),
             TrapVerdict::PotentialTrap => ("err", "POTENTIAL-TRAP"),
@@ -778,7 +809,9 @@ fn render_trap_checks(s: &mut String, r: &AnalysisResult) {
             esc(&t.op),
         );
     }
-    s.push_str("</ul></section>");
+    s.push_str("</ul>");
+    cap_note(s, r.trap_checks.len(), "trap checks");
+    s.push_str("</section>");
 }
 
 /// FEAT-059/060: the remediation Guidance panel — the actionable "what to do"
@@ -895,7 +928,7 @@ fn render_handle_findings(s: &mut String, r: &AnalysisResult) {
         "<p>{} handle-lifetime fault(s).</p><ul class=\"diags\">",
         r.handle_findings.len(),
     );
-    for h in &r.handle_findings {
+    for h in r.handle_findings.iter().take(SECTION_ROW_CAP) {
         let kind = match h.kind {
             HandleFindingKind::UseAfterDrop => "use-after-drop",
             HandleFindingKind::DoubleDrop => "double-drop",
@@ -910,7 +943,9 @@ fn render_handle_findings(s: &mut String, r: &AnalysisResult) {
             esc(&h.via),
         );
     }
-    s.push_str("</ul></section>");
+    s.push_str("</ul>");
+    cap_note(s, r.handle_findings.len(), "handle faults");
+    s.push_str("</section>");
 }
 
 /// FEAT-047: sound float-interval facts for f32/f64 locals — the analyzer no
@@ -926,7 +961,7 @@ fn render_float_facts(s: &mut String, r: &AnalysisResult) {
         "<p>{} sound float-interval fact(s).</p><ul class=\"diags\">",
         r.float_facts.len(),
     );
-    for f in &r.float_facts {
+    for f in r.float_facts.iter().take(SECTION_ROW_CAP) {
         let _ = write!(
             s,
             "<li class=\"info\"><span class=\"sev\">f{}</span> \
@@ -940,7 +975,9 @@ fn render_float_facts(s: &mut String, r: &AnalysisResult) {
             if f.nan { " ∪ NaN" } else { "" },
         );
     }
-    s.push_str("</ul></section>");
+    s.push_str("</ul>");
+    cap_note(s, r.float_facts.len(), "float facts");
+    s.push_str("</section>");
 }
 
 /// FEAT-044: proven Pentagons strict relations — the `index < length` guards
@@ -958,7 +995,7 @@ fn render_pentagon_facts(s: &mut String, r: &AnalysisResult) {
          <code>if</code> region.</p><ul class=\"diags\">",
         r.pentagon_facts.len(),
     );
-    for f in &r.pentagon_facts {
+    for f in r.pentagon_facts.iter().take(SECTION_ROW_CAP) {
         let sign = if f.unsigned { "u" } else { "s" };
         let _ = write!(
             s,
@@ -976,7 +1013,9 @@ fn render_pentagon_facts(s: &mut String, r: &AnalysisResult) {
         }
         s.push_str("</li>");
     }
-    s.push_str("</ul></section>");
+    s.push_str("</ul>");
+    cap_note(s, r.pentagon_facts.len(), "relational guards");
+    s.push_str("</section>");
 }
 
 fn render_diagnostics(s: &mut String, diags: &[Diagnostic]) {
@@ -986,7 +1025,7 @@ fn render_diagnostics(s: &mut String, diags: &[Diagnostic]) {
         return;
     }
     s.push_str("<ul class=\"diags\">");
-    for d in diags {
+    for d in diags.iter().take(SECTION_ROW_CAP) {
         let (cls, label) = match d.severity {
             DiagnosticSeverity::Info => ("info", "info"),
             DiagnosticSeverity::Warning => ("warn", "warning"),
@@ -1001,7 +1040,20 @@ fn render_diagnostics(s: &mut String, diags: &[Diagnostic]) {
             esc(&d.message),
         );
     }
-    s.push_str("</ul></section>");
+    s.push_str("</ul>");
+    cap_note(s, diags.len(), "diagnostics");
+    s.push_str("</section>");
+}
+
+/// If `total` exceeds [`SECTION_ROW_CAP`], append the "showing N of M" note that
+/// every capped flat section shares.
+fn cap_note(s: &mut String, total: usize, what: &str) {
+    if total > SECTION_ROW_CAP {
+        let _ = write!(
+            s,
+            "<p class=\"muted\">… showing {SECTION_ROW_CAP} of {total} {what}.</p>",
+        );
+    }
 }
 
 /// FEAT-030: taint (noninterference) findings. Rendered only when there ARE
@@ -1982,6 +2034,45 @@ mod tests {
             "page must stay under 1 MB across many functions; was {} bytes",
             html.len()
         );
+    }
+
+    #[test]
+    fn all_flat_sections_capped_page_stays_small() {
+        // The lesson from v3.2.2/v3.2.3: capping ONE section is not enough — the
+        // deployed self-analysis was still ~5 MB from Diagnostics / Call graph /
+        // Trap checks. This test blows up EVERY large flat section and asserts
+        // the whole page stays under 1 MB, so a future uncapped section fails
+        // here instead of on the deployed site.
+        let mut r = analyze_wat(
+            "(module (memory 1) (func $h) \
+             (func (export \"run\") (param i32) (result i32) \
+               i32.const 4 i32.const 0 i32.store \
+               call $h \
+               i32.const 10 local.get 0 i32.div_s))",
+        );
+        fn blow<T: Clone>(v: &mut Vec<T>, n: usize) {
+            if let Some(first) = v.first().cloned() {
+                while v.len() < n {
+                    v.push(first.clone());
+                }
+            }
+        }
+        blow(&mut r.diagnostics, 4000);
+        blow(&mut r.trap_checks, 4000);
+        blow(&mut r.call_graph, 4000);
+        blow(&mut r.advisories, 4000);
+        blow(&mut r.gaps, 4000);
+        blow(&mut r.handle_findings, 4000);
+        blow(&mut r.float_facts, 4000);
+        blow(&mut r.pentagon_facts, 4000);
+        let html = render_html(&r, "big-all");
+        assert!(
+            html.len() < 1_000_000,
+            "every flat section must be capped so the page stays <1 MB; was {} bytes",
+            html.len()
+        );
+        // Cap notes prove the sections were actually large-but-capped.
+        assert!(html.contains("… showing 100 of"), "cap notes present");
     }
 
     #[test]

@@ -20,4 +20,4 @@ path = "src/lib.rs"
 # The per-segment content domain. Path dep carries `version` so `cargo publish`
 # rewrites it to the crates.io coordinate; the version equals the workspace
 # version and is bumped in lockstep.
-scry-sai-interval = { path = "../scry-interval", version = "3.2.3" }
+scry-sai-interval = { path = "../scry-interval", version = "3.2.4" }
