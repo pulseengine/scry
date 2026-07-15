@@ -31,7 +31,7 @@ path = "src/lib.rs"
 # Path deps carry `version` so `cargo publish` rewrites them to the crates.io
 # coordinate (crates.io rejects path-only deps). The version equals the
 # workspace version and must be bumped in lockstep with it.
-scry-sai-interval = { path = "../scry-interval", version = "3.2.2" }
+scry-sai-interval = { path = "../scry-interval", version = "3.2.3" }
 
 # Step 2 (DD-012): the analyze body + helpers moved here. wasmparser parses
 # the input Wasm Core Model module; sha2 digests the module bytes for
@@ -43,44 +43,44 @@ sha2 = { workspace = true }
 
 # Security-label (taint) lattice for the noninterference analysis (FEAT-009)
 # and the pure meld<->scry provenance boundary crate (FEAT-002 / DD-002).
-scry-sai-taint = { path = "../scry-taint", version = "3.2.2" }
-scry-sai-provenance = { path = "../scry-provenance", version = "3.2.2" }
+scry-sai-taint = { path = "../scry-taint", version = "3.2.3" }
+scry-sai-provenance = { path = "../scry-provenance", version = "3.2.3" }
 
 # Octagon relational domain (FEAT-016 slice-2b-ii): carried alongside the
 # intervals through the structured-CFG fixpoint so a loop counter bounded by a
 # VARIABLE relation (`i < n`) stays bounded where the interval domain alone
 # widens it to ⊤. Same pure `#![no_std]` dual-compile crate as scry-interval.
-scry-sai-octagon = { path = "../scry-octagon", version = "3.2.2" }
+scry-sai-octagon = { path = "../scry-octagon", version = "3.2.3" }
 
 # Known-bits × interval-guarded congruence reduced product (FEAT-037 / DD-017):
 # an additive bit/alignment/stride companion computed in a straight-line-sound
 # pass, surfaced library-only on `AnalysisResult.bit_facts`. Same pure
 # `#![no_std]` dual-compile crate as the other domains.
-scry-sai-bits = { path = "../scry-bits", version = "3.2.2" }
+scry-sai-bits = { path = "../scry-bits", version = "3.2.3" }
 
 # Pentagons weakly-relational domain (FEAT-044 / AC-014): intervals + strict
 # `x < y` facts, the cheap relational layer behind sound out-of-bounds-trap
 # detection (FEAT-046). An additive guard-recording pass surfaces proven
 # strict relations library-only on `AnalysisResult.pentagon_facts`. Same pure
 # `#![no_std]` dual-compile crate as the other domains.
-scry-sai-pentagon = { path = "../scry-pentagon", version = "3.2.2" }
+scry-sai-pentagon = { path = "../scry-pentagon", version = "3.2.3" }
 
 # IEEE-754 float-interval domain (FEAT-047 / AC-022): sound f32/f64 abstraction
 # with NaN/±inf tracking + round-to-nearest-aware widening. An additive
 # straight-line pass surfaces sound float intervals library-only on
 # `AnalysisResult.float_facts`. Same pure `#![no_std]` dual-compile crate.
-scry-sai-float = { path = "../scry-float", version = "3.2.2" }
+scry-sai-float = { path = "../scry-float", version = "3.2.3" }
 
 # Affine Component-Model handle-state lattice (FEAT-049 / MF-007): tracks
 # own/borrow resource-handle state to flag use-after-drop / double-drop. A
 # straight-line pass over the canonical-ABI `[resource-drop]` call sites
 # surfaces findings library-only on `AnalysisResult.handle_findings`.
-scry-sai-handle = { path = "../scry-handle", version = "3.2.2" }
+scry-sai-handle = { path = "../scry-handle", version = "3.2.3" }
 
 # FEAT-058: the linear-memory segmentation domain (content-sensitive memory).
 # The interpreter tracks per-offset interval content for i32 loads/stores
 # instead of degrading every load to ⊤.
-scry-sai-segment = { path = "../scry-segment", version = "3.2.2" }
+scry-sai-segment = { path = "../scry-segment", version = "3.2.3" }
 
 [dev-dependencies]
 # Test-only (the crate is otherwise dep-light + no_std): assemble the .wat
