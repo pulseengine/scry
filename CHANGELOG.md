@@ -7,6 +7,27 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.2.4] — 2026-07-15
+
+Fix (final page-size pass): after v3.2.3 the deployed `self-analysis.html` was
+still ~4.9 MB — capping *program points* alone wasn't enough. The other flat
+sections (Diagnostics ~1.7 MB, Call graph ~1.7 MB, Trap checks, Functions, gaps,
+handle/float/pentagon facts) render one row per entry and scry-on-scry produces
+thousands of each.
+
+### Fixed — scry-viz
+
+- **Every flat list/table section is now capped** (`SECTION_ROW_CAP` = 100 rows +
+  a "showing N of M" note): Diagnostics, Call graph (edge table), Trap checks
+  (POTENTIAL-TRAPs shown first so the cap never hides one), Functions, gaps,
+  handle faults, float facts, relational guards.
+- **The call-graph diagram is skipped for large graphs** — a Mermaid source of
+  thousands of edges was itself ~1.7 MB.
+- **New comprehensive test** `all_flat_sections_capped_page_stays_small` blows up
+  *every* section to 4,000 entries and asserts the page stays <1 MB — the check
+  that would have caught the v3.2.2/v3.2.3 partial fixes. The actionable subset of
+  every section remains available un-capped in the `guidance.json` feed.
+
 ## [3.2.3] — 2026-07-15
 
 Fix: **the v3.2.2 program-points cap was per-function only**, so scry-on-scry's
