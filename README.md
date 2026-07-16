@@ -60,24 +60,32 @@ deductive-proof and bounded-model-checking layers do not staff.
 
 ## status
 
-**v0.1.0 shipped 2026-05-27** —
-[release page](https://github.com/pulseengine/scry/releases/tag/v0.1.0)
-with cosign-signed `scry-0.1.0-wasm32-wasip2.wasm` + per-crate
-CycloneDX SBOMs + SHA256SUMS + SLSA v1 provenance. The full
-PulseEngine Wasm-component toolchain runs end-to-end on scry's own
-build (the dogfood gate for [[DD-008]]). v0.1.0 ships the
-**structural scaffold**: no real abstract-interpretation logic yet.
+<!-- claim id=version: "scry-sai-core" crates.io max_version == workspace version -->
+<!-- claim id=crates: publish.rs lists 12 scry-sai-* crates -->
+<!-- claim id=admit-free: 0 Admitted/admit/Axiom across proofs/rocq/*.v -->
+**v3.2.4 shipped** — the full v0.1 → v3.2 arc is done; scry is a working **sound
+abstract interpreter**, not a scaffold. Shipped and on crates.io: **12 pure
+`scry-sai-*` crates** (10 abstract domains — interval, region-memory, call-graph
++ reachability, octagon, pentagon, known-bits/congruence, IEEE-754 float,
+Component-Model handle-state, linear-memory segmentation, convex polyhedra —
+plus the analyzer core and the viz) driving `analyze()` over parsed Wasm; a host
+wasmtime harness; runtime-trap classification (PROVEN-SAFE vs POTENTIAL-TRAP);
+ranked remediation guidance + a structured `guidance.json`; and a GitHub Pages
+[verification dashboard](https://pulseengine.github.io/scry).
 
-The implementation work — interval-domain fixpoint on a parsed Wasm
-module, host wasmtime test harness, Verus + Rocq proof targets,
-region-memory domain — lands progressively from v0.2. Follow the
-[release plan](#release-plan) below; each numbered version closes a
-specific verified-evidence increment.
+Soundness evidence is **scoped, not flattened** (mirrors the dashboard's Scope &
+limitations block):
 
-`rivet validate` here is PASS with 0 warnings; 64 artifacts span 11
-types across `common + dev + research + research-ext + safety-case`.
-Everything in this README that isn't tagged "v0.1.0" is still a
-*requirements artifact* awaiting the labelled version.
+- **Mechanized (Rocq, admit-free):** 19 `.v` proofs, **0 `Admitted` / `admit` /
+  `Axiom`** — the domain lattices + core transfers, incl. `i32.add` vs the
+  OFFICIAL two's-complement wrapping semantics (`WrapAdd.v`).
+- **γ-sweep-validated (tested, NOT mechanized):** the harder transfer
+  algorithms — float round-to-nearest, known-bits at w=32/64 (issue #105), and
+  the polyhedra Fourier–Motzkin entailment.
+
+Releases are cosign-signed with CycloneDX SBOMs + SHA256SUMS + SLSA v1
+provenance; `rivet validate` is PASS. The roadmap below is **historical through
+v3.2** (shipped); only v3.3+ items are still plans.
 
 ## is this for you?
 

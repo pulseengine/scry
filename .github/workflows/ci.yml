@@ -166,6 +166,24 @@ jobs:
       - name: rivet validate
         run: rivet validate
 
+  # A README is a claim about the system — the same species as a requirement,
+  # gated the same way. `claim-check` re-derives every load-bearing doc claim
+  # (version, admit-free proof count, published-crate count, WrapAdd.v, the
+  # scoped-soundness wording) from live source and fails the build on drift —
+  # so the status section can't silently rot ~40 versions again (issue #97).
+  claim-check:
+    name: Doc claims (claim-check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install pyyaml
+      - name: claim-check claims.yaml
+        run: python3 tools/claim-check.py claims.yaml
+
   spar-parse:
     name: AADL model (spar parse)
     runs-on: ubuntu-latest

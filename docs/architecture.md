@@ -184,11 +184,11 @@ graph TD
     S1[1 · AADL in spar<br/>spar/scry.aadl<br/>✅ parsed by spar] --> S2
     S2[2 · WIT from spar<br/>hand-derived per DD-010<br/>✅ round-trips wasm-tools] --> S3
     S3[3 · Typed rivet artifacts<br/>artifacts/*.yaml + schemas/research-ext.yaml<br/>✅ rivet validate PASS, 63 artifacts] --> S4
-    S4[4 · Code oracle-gated<br/>bazel build //:scry green<br/>scaffold ✅; real fixpoint ⏳ FEAT-001 AC#1] --> S5
-    S5[5 · witness MC/DC<br/>⏳ deferred: scaffold has too few branches] --> S6
-    S6[6 · sigil attestation<br/>⏳ deferred to v0.6 via FEAT-004 + release.yml cosign] --> S7
-    S7[7 · Clean-room verify<br/>⏳ deferred to v1.0 dossier] --> S8
-    S8[8 · Release via release-execution<br/>⏳ pending v0.1.0 tag]
+    S4[4 · Code oracle-gated<br/>bazel build //:scry green<br/>✅ full interval/region/octagon/…/polyhedra fixpoint] --> S5
+    S5[5 · witness MC/DC<br/>✅ live CI gate on scry_mcdc.wasm] --> S6
+    S6[6 · sigil attestation<br/>✅ cosign-signed releases + SLSA provenance] --> S7
+    S7[7 · Clean-room verify<br/>✅ per-release adversarial review] --> S8
+    S8[8 · Release via release-execution<br/>✅ shipped through v3.2.4]
 
     classDef done fill:#1a3a1a,stroke:#5fa05f,color:#fff
     classDef pending fill:#3a1a1a,stroke:#a05f5f,color:#fff
@@ -225,10 +225,16 @@ analyzer gets real branches to measure and real invariants to attest.
 
 ## 6. The cross-component runtime probe
 
-The v0.1 scaffold's `analyzer.analyze` implementation does one
-non-trivial thing: it calls the lattice's `constant_i32(42)` and
-embeds the result in a diagnostic. That call crosses the component
-boundary and exercises the entire WAC-composed runtime wiring:
+> **Historical (v0.1 milestone).** This section describes the very first
+> cross-component probe. As of v3.2.4 `analyze` runs the full
+> interval/region/octagon/pentagon/float/known-bits/handle/segmentation/polyhedra
+> fixpoint over a parsed Wasm module (see the roadmap and the 12 published
+> `scry-sai-*` crates); the runtime wiring below is unchanged.
+
+At the v0.1 milestone, `analyzer.analyze` did one non-trivial thing: it called
+the lattice's `constant_i32(42)` and embedded the result in a diagnostic. That
+call crosses the component boundary and exercises the entire WAC-composed
+runtime wiring:
 
 ```mermaid
 sequenceDiagram

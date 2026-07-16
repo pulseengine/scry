@@ -1,0 +1,86 @@
+# claims.yaml — scry's load-bearing README/doc claims, gated against live evidence.
+#
+# A README is a claim about the system, the same species as a requirement pointing
+# the other way — and it rots for the same reason (no gate). This file makes each
+# load-bearing assertion a traced artifact: a verbatim doc string bound to a
+# predicate re-derived FROM SOURCE (never a number typed in prose). When the
+# evidence moves, the claim fails the build.
+#
+# Run:  python3 tools/claim-check.py claims.yaml     (CI: the `claim-check` job)
+#
+# The motivating drift: issue #97 — the README status section said "v0.1.0 …
+# no real abstract-interpretation logic yet" while the crate was v3.2.4 with 12
+# published domains and 19 admit-free proofs. Fixed 2026-07-16; now gated so it
+# can't silently drift ~40 versions again.
+
+claims:
+  # ── Version / status (issue #97) ──────────────────────────────────────────
+  # The status line names the current release. Bound to the workspace version:
+  # bump Cargo.toml and forget the README → the pattern matches 0 in Cargo.toml →
+  # "measures nothing" → red. (Bumping the version means updating README +
+  # Cargo.toml + this pattern together — exactly the point.)
+  - id: STATUS-VERSION
+    doc: README.md
+    text: "**v3.2.4 shipped**"
+    evidence:
+      - kind: count-min
+        pattern: 'version = "3\.2\.4"'
+        glob: ['Cargo.toml']
+        min: 1
+
+  # ── Admit-free proofs ─────────────────────────────────────────────────────
+  # The README claims 0 Admitted/admit/Axiom across the Rocq proofs. Re-counted
+  # from the actual .v source (not a typed figure); a single admit/axiom → red.
+  - id: ADMIT-FREE
+    doc: README.md
+    text: "0 `Admitted` / `admit` /"
+    evidence:
+      - kind: count-max
+        pattern: '\bAdmitted\b'
+        glob: ['proofs/rocq/**/*.v']
+        max: 0
+      - kind: count-max
+        pattern: '\bAxiom\s+\w'
+        glob: ['proofs/rocq/**/*.v']
+        max: 0
+      - kind: count-max
+        pattern: '\badmit\s*\.'
+        glob: ['proofs/rocq/**/*.v']
+        max: 0
+
+  # ── Published-crate count ─────────────────────────────────────────────────
+  # "12 pure scry-sai-* crates". Re-counted from the publish manifest; add a
+  # 13th crate and forget the README → 13 > 12 → red.
+  - id: CRATES-12
+    doc: README.md
+    text: "12 pure"
+    evidence:
+      - kind: count-max
+        pattern: '"scry-sai-[a-z]+"'
+        glob: ['scripts/publish.rs']
+        max: 12
+      - kind: count-min       # pin exact: a REMOVED crate also makes "12" stale
+        pattern: '"scry-sai-[a-z]+"'
+        glob: ['scripts/publish.rs']
+        min: 12
+
+  # ── i32.add vs OFFICIAL wrapping semantics (the differentiator) ────────────
+  # The README's scoped soundness claim rests on WrapAdd.v existing. If the proof
+  # is deleted/renamed, the claim fails rather than dangling.
+  - id: WRAPADD-EXISTS
+    doc: README.md
+    text: "`WrapAdd.v`"
+    evidence:
+      - kind: file-exists
+        path: proofs/rocq/WrapAdd.v
+
+  # ── Soundness stated as SCOPED, not flattened ─────────────────────────────
+  # A formal-methods reviewer distrusts a flat "verified" badge. The README must
+  # carry the mechanized-vs-γ-swept distinction verbatim (same wording as the
+  # deployed dashboard's Scope & limitations block).
+  - id: SOUNDNESS-SCOPED
+    doc: README.md
+    text: "γ-sweep-validated (tested, NOT mechanized)"
+    evidence:
+      - kind: file-exists
+        path: docs/qualification-dossier-v1.md
