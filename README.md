@@ -60,24 +60,25 @@ deductive-proof and bounded-model-checking layers do not staff.
 
 ## status
 
-**v0.1.0 shipped 2026-05-27** —
-[release page](https://github.com/pulseengine/scry/releases/tag/v0.1.0)
-with cosign-signed `scry-0.1.0-wasm32-wasip2.wasm` + per-crate
-CycloneDX SBOMs + SHA256SUMS + SLSA v1 provenance. The full
-PulseEngine Wasm-component toolchain runs end-to-end on scry's own
-build (the dogfood gate for [[DD-008]]). v0.1.0 ships the
-**structural scaffold**: no real abstract-interpretation logic yet.
+**v3.0.0 shipped 2026-07-01** — "Qualifiable + differentiated"
+(see [CHANGELOG](CHANGELOG.md)). scry is a **sound abstract interpreter for
+WebAssembly**: it over-approximates, so it never misses a behaviour that can
+occur — the DO-333 static-analysis leg of the PulseEngine pipeline. Artifacts
+are cosign-signed with CycloneDX SBOMs + SLSA provenance, and the full
+Wasm-component toolchain runs end-to-end on scry's own build (the dogfood gate
+for [[DD-008]]).
 
-The implementation work — interval-domain fixpoint on a parsed Wasm
-module, host wasmtime test harness, Verus + Rocq proof targets,
-region-memory domain — lands progressively from v0.2. Follow the
-[release plan](#release-plan) below; each numbered version closes a
-specific verified-evidence increment.
+What ships today — not scaffold — includes an interval-domain fixpoint over a
+parsed Wasm module, an IEEE-754 float domain, and Component-Model
+handle-lifetime analysis, with **mechanized, admit-free Rocq** soundness for
+specific properties: `proofs/rocq/WrapAdd.v` proves the shipped `i32.add` sound
+against the *official* wrapping Wasm semantics, alongside per-domain lattice
+proofs. A tool-qualification dossier ships for assessors.
 
-`rivet validate` here is PASS with 0 warnings; 64 artifacts span 11
-types across `common + dev + research + research-ext + safety-case`.
-Everything in this README that isn't tagged "v0.1.0" is still a
-*requirements artifact* awaiting the labelled version.
+Scope, honestly: soundness is mechanized for named properties and domains, not
+for the whole analyzer — see the per-feature proof targets and the honesty
+ledger. Sections of this README still tagged `status: proposed` remain
+requirements artifacts awaiting their labelled version.
 
 ## is this for you?
 
