@@ -18,9 +18,14 @@ artifacts:
   #   v3.2  "Content-sensitive memory"      — linear-memory segmentation:
   #         track values inside memory ranges instead of one havoc'd ⊤
   #         blob (scry's biggest current precision cliff). FEAT-058.
-  #   v3.3  "Precision ceiling"             — convex polyhedra, ELINA-
+  #   v3.3  "Agent-verifiable"              — close the fix-verify loop so an
+  #         AI agent is GATED on a sound checker: stable obligation identity
+  #         + `scry verify` adjudication (depth), plus the MCP/query/schema
+  #         surfaces and the precision work that make 6,191 unproven
+  #         obligations actionable at all (breadth). REQ-020, FEAT-064..071.
+  #   v3.4  "Precision ceiling"             — convex polyhedra, ELINA-
   #         decomposed, for exact linear inequalities above the octagon.
-  #         FEAT-057. Sequenced AFTER v3.2 (segmentation first).
+  #         FEAT-057. Displaced from v3.3 on 2026-08-06 (see its section).
   # Release axis = the top-level `release:` field (rivet >= 0.21). Track with
   # `rivet release status <ver>` / `rivet list --release <ver>`.
   # ══════════════════════════════════════════════════════════════════════
@@ -197,6 +202,58 @@ artifacts:
         target: G-005
       - type: references-paper
         target: AC-015
+
+  # ── v3.3 requirement (from the Wasm Research Day read-out) ────────────
+
+  - id: REQ-020
+    type: requirement
+    title: "An AI agent can be GATED on scry: stable obligation identity + a machine-checkable oracle"
+    status: proposed
+    release: v3.3.0
+    description: >
+      REQ-018 shipped ranked, honesty-classed advisories each carrying a
+      VERIFICATION ORACLE — but as PROSE ("re-run scry: this trap_check becomes
+      ProvenSafe"). A human can follow that; an agent loop cannot be gated on it.
+      Two things block the loop, and this requirement closes both.
+
+      (1) IDENTITY. scry keys every finding on `(func_index, pc)`. The moment an
+      agent edits the module and recompiles, every pc shifts, so "did my fix
+      discharge obligation X?" is unanswerable — DISCHARGED and MOVED are
+      indistinguishable. Without identity that survives the edit there is no
+      loop, only a diff of two unrelated reports. scry shall therefore emit a
+      STABLE, content-addressed obligation identity that is invariant under
+      edits elsewhere in the module and elsewhere in the same function.
+
+      (2) ADJUDICATION. scry shall be able to compare a new run against a prior
+      one and classify each obligation: discharged / still-open / regressed /
+      moved / removed-with-code. That converts the v3.1 prose oracle into a
+      machine verdict, so an agent's edit is gated by a SOUND CHECKER rather
+      than by tests — the actual value of REQ-018, finally executable.
+
+      MOTIVATION (measured, not assumed): scry's own self-analysis reports 0
+      proven faults against 6,191 unproven obligations and 1,962 precision gaps.
+      No agent can act on 6,191 items, so for an AI consumer PRECISION IS THE
+      PRODUCT — an unproven obligation is a bill for the analyzer's imprecision
+      handed to the user. Agent-usability work and precision work are the same
+      work; this release scopes both.
+
+      HONESTY: a rewritten function SHOULD lose its obligation IDs. That is
+      correct behaviour (the site genuinely no longer exists), not a defect, and
+      the adjudicator must report it as `removed-with-code`, never as
+      `discharged`.
+    tags: [ai-agent, fix-verify-loop, identity, oracle, precision, v3.3]
+    fields:
+      priority: must
+      category: functional
+    links:
+      - type: traces-to
+        target: REQ-018
+      - type: traces-to
+        target: REQ-017
+      - type: traces-to
+        target: G-005
+      - type: evaluates-tech
+        target: TE-011
 
   # ══════════════════════════════════════════════════════════════════════
   # RELEASE v2.6.0 — "Make the analysis observable"
@@ -661,15 +718,22 @@ artifacts:
         target: REQ-017
 
   # ══════════════════════════════════════════════════════════════════════
-  # RELEASE v3.3.0 — "Precision ceiling" (the second big domain bet)
+  # RELEASE v3.4.0 — "Precision ceiling" (the second big domain bet)
   # Convex polyhedra above the octagon. Sequenced AFTER v3.2 segmentation.
+  #
+  # SCOPE MOVE (2026-08-06, logged not silent): this held the v3.3.0 slot.
+  # Displaced to v3.4.0 by the Wasm Research Day read-out — agent-consumability
+  # (REQ-020) outranks a precision ceiling we cannot yet wire into the fixpoint,
+  # and slice-2 was already reframed as a multi-slice fixpoint arc rather than
+  # the cheap straight-line pass originally planned (vacuous over wrapping ints).
+  # Nothing in v3.3.0 depends on it; the shipped scry-sai-poly crate is unaffected.
   # ══════════════════════════════════════════════════════════════════════
 
   - id: FEAT-057
     type: feature
-    title: "v3.3 — Convex polyhedra domain (ELINA-decomposed)"
+    title: "v3.4 — Convex polyhedra domain (ELINA-decomposed)"
     status: proposed
-    release: v3.3.0
+    release: v3.4.0
     description: >
       Convex polyhedra (Cousot-Halbwachs 1978, AC-012; DD-019) for exact linear
       inequalities Σ a_i·x_i ≤ c above the octagon, made tractable by ELINA-style
@@ -868,3 +932,239 @@ artifacts:
         target: REQ-017
       - type: evaluates-tech
         target: TE-011
+
+  # ══════════════════════════════════════════════════════════════════════
+  # RELEASE v3.3.0 — "Agent-verifiable"  (REQ-020)
+  # Read-out from Wasm Research Day (6 Aug 2026): the AI-consumer axis is the
+  # decisive one. Two halves, deliberately paired:
+  #   DEPTH   — close the fix-verify loop (identity + adjudication), so an
+  #             agent's edit is gated by a sound checker instead of by tests.
+  #   BREADTH — make the analysis reachable and askable by an agent at all
+  #             (MCP surface, queries, versioned schema, manifest), plus the
+  #             precision work that makes 6,191 obligations actionable.
+  # Thesis: for an AI consumer, precision IS the product — an unproven
+  # obligation is a bill for the analyzer's imprecision handed to the user.
+  # ══════════════════════════════════════════════════════════════════════
+
+  # ── DEPTH: the spine ──────────────────────────────────────────────────
+
+  - id: FEAT-064
+    type: feature
+    title: "v3.3 — Stable obligation identity (survives the edit)"
+    status: proposed
+    release: v3.3.0
+    description: >
+      Replace raw `(func_index, pc)` as the EXTERNAL key for every finding with a
+      content-addressed obligation ID (DD-020). Composed of: function identity
+      (name-section name → export name → a hash of the body's shape, in that
+      order of preference), a structural path through the CFG (block/loop nesting
+      indices, not raw pcs), the operator kind, and the operator's index within
+      its own basic block. Result: the ID is invariant under edits elsewhere in
+      the module AND elsewhere in the same function, so a fix in one place does
+      not renumber every obligation in the binary.
+      `(func_index, pc)` stays in the output as a positional convenience; the ID
+      becomes the thing consumers key on.
+      Soundness/mechanization scope: the provable property is directional —
+      `id(a) == id(b)` implies a and b denote the same structural site. The
+      converse does NOT hold (a rewritten function legitimately produces new
+      IDs) and must not be claimed.
+    tags: [ai-agent, identity, fix-verify-loop, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a module and an edit that changes code in an unrelated function, When scry re-analyzes, Then every obligation ID outside the edited function is unchanged."
+        - "Given an edit that inserts instructions EARLIER in the same function, When scry re-analyzes, Then obligation IDs for later sites in that function are unchanged (pc-shift immunity)."
+        - "Given proofs/rocq/ObligationId.v, When built, Then `id equality implies same structural site` is proven admit-free; the converse is explicitly NOT claimed."
+    links:
+      - type: traces-to
+        target: REQ-020
+      - type: traces-to
+        target: REQ-018
+
+  - id: FEAT-065
+    type: feature
+    title: "v3.3 — `scry verify --against`: scry adjudicates its own oracle"
+    status: proposed
+    release: v3.3.0
+    description: >
+      Turn the v3.1 prose verification oracle into a machine verdict. `scry verify
+      --against <previous.json>` compares a fresh analysis with a prior one and
+      classifies every obligation by its stable ID (FEAT-064):
+        discharged          — was open, now PROVEN-SAFE (the fix worked)
+        still-open          — unchanged
+        regressed           — was PROVEN-SAFE, now an obligation (the fix broke it)
+        moved               — same ID, different position (informational, NOT progress)
+        removed-with-code   — the site no longer exists (NOT a discharge)
+      Exit code is machine-usable so an agent loop can gate on it. This is the
+      capability REQ-018 promised: an agent's edit judged by a SOUND
+      over-approximation, so a satisfied oracle is a proof the trap cannot fire —
+      not "the tests still pass".
+      HONESTY (the load-bearing distinction): `removed-with-code` must never be
+      reported as `discharged`. Deleting the code that contained an unproven
+      obligation is not proving anything, and an agent optimising against a
+      conflated verdict would learn to delete rather than to fix.
+    tags: [ai-agent, oracle, fix-verify-loop, gate, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a POTENTIAL-TRAP obligation and an edit that adds a correct guard, When `scry verify --against` runs, Then that obligation is reported `discharged` and the exit code signals success."
+        - "Given an edit that DELETES the function containing an open obligation, When verify runs, Then it is reported `removed-with-code`, never `discharged`."
+        - "Given an edit that invalidates a previously PROVEN-SAFE site, When verify runs, Then it is reported `regressed` and the exit code signals failure."
+    links:
+      - type: traces-to
+        target: REQ-020
+      - type: traces-to
+        target: REQ-018
+      - type: traces-to
+        target: FEAT-064
+
+  # ── BREADTH: six surfaces, each independently shippable ───────────────
+
+  - id: FEAT-066
+    type: feature
+    title: "v3.3 — scry-mcp: analyze / query / verify as MCP tools"
+    status: proposed
+    release: v3.3.0
+    description: >
+      An MCP server exposing scry to agents directly. Agents cannot run `cargo`;
+      today consuming scry means shelling out or scraping a 5.7 MB JSON. Tools:
+      `analyze` (module → summary + counts), `query` (FEAT-067 filters),
+      `verify` (FEAT-065 adjudication). Returns structured results, never HTML.
+      Single biggest adoption lever for the AI-consumer axis (TE-011:
+      structured-primary — agents under-read rendered output).
+    tags: [ai-agent, mcp, interop, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given an MCP client, When it calls `analyze` on a Wasm module, Then it receives a structured summary (counts by advisory class, trap verdicts, gaps) without parsing HTML or reading a multi-MB dump."
+    links:
+      - type: traces-to
+        target: REQ-020
+      - type: traces-to
+        target: REQ-017
+      - type: evaluates-tech
+        target: TE-011
+
+  - id: FEAT-067
+    type: feature
+    title: "v3.3 — Query filters over AnalysisResult (FEAT-056 lite)"
+    status: proposed
+    release: v3.3.0
+    description: >
+      A filter/selection surface so a consumer asks instead of scrapes —
+      e.g. "every site where kind=Top and op in (call_indirect, memory.grow)",
+      "every UnprovenObligation in function $f". The bounded, shippable slice of
+      the FEAT-056 queryable-CPG idea: filtering + projection over the existing
+      result, no new graph substrate and no query language to design.
+    tags: [ai-agent, query, observability, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given an AnalysisResult, When a consumer filters by advisory class / gap kind / operator / function, Then it receives only the matching records with their stable obligation IDs."
+    links:
+      - type: traces-to
+        target: REQ-017
+      - type: traces-to
+        target: REQ-020
+
+  - id: FEAT-068
+    type: feature
+    title: "v3.3 — guidance.json v2: versioned schema carrying obligation IDs"
+    status: proposed
+    release: v3.3.0
+    description: >
+      The v3.2.2 guidance feed shipped un-versioned. v2 adds an explicit
+      `schema` field, the FEAT-064 stable obligation IDs, per-class counts, and
+      the module hash that binds the feed to one exact module. Documented as a
+      stable contract so an agent can code against it across scry releases.
+    tags: [ai-agent, schema, contract, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given guidance.json v2, When a consumer reads it, Then every advisory carries a stable obligation ID and the document declares its schema version and module hash."
+    links:
+      - type: traces-to
+        target: REQ-018
+      - type: traces-to
+        target: REQ-013
+
+  - id: FEAT-069
+    type: feature
+    title: "v3.3 — safe-accesses.json: proven-safe sites for bounds-check elision"
+    status: proposed
+    release: v3.3.0
+    description: >
+      Export the PROVEN-SAFE OutOfBounds verdicts scry already computes as a flat,
+      engine-agnostic list keyed on the wasmparser operator index — the channel
+      synth's `ProvenSafeBoundsChecker` consumes (pulseengine/synth#901) to elide
+      software bounds checks on no-MMU targets, where every access is checked and
+      synth measures that at ~25-40% overhead.
+      Consumer contract: `module_sha256` binds the verdicts to one module and the
+      consumer FAILS CLOSED on mismatch; verdicts are proven against the memory's
+      guaranteed MINIMUM size, so growth cannot invalidate them; absence from the
+      list means "not proven", never "unsafe".
+      Interop note: the same shape as the output contract in WasmBounds (Sudo &
+      Winstein, Stanford), which is a cleaner interface than our full feed.
+    tags: [bounds-elision, synth, interop, embedded, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a module with provably in-bounds i32 accesses, When scry exports safe-accesses.json, Then each entry carries (func, pc, op, width) plus the module hash, and a consumer that fails the hash check elides nothing."
+    links:
+      - type: traces-to
+        target: REQ-014
+      - type: traces-to
+        target: REQ-004
+
+  - id: FEAT-070
+    type: feature
+    title: "v3.3 — Guard refinement for `br_if` on a bare value (precision)"
+    status: proposed
+    release: v3.3.0
+    description: >
+      Our guard refinement recognises `local.get X; i32.const c; <cmp>; br_if`,
+      `local.get X; i32.eqz; br_if`, and the two-local compare. It does NOT handle
+      `local.tee $x; br_if` — a branch on the raw value's truthiness (implicit
+      `≠ 0`), which is what LLVM emits for count-to-zero loops and is therefore
+      common in real bounds-check code. Fall-through gets the local `= {0}`, the
+      taken edge gets `≠ 0`; the dual of the `i32.eqz` shape already supported.
+      Credit: this shape is handled by WasmBounds' BrIf rule (Sudo & Winstein);
+      their (value, expression) operand-stack pairing generalises better than our
+      syntactic peephole, and a light provenance tag (`Local(i) | Const | Mem |
+      Other`) on the abstract stack is the follow-on worth taking from it.
+      Directly reduces the 6,191 unproven obligations that make the output
+      unusable to an agent — precision as agent UX (REQ-020).
+    tags: [precision, guard-refinement, ai-agent, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a count-to-zero loop guarded by `local.tee $i; br_if`, When scry analyzes it, Then $i is bounded on both edges instead of ⊤, and the loop's memory accesses become eligible for PROVEN-SAFE."
+    links:
+      - type: traces-to
+        target: REQ-020
+      - type: traces-to
+        target: REQ-014
+
+  - id: FEAT-071
+    type: feature
+    title: "v3.3 — Machine-readable capability manifest (the Scope block as data)"
+    status: proposed
+    release: v3.3.0
+    description: >
+      The v3.2.2 dashboard states scry's scope in prose: what is mechanized vs
+      γ-sweep-validated, and what scry does NOT prove. An agent deciding whether
+      to trust a verdict needs that as DATA, not paragraphs. Emit a manifest
+      enumerating each domain/transfer with its evidence kind
+      (`mechanized | gamma-swept | asserted`) and the named open gaps.
+      Same single source as the claim ledger (claims.yaml), so the manifest, the
+      dashboard prose, and CI cannot drift apart.
+    tags: [ai-agent, honesty, qualification, schema, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the manifest, When an agent reads it, Then every domain carries an evidence kind and the not-proven list is enumerated rather than prose — and claim-check gates it against the same source as the README claims."
+    links:
+      - type: traces-to
+        target: REQ-017
+      - type: traces-to
+        target: G-005
