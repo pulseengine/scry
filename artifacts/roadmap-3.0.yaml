@@ -973,7 +973,9 @@ artifacts:
       phase: phase-3
       acceptance-criteria:
         - "Given a module and an edit that changes code in an unrelated function, When scry re-analyzes, Then every obligation ID outside the edited function is unchanged."
-        - "Given an edit that inserts instructions EARLIER in the same function, When scry re-analyzes, Then obligation IDs for later sites in that function are unchanged (pc-shift immunity)."
+        - "Given an edit that inserts instructions EARLIER in the same function AND the inserted code contains no operator of the same kind in the same region and opens no new block/loop/if at the same-or-shallower depth, When scry re-analyzes, Then obligation IDs for later sites in that function are unchanged (pc-shift immunity). QUALIFIED after clean-room review: the unrestricted form of this AC is FALSE — see DD-020's limitation section. The original wording was met only by a fixture selected around the failing case."
+        - "Given one operator that raises SEVERAL obligations (an `i32.div_s` raises both div-by-zero and signed-overflow at one pc), When scry stamps identities, Then the obligations receive DISTINCT ids — the site alone is not a discriminator."
+        - "Given a module-scoped advisory (unbounded-stack, which uses a `(func 0, pc 0)` sentinel rather than a real site), When scry stamps identities, Then it receives a module-scoped identity that neither collides with a genuine advisory at func 0 pc 0 nor drifts when func 0's first instruction changes."
         - "Given proofs/rocq/ObligationId.v, When built, Then `id equality implies same structural site` is proven admit-free; the converse is explicitly NOT claimed."
     links:
       - type: traces-to
@@ -999,6 +1001,17 @@ artifacts:
       capability REQ-018 promised: an agent's edit judged by a SOUND
       over-approximation, so a satisfied oracle is a proof the trap cannot fire —
       not "the tests still pass".
+      CONSERVATISM (added after the FEAT-064 clean-room): obligation identity is
+      not injective across arbitrary edits — a same-kind operator deleted earlier
+      in a region transfers its id to the next one (DD-020 limitation). The
+      adjudicator must therefore treat `discharged` exactly as the analyzer
+      treats PROVEN-SAFE: claim it only when it is certain. When a function's
+      same-kind operator multiset changed in a way that could alias, the verdict
+      degrades to `uncertain`, never to `discharged`. A sound checker that
+      over-claims a discharge is the same error as an unsound analysis, one layer
+      up — and it is the error an agent optimising against the verdict would
+      exploit fastest.
+
       HONESTY (the load-bearing distinction): `removed-with-code` must never be
       reported as `discharged`. Deleting the code that contained an unproven
       obligation is not proving anything, and an agent optimising against a

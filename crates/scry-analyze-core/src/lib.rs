@@ -666,6 +666,15 @@ pub struct Advisory {
     /// state. `None` for other classes. A ready seed for a repro / regression
     /// test; see [`Counterexample`] for the reachability caveat.
     pub counterexample: Option<Counterexample>,
+    /// FEAT-064 (REQ-020, DD-020): a STABLE, content-addressed identity for this
+    /// site — invariant under instruction insertion elsewhere in the module and
+    /// elsewhere in the same function, unlike `(func_index, pc)` which renumbers
+    /// on any edit. It is what a fix-verify loop keys on: without it a consumer
+    /// comparing two runs cannot distinguish DISCHARGED from MOVED.
+    ///
+    /// Empty when no identity could be derived. Opaque by construction — the
+    /// layout is not a contract; do not parse it.
+    pub obligation_id: String,
 }
 
 /// FEAT-055 (REQ-018): a candidate counterexample for an `UnprovenObligation`
@@ -2385,13 +2394,16 @@ pub fn analyze(
         compute_handle_findings(&defined_funcs, &import_func_meta, import_func_count);
     // FEAT-059: synthesise the sound findings into ranked remediation guidance
     // (pure synthesis over the results above; borrows before they are moved).
-    let advisories = compute_advisories(
+    let mut advisories = compute_advisories(
         &gaps,
         &trap_checks,
         &handle_findings,
         &stack_usage,
         memory_min_bytes,
     );
+    // FEAT-064: give every advisory an identity that survives the next edit, so
+    // a consumer comparing two runs can tell DISCHARGED from MOVED.
+    stamp_obligation_ids(&mut advisories, &defined_funcs, &function_meta);
 
     Ok(AnalysisResult {
         invariants,
@@ -2988,6 +3000,156 @@ fn trap_counterexample(kind: TrapKind, op: &str, memory_size_bytes: u64) -> Coun
 /// finding it derives from (a POTENTIAL-TRAP becomes an `UnprovenObligation`,
 /// never a `DefiniteFault`). Ranked DefiniteFault > UnprovenObligation >
 /// PrecisionGap > LeverageableFact.
+/// FEAT-064 (REQ-020, DD-020): the STRUCTURAL KEY of every operator in a body —
+/// the part of an obligation identity that survives an edit.
+///
+/// For each pc returns `(path, ordinal)`:
+///   * `path` — the chain of enclosing `block`/`loop`/`if` SIBLING ordinals from
+///     the function root, e.g. `"b0.l1"` = the 2nd region (a loop) inside the
+///     1st region (a block). Raw pcs never appear, which is exactly why
+///     inserting instructions earlier in the function does not disturb it.
+///   * `ordinal` — the operator's index among SAME-KIND operators within its own
+///     enclosing region, so two `i32.load`s in one block stay distinguishable
+///     without reintroducing a global counter.
+///
+/// Pure function of the operator list: it perturbs no analysis state and is
+/// independently testable.
+fn structural_keys(ops: &[Operator<'_>]) -> Vec<(String, u32)> {
+    let mut out: Vec<(String, u32)> = Vec::with_capacity(ops.len());
+    // Enclosing regions as (kind marker, sibling ordinal at that depth).
+    let mut path: Vec<(char, u32)> = Vec::new();
+    // How many regions have been opened so far at each depth.
+    let mut opened: Vec<u32> = alloc::vec![0];
+    // Per-region same-kind operator counters.
+    let mut kinds: Vec<alloc::collections::BTreeMap<String, u32>> =
+        alloc::vec![alloc::collections::BTreeMap::new()];
+
+    for op in ops {
+        let path_str = path
+            .iter()
+            .map(|(c, n)| format!("{c}{n}"))
+            .collect::<Vec<_>>()
+            .join(".");
+        let kind = op_report_name(op);
+        let slot = kinds
+            .last_mut()
+            .expect("kind stack non-empty")
+            .entry(kind)
+            .or_insert(0);
+        let ordinal = *slot;
+        *slot += 1;
+        out.push((path_str, ordinal));
+
+        let marker = match op {
+            Operator::Block { .. } => Some('b'),
+            Operator::Loop { .. } => Some('l'),
+            Operator::If { .. } => Some('i'),
+            _ => None,
+        };
+        if let Some(m) = marker {
+            let depth = path.len();
+            let n = opened[depth];
+            opened[depth] += 1;
+            path.push((m, n));
+            opened.push(0);
+            kinds.push(alloc::collections::BTreeMap::new());
+        } else if matches!(op, Operator::End) {
+            // The body's final `End` closes no region — guard the pops.
+            if !path.is_empty() {
+                path.pop();
+                opened.pop();
+                kinds.pop();
+            }
+        }
+    }
+    out
+}
+
+/// FEAT-064: hash of a body's structural SHAPE (opcode sequence, immediates
+/// elided). The last-resort function identity, used only when a module carries
+/// neither a name section nor an export for the function — see DD-020 for why
+/// it is deliberately the weakest of the three.
+fn body_shape_hash(ops: &[Operator<'_>]) -> String {
+    let mut h = Sha256::new();
+    for op in ops {
+        h.update(op_report_name(op).as_bytes());
+        h.update(b";");
+    }
+    let d = h.finalize();
+    let mut out = String::with_capacity(16);
+    for b in d.iter().take(8) {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// FEAT-064: the content address itself. Opaque, fixed-width; consumers must not
+/// parse it (DD-020).
+fn obligation_id_of(func_ident: &str, path: &str, kind: &str, ordinal: u32, code: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(func_ident.as_bytes());
+    h.update(b"|");
+    h.update(path.as_bytes());
+    h.update(b"|");
+    h.update(kind.as_bytes());
+    h.update(b"|");
+    h.update(ordinal.to_le_bytes());
+    // Clean-room: one operator can raise SEVERAL obligations (an `i32.div_s`
+    // raises both div-by-zero and signed-overflow), so the site alone does not
+    // discriminate. The advisory's code is the fifth component.
+    h.update(b"|");
+    h.update(code.as_bytes());
+    let d = h.finalize();
+    let mut out = String::with_capacity(16);
+    for b in d.iter().take(8) {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// FEAT-064: does this advisory describe the MODULE rather than a code site?
+/// Such advisories carry `(func 0, pc 0)` as a SENTINEL, so giving them a site
+/// identity would collide with a genuine advisory there, drift whenever func 0's
+/// first instruction changes, and yield nothing when index 0 is an import
+/// (clean-room finding).
+fn is_module_scoped(code: &str) -> bool {
+    code == "unbounded-stack"
+}
+
+/// FEAT-064: stamp every advisory with its stable obligation identity.
+/// Function identity is the name-section / export name when the module carries
+/// one, else the body-shape hash (DD-020's precedence).
+fn stamp_obligation_ids(
+    advisories: &mut [Advisory],
+    defined_funcs: &[DefinedFunc<'_>],
+    function_meta: &[FunctionMeta],
+) {
+    for a in advisories.iter_mut().filter(|a| is_module_scoped(&a.code)) {
+        a.obligation_id = obligation_id_of("<module>", "", "<module>", 0, &a.code);
+    }
+    for f in defined_funcs {
+        let ident = function_meta
+            .iter()
+            .find(|m| m.func_index == f.abs_index)
+            .and_then(|m| m.name.clone())
+            .unwrap_or_else(|| body_shape_hash(&f.ops));
+        let keys = structural_keys(&f.ops);
+        for a in advisories
+            .iter_mut()
+            .filter(|a| a.func_index == f.abs_index && !is_module_scoped(&a.code))
+        {
+            if let Some((path, ordinal)) = keys.get(a.pc as usize) {
+                let kind = f
+                    .ops
+                    .get(a.pc as usize)
+                    .map(op_report_name)
+                    .unwrap_or_else(|| a.code.clone());
+                a.obligation_id = obligation_id_of(&ident, path, &kind, *ordinal, &a.code);
+            }
+        }
+    }
+}
+
 fn compute_advisories(
     gaps: &[Gap],
     trap_checks: &[TrapCheck],
@@ -3025,6 +3187,7 @@ fn compute_advisories(
             suggested_action: action.into(),
             verification: "re-run scry: this handle_findings entry disappears".into(),
             counterexample: None,
+            obligation_id: String::new(),
         });
     }
 
@@ -3064,6 +3227,7 @@ fn compute_advisories(
                         t.op, code
                     ),
                     counterexample: Some(trap_counterexample(t.kind, &t.op, memory_size_bytes)),
+                obligation_id: String::new(),
                 });
             }
             TrapVerdict::ProvenSafe => {
@@ -3090,6 +3254,7 @@ fn compute_advisories(
                         t.op
                     ),
                     counterexample: None,
+                obligation_id: String::new(),
                 });
             }
         }
@@ -3130,6 +3295,7 @@ fn compute_advisories(
                 g.func_index, g.pc
             ),
             counterexample: None,
+                obligation_id: String::new(),
         });
     }
 
@@ -3148,6 +3314,7 @@ fn compute_advisories(
                     .into(),
             verification: "re-run scry: stack_usage.max_stack_bytes becomes Bytes(n)".into(),
             counterexample: None,
+                obligation_id: String::new(),
         });
     }
 
@@ -3883,49 +4050,98 @@ impl Interp<'_, '_> {
         &mut labels[idx]
     }
 
-    /// FEAT-016 slice-2b-i guard refinement. If the ops at `pc` are the
-    /// canonical comparison-guarded branch `local.get L; i32.const C; <signed
-    /// cmp>; br_if D` (4 ops) or `local.get L; i32.eqz; br_if D` (3 ops),
-    /// refine `L`'s interval by the guard on both edges — record the
-    /// taken-edge locals (guard true) into label `D`, set `ctx.locals` to the
-    /// not-taken-edge locals (guard false) — and return the pc just past the
-    /// idiom. Returns `None` (caller handles `pc` normally) for anything else.
-    /// The idiom's net operand-stack effect is zero (push L, push C, cmp pops
-    /// 2 / pushes 1, br_if pops 1), so the stack is left untouched.
+    /// FEAT-016 slice-2b-i guard refinement, extended by FEAT-070 (REQ-020).
+    /// If the ops at `pc` are a guarded branch on a single local, refine `L`'s
+    /// interval by the guard on both edges — record the taken-edge locals
+    /// (guard true) into label `D`, set `ctx.locals` to the not-taken-edge
+    /// locals (guard false) — and return the pc just past the idiom. Returns
+    /// `None` (caller handles `pc` normally) for anything else.
+    ///
+    /// Recognised shapes, where the leading op is `local.get L` **or**
+    /// `local.tee L` (FEAT-070 — LLVM emits the tee form constantly, for
+    /// increment-and-test and count-to-zero loops):
+    ///
+    /// ```text
+    ///   <get|tee> L; i32.const C; <signed cmp>; br_if D   (4 ops)
+    ///   <get|tee> L; i32.eqz; br_if D                     (3 ops)  taken ⇔ L == 0
+    ///   <get|tee> L; br_if D                              (2 ops)  taken ⇔ L ≠ 0
+    /// ```
+    ///
+    /// The 2-op form is the bare-truthiness branch: `br_if` takes the edge when
+    /// the popped value is non-zero, so the FALL-THROUGH pins `L` to exactly 0.
+    /// That is the dual of the `i32.eqz` shape and the reason a count-to-zero
+    /// loop's exit value is knowable at all.
+    ///
+    /// Operand stack: with a leading `local.get` the idiom's net effect is zero
+    /// (push L, push C, cmp pops 2 / pushes 1, br_if pops 1). With a leading
+    /// `local.tee` it is **−1** — the tee'd value arrives on the stack and is
+    /// ultimately consumed by the `br_if` — so the tee form pops once. A
+    /// shape-blind skip would leak or underflow the modelled stack.
+    ///
+    /// Soundness note for the tee form: `local.tee L` **assigns** `L`, and this
+    /// peephole bypasses the normal `LocalTee` transfer (including
+    /// [`Self::octagon_transfer`]). The assignment is therefore applied here and
+    /// `L`'s octagon relations are FORGOTTEN — retaining a relation for a local
+    /// that was just overwritten would be unsound. All bail-out checks run
+    /// before any mutation, so a `None` return leaves `ctx` untouched and the
+    /// caller can re-process the ops normally.
     fn try_guard_brif(&self, pc: usize, ctx: &mut FuncCtx, labels: &mut [Label]) -> Option<usize> {
         if ctx.degraded {
             return None;
         }
         let ops = self.ops;
-        // Recognise `local.get L; i32.const C; <cmp>; br_if D`.
-        let (local, c, op, depth, next) = match ops.get(pc)? {
-            Operator::LocalGet { local_index } => {
-                let l = *local_index;
-                match (ops.get(pc + 1)?, ops.get(pc + 2)?, ops.get(pc + 3)) {
-                    // 4-op: local.get L; const C; cmp; br_if D
-                    (
-                        Operator::I32Const { value },
-                        cmp,
-                        Some(Operator::BrIf { relative_depth }),
-                    ) => {
-                        let gop = guard_op(cmp)?;
-                        (l, *value as i64, gop, *relative_depth, pc + 4)
-                    }
-                    // 3-op: local.get L; i32.eqz; br_if D  (L == 0)
-                    (Operator::I32Eqz, Operator::BrIf { relative_depth }, _) => {
-                        (l, 0, GuardOp::Eq, *relative_depth, pc + 3)
-                    }
-                    _ => return None,
-                }
+        // Leading op: a read (`local.get`) or a read-modify (`local.tee`).
+        let (local, is_tee) = match ops.get(pc)? {
+            Operator::LocalGet { local_index } => (*local_index, false),
+            Operator::LocalTee { local_index } => (*local_index, true),
+            _ => return None,
+        };
+        // Guard shape, longest match first.
+        let (c, op, depth, next) = match (ops.get(pc + 1)?, ops.get(pc + 2), ops.get(pc + 3)) {
+            (Operator::I32Const { value }, Some(cmp), Some(Operator::BrIf { relative_depth })) => {
+                (*value as i64, guard_op(cmp)?, *relative_depth, pc + 4)
             }
+            (Operator::I32Eqz, Some(Operator::BrIf { relative_depth }), _) => {
+                (0, GuardOp::Eq, *relative_depth, pc + 3)
+            }
+            // FEAT-070: bare truthiness — taken ⇔ L ≠ 0, fall-through ⇔ L == 0.
+            (Operator::BrIf { relative_depth }, _, _) => (0, GuardOp::Ne, *relative_depth, pc + 2),
             _ => return None,
         };
 
-        // The local must be a tightenable i32 interval; otherwise no refine.
-        let iv = match ctx.locals.get(local as usize) {
-            Some(AbstractValue::I32Interval(iv)) => *iv,
-            _ => return None,
+        // ── all bail-out checks BEFORE any mutation ──────────────────────
+        if local as usize >= ctx.locals.len() {
+            return None;
+        }
+        // The interval to refine: for the tee form it is the value being
+        // assigned (the stack top), not the local's stale pre-assignment value.
+        let iv = if is_tee {
+            match ctx.operand_stack.last() {
+                Some(AbstractValue::I32Interval(iv)) => *iv,
+                _ => return None,
+            }
+        } else {
+            match ctx.locals.get(local as usize) {
+                Some(AbstractValue::I32Interval(iv)) => *iv,
+                _ => return None,
+            }
         };
+
+        // ── mutation from here on ────────────────────────────────────────
+        if is_tee {
+            // Consume the tee'd value and apply the assignment this peephole
+            // is skipping; forget the local's relations (see the doc comment).
+            let _ = ctx.operand_stack.pop();
+            ctx.locals[local as usize] = AbstractValue::I32Interval(iv);
+            // Apply the octagon side of the assignment this peephole skips.
+            // `octagon_transfer` models the recognised producer shapes (const /
+            // copy / add-const) and FORGETS `local` otherwise — at least as
+            // sound as a blanket forget, and strictly more precise on the
+            // increment/decrement-and-test idiom FEAT-070 exists to handle
+            // (clean-room finding: the blanket forget was a precision
+            // regression on this feature's own motivating shape).
+            self.octagon_transfer(pc, ctx);
+        }
         let taken_iv = refine_interval(iv, op, c, true);
         let not_taken_iv = refine_interval(iv, op, c, false);
 
@@ -8707,6 +8923,211 @@ mod tests {
             !local0_is_const(&r, 42),
             "a call must forget memory content; stale [42,42] is UNSOUND; points={:?}",
             r.invariants.points
+        );
+    }
+
+    /// First non-empty obligation id recorded for `func`.
+    fn adv_id(r: &AnalysisResult, func: u32) -> String {
+        r.advisories
+            .iter()
+            .find(|a| a.func_index == func && !a.obligation_id.is_empty())
+            .unwrap_or_else(|| {
+                panic!(
+                    "an advisory with an id for func {func}; got {:?}",
+                    r.advisories
+                )
+            })
+            .obligation_id
+            .clone()
+    }
+
+    /// FEAT-064 AC#1 (REQ-020) — an edit in an UNRELATED function must not
+    /// disturb this function's obligation identity.
+    #[test]
+    fn feat064_id_survives_edit_in_unrelated_function() {
+        let base = analyze_default(
+            "(module \
+               (func (export \"a\") (param i32) (result i32) i32.const 10 local.get 0 i32.div_s) \
+               (func (export \"b\") (param i32) (result i32) i32.const 20 local.get 0 i32.div_s))",
+        );
+        // Function "a" grows two instructions; "b" is untouched.
+        let edited = analyze_default(
+            "(module \
+               (func (export \"a\") (param i32) (result i32) \
+                 i32.const 7 local.set 0 i32.const 10 local.get 0 i32.div_s) \
+               (func (export \"b\") (param i32) (result i32) i32.const 20 local.get 0 i32.div_s))",
+        );
+        assert_eq!(
+            adv_id(&base, 1),
+            adv_id(&edited, 1),
+            "an edit in another function must not change func 1's obligation id"
+        );
+    }
+
+    /// FEAT-064 AC#2 — pc-shift immunity: inserting instructions EARLIER in the
+    /// SAME function must not change the identity of a later site. This is the
+    /// property `(func_index, pc)` cannot provide, and the one the fix-verify
+    /// loop depends on.
+    #[test]
+    fn feat064_id_survives_pc_shift_in_same_function() {
+        let base = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) (local i32) \
+               i32.const 20 local.get 0 i32.div_s))",
+        );
+        // The inserted code writes a DIFFERENT local, so the observed div keeps
+        // the same class and code — an insertion that changed the divisor would
+        // legitimately change the identity and prove nothing about pc-shift.
+        let shifted = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) (local i32) \
+               i32.const 99 local.set 1 i32.const 20 local.get 0 i32.div_s))",
+        );
+        // The div moved from pc 2 to pc 4 …
+        let base_pc = base
+            .advisories
+            .iter()
+            .find(|a| a.func_index == 0)
+            .map(|a| a.pc);
+        let shifted_pc = shifted
+            .advisories
+            .iter()
+            .find(|a| a.func_index == 0)
+            .map(|a| a.pc);
+        assert_ne!(base_pc, shifted_pc, "fixture must actually shift the pc");
+        // … but its identity did not.
+        assert_eq!(
+            adv_id(&base, 0),
+            adv_id(&shifted, 0),
+            "a pc shift within the same function must not change the obligation id"
+        );
+    }
+
+    /// FEAT-064 (clean-room finding) — ONE operator can raise SEVERAL
+    /// obligations: an `i32.div_s` with an unknown divisor raises both
+    /// div-by-zero and signed-overflow at the same pc. The site alone therefore
+    /// does not discriminate, and two obligations sharing an id would make the
+    /// FEAT-065 adjudicator conflate them.
+    #[test]
+    fn feat064_two_obligations_at_one_pc_get_distinct_ids() {
+        let r = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) \
+               local.get 0 local.get 0 i32.div_s))",
+        );
+        let at_pc: Vec<(&str, &str)> = r
+            .advisories
+            .iter()
+            .filter(|a| !a.obligation_id.is_empty())
+            .map(|a| (a.code.as_str(), a.obligation_id.as_str()))
+            .collect();
+        assert!(
+            at_pc.len() >= 2,
+            "fixture must raise several obligations; got {at_pc:?}"
+        );
+        let mut ids: Vec<&str> = at_pc.iter().map(|(_, i)| *i).collect();
+        ids.sort_unstable();
+        let before = ids.len();
+        ids.dedup();
+        assert_eq!(
+            ids.len(),
+            before,
+            "distinct obligations must not share an id; got {at_pc:?}"
+        );
+    }
+
+    /// FEAT-064 anti-vacuity — the id must actually DISCRIMINATE. Two distinct
+    /// div sites in one function must not collapse to the same identity, or the
+    /// "survives the edit" tests above would pass on a constant.
+    #[test]
+    fn feat064_distinct_sites_get_distinct_ids() {
+        let r = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) \
+               i32.const 10 local.get 0 i32.div_s \
+               i32.const 20 local.get 0 i32.div_s i32.add))",
+        );
+        let ids: Vec<&String> = r
+            .advisories
+            .iter()
+            .filter(|a| a.func_index == 0 && !a.obligation_id.is_empty())
+            .map(|a| &a.obligation_id)
+            .collect();
+        assert!(
+            ids.len() >= 2,
+            "fixture must yield two advisories; got {ids:?}"
+        );
+        assert_ne!(ids[0], ids[1], "distinct sites must get distinct ids");
+    }
+
+    /// FEAT-070 (REQ-020) — guard refinement for `br_if` on a BARE value.
+    /// `local.tee $i; br_if` is the count-to-zero loop LLVM emits: it branches
+    /// while the value is non-zero, so the FALL-THROUGH edge pins the local to
+    /// exactly 0. Before FEAT-070 scry matched only comparison-guarded idioms
+    /// (`local.get L; const C; cmp; br_if` / `local.get L; i32.eqz; br_if`),
+    /// so this shape left the counter unrefined.
+    ///
+    /// The assertion is deliberately position-specific: `(local i32)` is
+    /// zero-initialised, so an "any point has [0,0]" predicate passes VACUOUSLY
+    /// on the entry point and tests nothing (caught by running this oracle red
+    /// before implementing).
+    #[test]
+    fn feat070_brif_on_bare_tee_pins_fallthrough_to_zero() {
+        let r = analyze_default(
+            "(module (func (export \"run\") (result i32) (local i32) \
+               i32.const 5 local.set 0 \
+               block loop \
+                 local.get 0 i32.const 1 i32.sub local.tee 0 \
+                 br_if 0 \
+               end end \
+               local.get 0))",
+        );
+        // The LAST emitted point is after the loop; the only way out of the
+        // loop is br_if falling through, i.e. the counter is exactly 0 there.
+        let last = r
+            .invariants
+            .points
+            .iter()
+            .max_by_key(|p| p.pc)
+            .expect("at least one program point");
+        let l0 = last
+            .locals
+            .iter()
+            .find(|l| l.local_index == 0)
+            .expect("local 0 present");
+        assert!(
+            matches!(&l0.value, AbstractValue::I32Interval(iv) if iv.lo == 0 && iv.hi == 0),
+            "post-loop local 0 must be pinned to [0,0] by the br_if fall-through; \
+             got {:?} at pc={}",
+            l0.value,
+            last.pc
+        );
+    }
+
+    /// FEAT-070 — the peephole must keep the modelled operand stack balanced.
+    /// `local.tee` consumes an incoming stack value that `local.get` does not,
+    /// so a shape-blind skip of the idiom leaks (or underflows) the stack.
+    #[test]
+    fn feat070_tee_guard_keeps_operand_stack_balanced() {
+        let r = analyze_default(
+            "(module (func (export \"run\") (result i32) (local i32) \
+               i32.const 3 local.set 0 \
+               block loop \
+                 local.get 0 i32.const 1 i32.sub local.tee 0 \
+                 br_if 0 \
+               end end \
+               i32.const 7))",
+        );
+        let last = r
+            .invariants
+            .points
+            .iter()
+            .max_by_key(|p| p.pc)
+            .expect("at least one program point");
+        // Exactly the `i32.const 7` is live at the end. A leaked tee value
+        // would leave 2; an underflow would have degraded the function.
+        assert_eq!(
+            last.operand_stack.len(),
+            1,
+            "operand stack must carry exactly the final const; got {:?} at pc={}",
+            last.operand_stack,
+            last.pc
         );
     }
 
