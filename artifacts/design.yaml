@@ -572,3 +572,95 @@ artifacts:
         target: REQ-016
       - type: traces-to
         target: FEAT-057
+
+  - id: DD-020
+    type: design-decision
+    title: "v3.3 — Obligation identity: structural content-address, not (func, pc)"
+    status: proposed
+    tags: [ai-agent, identity, fix-verify-loop, schema, v3.3]
+    description: >
+      How FEAT-064 names a finding so the name survives an edit. scry's internal
+      key is `(func_index, pc)`, which is correct for the analyzer and useless as
+      an external identity: any inserted instruction renumbers every later pc, so
+      a consumer comparing two runs cannot tell DISCHARGED from MOVED. Since the
+      whole REQ-020 fix-verify loop rests on that distinction, identity is a
+      design decision in its own right rather than a field format.
+    fields:
+      decision: >
+        An obligation ID is a content address over four components, in this
+        order: (1) FUNCTION IDENTITY — the name-section name if present, else the
+        export name, else a hash of the function body's structural shape (opcode
+        sequence with immediates elided); (2) STRUCTURAL PATH — the chain of
+        enclosing block/loop/if indices from the function root, NOT raw pcs;
+        (3) OPERATOR KIND — e.g. `i32.load`, `i32.div_s`; (4) ORDINAL — the
+        operator's index among same-kind operators within its own basic block.
+        The ID is the hash of that tuple. `(func_index, pc)` remains in the
+        output as a positional convenience, explicitly documented as unstable.
+        The adjudicator (FEAT-065) reports five outcomes and must keep
+        `removed-with-code` strictly distinct from `discharged`.
+      rationale: >
+        Each component is chosen for what it is invariant under. Function
+        identity by name survives the function moving in the index space (adding
+        a function elsewhere renumbers indices). The structural path survives
+        instruction insertion elsewhere in the same function, which raw pcs do
+        not. The intra-block ordinal keeps two same-kind operators in one block
+        distinguishable without reintroducing a global counter. Hashing the tuple
+        keeps the ID opaque and fixed-width, so consumers cannot start parsing it
+        and depending on the layout.
+        The body-shape hash is the fallback, and it is deliberately the WEAKEST
+        of the three: a module stripped of names gets IDs that change whenever
+        the function is edited at all. That is honest degradation — with no name
+        section there is no stable notion of "the same function" — and it is why
+        the fallback is last rather than the default.
+        On the correctness claim: only `id(a) == id(b) ⇒ same structural site` is
+        provable and will be mechanized (ObligationId.v). The converse is FALSE
+        by construction — a rewritten function should produce new IDs, because
+        the old site genuinely no longer exists. Claiming stability under
+        arbitrary edits would be the overclaim here, and it is the one an agent
+        would be most damaged by trusting.
+      limitations: >
+        Recorded after adversarial clean-room review of the v3.3 implementation
+        — these are properties the scheme does NOT have, and the FEAT-065
+        adjudicator is required to be conservative in exactly these cases.
+        (1) ORDINAL ALIASING (the significant one). The intra-region same-kind
+            ordinal is positional, so deleting the first of two same-kind
+            operators makes the survivor inherit the deleted one's id. An
+            adjudicator diffing those two runs would report the deleted
+            obligation as still-open and the survivor as new — both wrong. This
+            is the very failure mode alternative (c) was rejected for; the
+            ordinal reintroduces a bounded form of it by construction. It is
+            accepted because the alternatives are worse, and MITIGATED at the
+            consumer: FEAT-065 degrades to `uncertain` rather than claiming
+            `discharged` when a region's same-kind multiset changed.
+        (2) The pc-shift invariance holds only for insertions that contain no
+            same-kind operator in the same region and open no new sibling region
+            (a new sibling renumbers `opened[depth]` and every path beneath it).
+            FEAT-064's AC is qualified accordingly.
+        (3) `if`/`else` share one region and one ordinal counter, so an edit in
+            one branch renumbers same-kind operators in the other.
+        (4) Two UNNAMED functions with byte-identical bodies share a
+            `body_shape_hash` and therefore collide across functions. Only the
+            name-section/export identities are function-unique.
+        (5) `try_table` (and legacy `try`) open an `End`-terminated region but are
+            not treated as path markers, so their `End` pops a region they never
+            opened and the paths below are wrong for exception-handling modules.
+            Tracked; no panic and no intra-function collision.
+      alternatives: >
+        (a) Source-line identity via DWARF — rejected as the primary: scry
+            analyses Wasm binaries that frequently carry no DWARF, and it would
+            make identity depend on the producer toolchain.
+        (b) A persisted ID map written by scry and carried between runs —
+            rejected: it makes identity stateful, needs a store the consumer must
+            not lose, and fails exactly when an agent runs scry on a fresh
+            checkout.
+        (c) Fuzzy matching between runs (nearest-pc / diff heuristics) —
+            rejected: a heuristic that guesses "this is probably the same
+            obligation" would report `discharged` on a coincidence, which is the
+            single failure this design exists to prevent.
+    links:
+      - type: satisfies
+        target: REQ-020
+      - type: traces-to
+        target: FEAT-064
+      - type: traces-to
+        target: FEAT-065

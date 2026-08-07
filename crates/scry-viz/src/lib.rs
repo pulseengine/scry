@@ -2130,6 +2130,7 @@ mod tests {
             suggested_action: "guard it".into(),
             verification: "re-run scry".into(),
             counterexample: None,
+            obligation_id: format!("test-{i:04x}"),
         };
         for i in 0..(ADVISORY_PER_CLASS_CAP as u32 + 25) {
             r.advisories.push(mk(i));
