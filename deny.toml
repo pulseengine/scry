@@ -41,6 +41,21 @@ ignore = [
     # harness does not format crossbeam pointers. No impact on shipped crates or
     # the analyzer component. Re-evaluate when wasmtime/rayon are bumped.
     "RUSTSEC-2026-0204",
+    # RUSTSEC-2026-0222 — wasmtime: "Stores can mix up type indices between
+    # engines" (a type-confusion / sandbox-integrity bug in the embedding API).
+    # Reachability, verified rather than assumed: wasmtime is a dependency of
+    # `scry-host-tests` ONLY, which is `publish = false`; `cargo metadata`
+    # confirms NO published `scry-sai-*` crate has wasmtime as a normal
+    # dependency, and it is not in the shipped `scry.wasm` (which embeds no
+    # engine). The harness is a test process running OUR OWN fixtures and OUR
+    # OWN composed component — it is not a multi-tenant sandbox host, so the
+    # crafted cross-engine usage this advisory requires has no attack surface
+    # here. NOTE: this is deliberately NOT a permanent exemption — there is no
+    # patched 45.x line (fixes landed in 46.0.2 / 47.0.3), so the durable fix is
+    # a wasmtime major bump, tracked as its own change rather than smuggled into
+    # a feature PR. Re-evaluate when that bump lands; this entry should then be
+    # DELETED, not carried forward.
+    "RUSTSEC-2026-0222",
 ]
 
 [licenses]
