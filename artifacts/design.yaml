@@ -716,11 +716,59 @@ artifacts:
         analysis, and it is the error an agent optimising against the verdict
         would exploit fastest — an agent rewarded for `discharged` learns to
         DELETE code, which is why `removed-with-code` is kept strictly separate.
-        The group-set check is chosen because aliasing by deletion or insertion
-        NECESSARILY changes the ordinal domain's membership, so the cheap signal
-        covers the realistic edit shapes.
+        RETRACTED 2026-08-11 by adversarial review — this decision originally
+        justified the group-set check by asserting that "aliasing by deletion or
+        insertion NECESSARILY changes the ordinal domain's membership". THAT IS
+        FALSE, and it was the sentence the whole conservatism rule rested on. A
+        deletion PAIRED WITH a same-kind insertion in the same region leaves the
+        group's site_key set byte-identical, so the check passes and a FALSE
+        `discharged` is produced — the delete-instead-of-fix reward hack this
+        rule exists to prevent. The group-set check is therefore a NECESSARY but
+        NOT SUFFICIENT condition, and on its own it does not make `discharged`
+        a certainty claim. Sound matching needs CONTENT corroboration (hashing
+        the operator's local context so a replaced operator cannot inherit a
+        predecessor's identity) rather than a positional ordinal plus a
+        population check. See the limitations field; the implementation is held
+        in draft until this is resolved.
       limitations: >
-        HONEST RESIDUAL, disclosed rather than hidden: a pure REORDERING of two
+        FOUND BY ADVERSARIAL REVIEW 2026-08-11 (all reproduced; the
+        implementation is in draft, nothing shipped):
+        (1) CARDINALITY-PRESERVING DELETION defeats the group-set check — delete
+            the open operator and append a same-kind safe one, and the site set
+            is unchanged, yielding a false `discharged`. This falsifies the
+            rationale's central claim (see above).
+        (2) `body_shape_hash` is the WHOLE function identity in the no-name /
+            no-export case, so two structurally identical functions share
+            site/group keys — deleting a whole function carrying an obligation
+            reports `discharged`. Conversely ANY opcode edit in such a function
+            moves every key in it, so for stripped modules `discharged` is
+            unreachable for the canonical fix shape (insert a guard / replace a
+            `local.get` with a constant). Mitigation direction: never claim
+            `discharged` when the function identity came from the shape-hash
+            fallback — degrade to `uncertain`.
+        (3) OBLIGATION LAUNDERING: wrapping the site in a typed `block`/`if`
+            routes it through `havoc_region`, which emits no trap check, no gap
+            and no advisory when the write set is empty and the region contains
+            no call — so a LIVE obligation disappears and reads as
+            `removed-with-code`. Root cause is a pre-existing FEAT-040/046
+            reporting hole, tracked separately; the adjudicator must treat
+            "absent from a function that degraded or gained a havoc region" as
+            `uncertain`.
+        (4) `regressed` is FABRICATED on a byte-identical module: `site_key`
+            excludes the code, so an open div-by-zero and a proven
+            signed-overflow at one `i32.div_s` share a site key, putting it in
+            the proven set. Self-comparison returns contradictory `still-open`
+            and `regressed` verdicts under one id with an invented before-code.
+            The proven-safe advisory does not record WHICH trap kind it proves,
+            which is the underlying data gap.
+        (5) NEW obligations produce NO verdict at all (only sites that
+            previously carried a proven fact are checked), so a fault introduced
+            where nothing was flagged before passes the gate clean. This is the
+            blindest direction for an autonomous agent.
+        (6) `obligation_id` is not unique, against this decision's own claim: two
+            ProvenSafe trap kinds at one pc both use code `proven-safe`, and the
+            shape-hash collision duplicates ids across functions.
+        PRE-EXISTING RESIDUAL, disclosed from the start: a pure REORDERING of two
         same-kind operators within one region preserves the group's site_key set
         while swapping which site each key denotes (each op takes the other's
         ordinal). The group-set check cannot see it, so that edit shape can still
