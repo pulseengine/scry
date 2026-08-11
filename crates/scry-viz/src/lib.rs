@@ -2131,6 +2131,8 @@ mod tests {
             verification: "re-run scry".into(),
             counterexample: None,
             obligation_id: format!("test-{i:04x}"),
+            site_key: format!("site-{i:04x}"),
+            group_key: String::from("grp-test"),
         };
         for i in 0..(ADVISORY_PER_CLASS_CAP as u32 + 25) {
             r.advisories.push(mk(i));

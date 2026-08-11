@@ -664,3 +664,77 @@ artifacts:
         target: FEAT-064
       - type: traces-to
         target: FEAT-065
+
+  - id: DD-021
+    type: design-decision
+    title: "v3.3 — Adjudicating a NON-INJECTIVE identity: three keys, and `discharged` as a certainty claim"
+    status: proposed
+    tags: [ai-agent, fix-verify-loop, oracle, conservatism, v3.3]
+    description: >
+      How FEAT-065 compares two runs given that FEAT-064's identity is provably
+      NOT injective across arbitrary edits. Two findings forced this to be a
+      decision rather than an implementation detail.
+      (1) `proofs/rocq/ObligationId.v` PROVES the aliasing hazard
+      (`survivor_inherits_deleted_identity`): delete the first of two same-kind
+      operators in a region and the survivor's ordinal — hence its identity —
+      becomes exactly the deleted site's. A naive diff-by-identity can therefore
+      report a FALSE `discharged`: site A is an open obligation, site B at the
+      same kind is PROVEN-SAFE, A is deleted, B inherits A's identity, and A's
+      identity now resolves to a proven-safe advisory although A was never fixed.
+      (2) The advisory CODE is a required component of the identity (clean-room:
+      one `i32.div_s` raises both div-by-zero and signed-overflow at one pc, so
+      the site alone does not discriminate). But fixing an obligation CHANGES its
+      code — `div-by-zero` becomes `proven-safe` — so the full identity is
+      unstable across exactly the transition the adjudicator exists to detect.
+      Matching on it alone would render every genuine discharge as
+      "one identity vanished, an unrelated one appeared".
+    fields:
+      decision: >
+        Emit THREE keys per advisory, each with one job:
+          * `obligation_id`  = hash(func_ident, path, kind, ordinal, CODE) —
+            globally unique per obligation. What a consumer stores and cites.
+          * `site_key`       = hash(func_ident, path, kind, ordinal) — identifies
+            the SITE, stable across a code/class change. This is what FEAT-065
+            MATCHES ON, so a div-by-zero becoming proven-safe is recognised as
+            the same site changing state rather than two unrelated events.
+          * `group_key`      = hash(func_ident, path, kind) — the ORDINAL DOMAIN.
+            Its membership is what aliasing perturbs, so it is the conservatism
+            signal.
+        Adjudication outcomes: `discharged`, `still-open`, `regressed`, `moved`,
+        `removed-with-code`, `uncertain`.
+        `discharged` is a CERTAINTY CLAIM and requires all of: the site_key was an
+        open obligation before; it is proven-safe (or raises no obligation) after;
+        AND its `group_key`'s site_key SET is unchanged between the two runs.
+        If that set changed, the verdict is `uncertain` — never `discharged`.
+        `removed-with-code` (the site no longer exists) is a distinct outcome and
+        must never be reported as `discharged`.
+      rationale: >
+        The adjudicator inherits the analyzer's discipline one layer up: scry
+        claims PROVEN-SAFE only when the abstract state rules the trap out, and
+        FEAT-065 claims `discharged` only when identity cannot have aliased.
+        Over-claiming a discharge is the same class of error as an unsound
+        analysis, and it is the error an agent optimising against the verdict
+        would exploit fastest — an agent rewarded for `discharged` learns to
+        DELETE code, which is why `removed-with-code` is kept strictly separate.
+        The group-set check is chosen because aliasing by deletion or insertion
+        NECESSARILY changes the ordinal domain's membership, so the cheap signal
+        covers the realistic edit shapes.
+      limitations: >
+        HONEST RESIDUAL, disclosed rather than hidden: a pure REORDERING of two
+        same-kind operators within one region preserves the group's site_key set
+        while swapping which site each key denotes (each op takes the other's
+        ordinal). The group-set check cannot see it, so that edit shape can still
+        mis-attribute a verdict. It is an unusual edit, its consequence is a
+        wrong verdict rather than an unsound analysis, and closing it would need
+        content corroboration beyond the key (e.g. hashing the operator's local
+        context) — deferred, and named here so a consumer is not surprised.
+        Consequence for consumers: a `discharged` verdict is evidence, not proof,
+        under a same-kind reordering; `uncertain` is the honest default whenever
+        the domain moved.
+    links:
+      - type: satisfies
+        target: REQ-020
+      - type: traces-to
+        target: FEAT-065
+      - type: traces-to
+        target: DD-020

@@ -675,6 +675,55 @@ pub struct Advisory {
     /// Empty when no identity could be derived. Opaque by construction — the
     /// layout is not a contract; do not parse it.
     pub obligation_id: String,
+    /// FEAT-065 (DD-021): identity of the SITE, excluding the advisory code —
+    /// so it is STABLE when an obligation changes state (`div-by-zero` becoming
+    /// `proven-safe` changes `obligation_id` but not this). This is the key
+    /// [`verify_against`] matches on; without it every genuine discharge would
+    /// read as "one identity vanished and an unrelated one appeared".
+    pub site_key: String,
+    /// FEAT-065 (DD-021): the ORDINAL DOMAIN this site's ordinal is counted
+    /// within (function + region path + operator kind). Aliasing perturbs this
+    /// domain's membership, so a change in its site set is the signal that
+    /// forces a `discharged` verdict down to `uncertain`.
+    pub group_key: String,
+}
+
+/// FEAT-065 (REQ-020, DD-021): the outcome of adjudicating ONE obligation
+/// across two analyses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifyOutcome {
+    /// The obligation was open and is now discharged, AND identity cannot have
+    /// aliased. A CERTAINTY claim — see [`verify_against`].
+    Discharged,
+    /// Still an open obligation.
+    StillOpen,
+    /// Was proven safe, is an open obligation again.
+    Regressed,
+    /// Same site, different position. Informational — NOT progress.
+    Moved,
+    /// The site no longer exists. Explicitly NOT a discharge: deleting the code
+    /// that carried an obligation proves nothing, and an agent rewarded for
+    /// conflating the two learns to delete rather than fix.
+    RemovedWithCode,
+    /// Identity may have aliased (the obligation's ordinal domain changed
+    /// membership), so no claim is made. The honest default.
+    Uncertain,
+}
+
+/// FEAT-065: one adjudicated obligation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifyVerdict {
+    /// The obligation's identity in the BEFORE run.
+    pub obligation_id: String,
+    /// The site identity used for matching (DD-021).
+    pub site_key: String,
+    /// The verdict.
+    pub outcome: VerifyOutcome,
+    /// Advisory code before / after, where known.
+    pub before_code: String,
+    pub after_code: Option<String>,
+    /// Why this outcome — in particular why a discharge was withheld.
+    pub detail: String,
 }
 
 /// FEAT-055 (REQ-018): a candidate counterexample for an `UnprovenObligation`
@@ -3107,6 +3156,198 @@ fn obligation_id_of(func_ident: &str, path: &str, kind: &str, ordinal: u32, code
     out
 }
 
+/// FEAT-065 (REQ-020, DD-021): adjudicate one analysis against a prior one —
+/// scry judging its own verification oracle, so an agent's edit is gated by a
+/// SOUND checker rather than by tests.
+///
+/// Matching is by [`Advisory::site_key`], not `obligation_id`: fixing an
+/// obligation changes its code (`div-by-zero` → `proven-safe`) and therefore its
+/// id, so id-matching would render every genuine discharge as two unrelated
+/// events (DD-021).
+///
+/// `Discharged` is a CERTAINTY claim and is withheld unless the obligation's
+/// ORDINAL DOMAIN ([`Advisory::group_key`]) has an unchanged site set.
+/// `ObligationId.v` proves identity can alias when that domain changes
+/// membership, which admits a FALSE discharge: an open site is deleted, a
+/// proven-safe sibling of the same kind inherits its identity, and the deleted
+/// obligation appears to have been fixed. When the domain moved, the verdict is
+/// [`VerifyOutcome::Uncertain`] instead — the adjudicator inherits the
+/// analyzer's discipline one layer up.
+///
+/// [`VerifyOutcome::RemovedWithCode`] is kept strictly distinct from
+/// `Discharged`: deleting the code that carried an obligation proves nothing,
+/// and an agent rewarded for conflating them learns to delete rather than fix.
+pub fn verify_against(before: &AnalysisResult, after: &AnalysisResult) -> Vec<VerifyVerdict> {
+    use alloc::collections::{BTreeMap, BTreeSet};
+
+    fn is_open(c: AdvisoryClass) -> bool {
+        matches!(
+            c,
+            AdvisoryClass::UnprovenObligation | AdvisoryClass::DefiniteFault
+        )
+    }
+    fn site_sets(r: &AnalysisResult) -> BTreeMap<&str, BTreeSet<&str>> {
+        let mut m: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for a in r.advisories.iter().filter(|a| !a.site_key.is_empty()) {
+            m.entry(a.group_key.as_str())
+                .or_default()
+                .insert(a.site_key.as_str());
+        }
+        m
+    }
+
+    let after_groups = site_sets(after);
+    let before_groups = site_sets(before);
+    let mut after_by_site: BTreeMap<&str, Vec<&Advisory>> = BTreeMap::new();
+    for a in after.advisories.iter().filter(|a| !a.site_key.is_empty()) {
+        after_by_site
+            .entry(a.site_key.as_str())
+            .or_default()
+            .push(a);
+    }
+
+    let mut out: Vec<VerifyVerdict> = Vec::new();
+
+    for b in before
+        .advisories
+        .iter()
+        .filter(|a| !a.site_key.is_empty() && is_open(a.class))
+    {
+        // Did this obligation's ordinal domain keep the same site set? If not,
+        // identity may have aliased and no discharge may be claimed.
+        let domain_stable =
+            before_groups.get(b.group_key.as_str()) == after_groups.get(b.group_key.as_str());
+
+        let at_site = after_by_site.get(b.site_key.as_str());
+        let (outcome, after_code, detail) = match at_site {
+            // The site is gone. NOT a discharge.
+            None => (
+                VerifyOutcome::RemovedWithCode,
+                None,
+                String::from(
+                    "the site no longer exists; deleting code that carried an \
+                     obligation is not a discharge",
+                ),
+            ),
+            Some(list) => {
+                // Same obligation still open at this site?
+                if let Some(same) = list.iter().find(|a| a.code == b.code && is_open(a.class)) {
+                    let o = if same.pc != b.pc {
+                        VerifyOutcome::Moved
+                    } else {
+                        VerifyOutcome::StillOpen
+                    };
+                    (
+                        o,
+                        Some(same.code.clone()),
+                        String::from("still an open obligation"),
+                    )
+                } else if let Some(proven) = list
+                    .iter()
+                    .find(|a| a.class == AdvisoryClass::LeverageableFact)
+                {
+                    if domain_stable {
+                        (
+                            VerifyOutcome::Discharged,
+                            Some(proven.code.clone()),
+                            String::from("now proven safe, and the ordinal domain is unchanged"),
+                        )
+                    } else {
+                        (
+                            VerifyOutcome::Uncertain,
+                            Some(proven.code.clone()),
+                            String::from(
+                                "looks proven safe, but this site's ordinal domain changed \
+                                 membership so identity may have aliased — discharge withheld",
+                            ),
+                        )
+                    }
+                } else {
+                    (
+                        VerifyOutcome::Uncertain,
+                        None,
+                        String::from(
+                            "the obligation is absent but the site is not clearly proven safe",
+                        ),
+                    )
+                }
+            }
+        };
+        out.push(VerifyVerdict {
+            obligation_id: b.obligation_id.clone(),
+            site_key: b.site_key.clone(),
+            outcome,
+            before_code: b.code.clone(),
+            after_code,
+            detail,
+        });
+    }
+
+    // Regressions: a site that was a proven fact now raises an obligation.
+    let before_proven: BTreeSet<&str> = before
+        .advisories
+        .iter()
+        .filter(|a| a.class == AdvisoryClass::LeverageableFact && !a.site_key.is_empty())
+        .map(|a| a.site_key.as_str())
+        .collect();
+    for a in after
+        .advisories
+        .iter()
+        .filter(|a| !a.site_key.is_empty() && is_open(a.class))
+    {
+        if before_proven.contains(a.site_key.as_str()) {
+            out.push(VerifyVerdict {
+                obligation_id: a.obligation_id.clone(),
+                site_key: a.site_key.clone(),
+                outcome: VerifyOutcome::Regressed,
+                before_code: String::from("proven-safe"),
+                after_code: Some(a.code.clone()),
+                detail: String::from("was a proven fact, now raises an obligation"),
+            });
+        }
+    }
+    out
+}
+
+/// FEAT-065 (DD-021): the SITE key — everything the obligation id has EXCEPT
+/// the advisory code, so it survives an obligation changing state.
+fn site_key_of(func_ident: &str, path: &str, kind: &str, ordinal: u32) -> String {
+    let mut h = Sha256::new();
+    h.update(b"site|");
+    h.update(func_ident.as_bytes());
+    h.update(b"|");
+    h.update(path.as_bytes());
+    h.update(b"|");
+    h.update(kind.as_bytes());
+    h.update(b"|");
+    h.update(ordinal.to_le_bytes());
+    let d = h.finalize();
+    let mut out = String::with_capacity(16);
+    for b in d.iter().take(8) {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// FEAT-065 (DD-021): the ORDINAL DOMAIN key — function + region path + kind,
+/// WITHOUT the ordinal. Aliasing perturbs this domain's membership, which is the
+/// signal that forces a discharge down to `uncertain`.
+fn group_key_of(func_ident: &str, path: &str, kind: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(b"group|");
+    h.update(func_ident.as_bytes());
+    h.update(b"|");
+    h.update(path.as_bytes());
+    h.update(b"|");
+    h.update(kind.as_bytes());
+    let d = h.finalize();
+    let mut out = String::with_capacity(16);
+    for b in d.iter().take(8) {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
 /// FEAT-064: does this advisory describe the MODULE rather than a code site?
 /// Such advisories carry `(func 0, pc 0)` as a SENTINEL, so giving them a site
 /// identity would collide with a genuine advisory there, drift whenever func 0's
@@ -3126,6 +3367,8 @@ fn stamp_obligation_ids(
 ) {
     for a in advisories.iter_mut().filter(|a| is_module_scoped(&a.code)) {
         a.obligation_id = obligation_id_of("<module>", "", "<module>", 0, &a.code);
+        a.site_key = site_key_of("<module>", "", "<module>", 0);
+        a.group_key = group_key_of("<module>", "", "<module>");
     }
     for f in defined_funcs {
         let ident = function_meta
@@ -3145,6 +3388,8 @@ fn stamp_obligation_ids(
                     .map(op_report_name)
                     .unwrap_or_else(|| a.code.clone());
                 a.obligation_id = obligation_id_of(&ident, path, &kind, *ordinal, &a.code);
+                a.site_key = site_key_of(&ident, path, &kind, *ordinal);
+                a.group_key = group_key_of(&ident, path, &kind);
             }
         }
     }
@@ -3188,6 +3433,8 @@ fn compute_advisories(
             verification: "re-run scry: this handle_findings entry disappears".into(),
             counterexample: None,
             obligation_id: String::new(),
+            site_key: String::new(),
+            group_key: String::new(),
         });
     }
 
@@ -3228,6 +3475,8 @@ fn compute_advisories(
                     ),
                     counterexample: Some(trap_counterexample(t.kind, &t.op, memory_size_bytes)),
                 obligation_id: String::new(),
+                site_key: String::new(),
+                group_key: String::new(),
                 });
             }
             TrapVerdict::ProvenSafe => {
@@ -3255,6 +3504,8 @@ fn compute_advisories(
                     ),
                     counterexample: None,
                 obligation_id: String::new(),
+                site_key: String::new(),
+                group_key: String::new(),
                 });
             }
         }
@@ -3296,6 +3547,8 @@ fn compute_advisories(
             ),
             counterexample: None,
                 obligation_id: String::new(),
+                site_key: String::new(),
+                group_key: String::new(),
         });
     }
 
@@ -3315,6 +3568,8 @@ fn compute_advisories(
             verification: "re-run scry: stack_usage.max_stack_bytes becomes Bytes(n)".into(),
             counterexample: None,
                 obligation_id: String::new(),
+                site_key: String::new(),
+                group_key: String::new(),
         });
     }
 
@@ -8939,6 +9194,96 @@ mod tests {
             })
             .obligation_id
             .clone()
+    }
+
+    fn outcome_for(v: &[VerifyVerdict], code: &str) -> Vec<VerifyOutcome> {
+        v.iter()
+            .filter(|x| x.before_code == code)
+            .map(|x| x.outcome)
+            .collect()
+    }
+
+    /// FEAT-065 AC — a real fix is reported `discharged`. The divisor becomes a
+    /// non-zero constant, so the same SITE flips from an open obligation to a
+    /// proven fact; matching must survive the code change (DD-021).
+    #[test]
+    fn feat065_a_real_fix_is_discharged() {
+        let before = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) i32.const 10 local.get 0 i32.div_s))",
+        );
+        let after = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) i32.const 10 i32.const 5 i32.div_s))",
+        );
+        let v = verify_against(&before, &after);
+        assert!(
+            outcome_for(&v, "div-by-zero").contains(&VerifyOutcome::Discharged),
+            "guarding the divisor must be Discharged; got {v:?}"
+        );
+    }
+
+    /// FEAT-065 AC — deleting the code that carried an obligation is
+    /// `removed-with-code`, NEVER `discharged`: an agent rewarded for conflating
+    /// them learns to delete rather than fix.
+    #[test]
+    fn feat065_deleting_the_code_is_not_a_discharge() {
+        let before = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) i32.const 10 local.get 0 i32.div_s))",
+        );
+        let after =
+            analyze_default("(module (func (export \"b\") (param i32) (result i32) i32.const 0))");
+        let v = verify_against(&before, &after);
+        let got = outcome_for(&v, "div-by-zero");
+        assert!(
+            !got.contains(&VerifyOutcome::Discharged),
+            "deletion is never a discharge; got {v:?}"
+        );
+        assert!(
+            got.contains(&VerifyOutcome::RemovedWithCode),
+            "expected RemovedWithCode; got {v:?}"
+        );
+    }
+
+    /// FEAT-065 AC — the CONSERVATISM rule, which `ObligationId.v` proves is
+    /// necessary. Two same-kind sites: #0 open, #1 proven safe. Delete #0 and #1
+    /// slides into ordinal 0, INHERITING #0's identity while being proven safe —
+    /// so a naive diff-by-identity would call #0 discharged though it was never
+    /// fixed. The ordinal domain changed, so the verdict must degrade.
+    #[test]
+    fn feat065_aliasing_forces_uncertain_not_discharged() {
+        let before = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) \
+               i32.const 10 local.get 0 i32.div_s i32.const 20 i32.const 5 i32.div_s i32.add))",
+        );
+        let after = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) i32.const 20 i32.const 5 i32.div_s))",
+        );
+        let v = verify_against(&before, &after);
+        let got = outcome_for(&v, "div-by-zero");
+        assert!(
+            !got.contains(&VerifyOutcome::Discharged),
+            "aliasing must NOT read as a discharge (the survivor_inherits_deleted_identity hazard); got {v:?}"
+        );
+        assert!(
+            got.contains(&VerifyOutcome::Uncertain)
+                || got.contains(&VerifyOutcome::RemovedWithCode),
+            "aliasing must degrade to Uncertain/RemovedWithCode; got {v:?}"
+        );
+    }
+
+    /// FEAT-065 AC — losing a proven fact is reported `regressed`.
+    #[test]
+    fn feat065_regression_is_reported() {
+        let before = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) i32.const 10 i32.const 5 i32.div_s))",
+        );
+        let after = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) i32.const 10 local.get 0 i32.div_s))",
+        );
+        let v = verify_against(&before, &after);
+        assert!(
+            v.iter().any(|x| x.outcome == VerifyOutcome::Regressed),
+            "losing a proven fact must be Regressed; got {v:?}"
+        );
     }
 
     /// FEAT-064 AC#1 (REQ-020) — an edit in an UNRELATED function must not
