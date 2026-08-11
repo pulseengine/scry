@@ -325,3 +325,22 @@ rocq_proof_test(
     deps = [":poly"],
     tags = ["rocq", "verification", "feat-057"],
 )
+
+# FEAT-064 (REQ-020, DD-020): the QUALIFIED invariance of the obligation
+# identity. The first-draft AC claimed pc-shift immunity unconditionally;
+# clean-room review refuted it, and this file mechanizes the CORRECTED
+# statement together with a counterexample proving the qualification is
+# necessary — the aliasing hazard is a theorem here, not a caveat. Scope: the
+# intra-region same-kind ordinal (the aliasing-prone component); the region-path
+# list algebra is γ-swept in the crate. No admits, no axioms.
+rocq_library(
+    name = "obligationid",
+    srcs = ["ObligationId.v"],
+    tags = ["rocq", "verification", "feat-064"],
+)
+
+rocq_proof_test(
+    name = "obligationid_test",
+    deps = [":obligationid"],
+    tags = ["rocq", "verification", "feat-064"],
+)
