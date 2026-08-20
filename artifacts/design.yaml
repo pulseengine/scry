@@ -843,19 +843,36 @@ artifacts:
         before implementing any of them.
         (2) Enforce observation mode STRUCTURALLY — the harness cannot return
         non-zero — rather than by a comment asking readers not to gate on it.
-        (3) Publish the ALIAS-FREE FRACTION ("of M shared sites, K provably
-        alias-free, the rest not excluded") and suppress the discharge count
-        entirely while scry#122 is open, enforced by a test that greps the
-        rendered page.
-        CORRECTED IN DRAFTING: this decision first said "K adjudicable", which
-        over-claims — nothing here certifies that a site can be adjudicated.
-        What IS certifiable is narrower and provable: aliasing requires a
-        deleted same-kind sibling to inherit an ordinal from
-        (`ObligationId.v: survivor_inherits_deleted_identity`), so an ordinal
-        domain holding exactly ONE member in BOTH runs has nothing to inherit
-        from. Note this is strictly STRONGER than DD-021's refuted rule — a
-        singleton domain rules aliasing out, whereas an unchanged domain does
-        not — and it is the wording the code implements.
+        (3) Publish the ORDINAL-STABLE FRACTION and suppress the discharge
+        count entirely while scry#122 is open, enforced by a test that greps the
+        rendered page — which must also assert the LIMITATION is disclosed, not
+        merely that the over-claim is absent.
+        CORRECTED TWICE IN DRAFTING, and the second correction matters more than
+        the first.
+        (a) It first said "K adjudicable", which over-claims: nothing here
+        certifies that a site can be adjudicated.
+        (b) It was then changed to "K provably ALIAS-FREE", justified by
+        `ObligationId.v: survivor_inherits_deleted_identity` needing a same-kind
+        sibling that a singleton ordinal domain does not have. THAT IS ALSO
+        WRONG, and it is wrong in the same way DD-021 was. It reasons from the
+        one theorem that happens to be proven rather than from what aliasing is;
+        a proof of ONE sufficient condition does not enumerate them.
+        The counterexample, found before publication and now pinned as
+        `feat072_region_shift_is_not_certified_as_identity_held`: `group_key`
+        hashes the region PATH, and a path is a sibling index at its depth.
+        Delete a whole region and its later siblings renumber, so a surviving
+        region moves into the deleted region's path and its sole operator
+        inherits the entire key — while BOTH domains remain singletons, so the
+        ordinal check sees nothing. An obligation removed by deleting its region
+        is then indistinguishable from one that changed state.
+        The claim is therefore named for its SCOPE: `OrdinalStable` excludes
+        sibling-ORDINAL donation and nothing else. It is a filter that says which
+        rows to look at first, never a warrant that a change belongs to a site.
+        RECORDED AS A PATTERN, because this is now the third instance: every
+        attempt to certify identity from the KEYS ALONE has failed, at three
+        different levels — the ordinal (DD-021), the region path (here), and the
+        function ident (scry#123). The keys are a good address and a bad proof.
+        Corroboration has to come from CONTENT.
       rationale: >
         ALTERNATIVE REJECTED for (1) — fix all nine items, then dogfood.
         Nine fixes guessed at in the dark is exactly how the first

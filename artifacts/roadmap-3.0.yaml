@@ -1290,12 +1290,16 @@ artifacts:
       is untriageable; a delta is naturally small, which is the point.
 
       HONESTY CONSTRAINT (non-negotiable while scry#122 is open): the delta view
-      MUST NOT publish a `discharged` count. Its headline is the ALIAS-FREE
-      FRACTION — "of M shared sites, K provably alias-free" — because that is
-      the one claim the refutation did not undermine AND it is provable rather
-      than merely conservative: aliasing needs a deleted same-kind sibling
-      (`survivor_inherits_deleted_identity`), so a singleton ordinal domain has
-      nothing to inherit from. The
+      MUST NOT publish a `discharged` count. Its headline is the
+      ORDINAL-STABLE fraction: sites whose ordinal domain is a singleton in both
+      runs, so no same-kind SIBLING could have donated an ordinal
+      (`survivor_inherits_deleted_identity` needs one).
+      NAMED FOR ITS SCOPE after a pre-publication counterexample: this excludes
+      sibling-ordinal donation and NOTHING ELSE. A whole-region deletion
+      renumbers later sibling regions, so a survivor can occupy the deleted
+      region's path and inherit its key with both domains still singletons. The
+      page must disclose that, and the grep test asserts the disclosure is
+      present as well as asserting the over-claim is absent. The
       dashboard is public and every public claim must survive Conrad Watt; a
       discharge count from a matcher with six known wrong-verdict paths does not.
       When REQ-021 lands, the discharge count is UNSUPPRESSED — it is not
@@ -1305,7 +1309,8 @@ artifacts:
       phase: phase-3
       acceptance-criteria:
         - "Given the published self-analysis page, When a consumer deep-links to one obligation, Then the URL fragment is that obligation's stable ID — not its pc — and the same fragment still resolves after an UNRELATED function is edited and the page re-rendered."
-        - "Given two modules from different commits, When `scry-viz delta` renders them, Then every row is keyed on stable identity (not pc) and the summary reports the ALIAS-FREE / NOT-EXCLUDED split. Corrected from 'adjudicable/uncertain' during implementation: nothing certifies adjudicability, but a singleton ordinal domain provably cannot alias, since aliasing needs a deleted same-kind sibling to inherit from."
+        - "Given two modules from different commits, When `scry-viz delta` renders them, Then every row is keyed on stable identity (not pc) and the summary reports the ORDINAL-STABLE / NOT-EXCLUDED split. Renamed twice during implementation, and the history is the point: 'adjudicable' over-claimed, then 'alias-free' over-claimed in exactly DD-021's way — reasoning from the one proven theorem rather than from what aliasing is."
+        - "Given a module where a whole region carrying an unproven obligation is DELETED and a later sibling region moves into its path, When `scry-viz delta` renders it, Then the page DISCLOSES that ordinal-stability does not cover a region-path shift. The survivor is still counted ordinal-stable — the check cannot see it — so the acceptance is on the disclosure, and the limitation is pinned by feat072_region_shift_is_not_certified_as_identity_held so a later fix must update the disclosure in the same commit."
         - "Given `scry-viz diff` while scry#122 is open, When it renders any pair, Then NO discharge count appears anywhere in the output — enforced by a test that greps the rendered page, not by reviewer discipline."
         - "Given a feed compared with ITSELF, When `scry-viz diff` renders it, Then it reports zero changes and every obligation unchanged — the page's own vacuity check, so a plausible-looking delta cannot come from an empty comparison."
         - "Given a pair known to differ, When `scry-viz diff` renders it, Then the change set is NON-EMPTY — the dual check, so 'no changes' can never be the silent result of a broken match."

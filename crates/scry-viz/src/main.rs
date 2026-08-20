@@ -258,16 +258,18 @@ fn run_delta(args: &[String]) -> Result<PathBuf, CliError> {
     // a verdict: counts of what MOVED, plus how much of it is attributable.
     eprintln!(
         "scry-viz delta: {} site(s) before, {} after · {} changed \
-         ({} attributable, alias-free) · {} gone, {} new · \
-         {} of {} shared sites provably alias-free · no verdict claimed (scry#122)",
+         ({} ordinal-stable) · {} gone, {} new · \
+         {} of {} shared sites ordinal-stable · no verdict claimed; \
+         ordinal-stable excludes sibling-ordinal donation only, NOT a region-path \
+         shift (scry#122, scry#123)",
         delta.sites_before(),
         delta.sites_after(),
         delta.changed(),
-        delta.attributable_changes(),
+        delta.ordinal_stable_changes(),
         delta.only_before(),
         delta.only_after(),
-        delta.alias_free(),
-        delta.alias_free() + delta.not_excluded(),
+        delta.ordinal_stable(),
+        delta.ordinal_stable() + delta.not_excluded(),
     );
     Ok(out)
 }

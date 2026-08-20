@@ -898,7 +898,8 @@ fn render_advisory_row(s: &mut String, a: &scry_analyze_core::Advisory) {
         let _ = write!(
             s,
             "<li id=\"ob-{0}\" class=\"{cls}\"><a class=\"anchor\" href=\"#ob-{0}\" \
-             title=\"stable obligation id — survives edits elsewhere in the module\">¶</a>",
+             title=\"content-addressed obligation id — stable while this function\'s \
+             name and structure are (see scry#123)\">¶</a>",
             esc(&a.obligation_id),
         );
     }
@@ -2372,7 +2373,7 @@ mod tests {
         assert_eq!(d.only_before(), 0, "self-comparison loses no site");
         assert_eq!(d.only_after(), 0, "self-comparison gains no site");
         assert_eq!(d.unchanged(), d.sites_before(), "every site unchanged");
-        assert_eq!(d.attributable_changes(), 0);
+        assert_eq!(d.ordinal_stable_changes(), 0);
     }
 
     /// The DUAL check — without it, "no changes" could silently be the result
@@ -2401,12 +2402,12 @@ mod tests {
     /// ordinal domain (`ObligationId.v: survivor_inherits_deleted_identity`),
     /// so a singleton domain is provably alias-free and a populated one is not.
     #[test]
-    fn feat072_alias_free_requires_a_singleton_ordinal_domain() {
+    fn feat072_ordinal_stable_requires_a_singleton_domain() {
         let one = analyze_wat(DIV_A);
         let d1 = compute_delta(&one, &one);
         assert!(
-            d1.alias_free() > 0,
-            "a lone div_s must be provably alias-free"
+            d1.ordinal_stable() > 0,
+            "a lone div_s has no same-kind sibling, so it is ordinal-stable"
         );
         assert_eq!(
             d1.not_excluded(),
@@ -2423,12 +2424,12 @@ mod tests {
         let d2 = compute_delta(&two, &two);
         assert!(
             d2.not_excluded() > 0,
-            "two same-kind sites must NOT be certified alias-free"
+            "two same-kind sites must NOT be reported ordinal-stable"
         );
         assert_eq!(
-            d2.alias_free(),
+            d2.ordinal_stable(),
             0,
-            "no site in a populated domain may be certified"
+            "no site in a populated domain may be reported ordinal-stable"
         );
     }
 
@@ -2471,6 +2472,60 @@ mod tests {
                 "a moved row must fall in exactly one bucket: {r:?}"
             );
         }
+    }
+
+    /// The limitation `OrdinalStable` does NOT cover, pinned so it cannot be
+    /// forgotten or silently "fixed" without updating the page's disclosure.
+    ///
+    /// `group_key` hashes the region PATH, and a path is a sibling index at its
+    /// depth. Delete a whole region and its later siblings renumber, so a
+    /// surviving region moves into the deleted one's path and its sole operator
+    /// inherits the entire key — while BOTH domains stay singletons and the
+    /// ordinal check therefore sees nothing.
+    ///
+    /// Here the unsafe `div_s` is deleted along with its block, and the
+    /// proven-safe `div_s` from the next block takes its identity. From the
+    /// keys alone that is indistinguishable from the obligation being fixed.
+    /// This is `survivor_inherits_deleted_identity` one level up the key.
+    #[test]
+    fn feat072_region_shift_is_not_certified_as_identity_held() {
+        let before = analyze_wat(
+            "(module (func (export \"a\") (param i32) (result i32) (local i32) \
+             (block i32.const 10 local.get 0 i32.div_s local.set 1) \
+             (block i32.const 10 i32.const 2 i32.div_s local.set 1) \
+             local.get 1))",
+        );
+        // The FIRST block — the one carrying the unproven obligation — is gone.
+        let after = analyze_wat(
+            "(module (func (export \"a\") (param i32) (result i32) (local i32) \
+             (block i32.const 10 i32.const 2 i32.div_s local.set 1) \
+             local.get 1))",
+        );
+        let d = compute_delta(&before, &after);
+
+        // CHARACTERIZATION, not an endorsement: the ordinal check cannot see a
+        // region-path shift, so the survivor IS reported ordinal-stable and the
+        // change IS counted. Pinned deliberately. If a future change makes this
+        // 0, that is an improvement — and this test must fail so that the
+        // page's disclosure is updated in the same commit rather than left
+        // warning about a hazard that no longer exists.
+        assert_eq!(
+            d.ordinal_stable_changes(),
+            1,
+            "known limitation: a region-path shift is invisible to the ordinal check"
+        );
+
+        // What MUST hold: the page has to disclose it. A number the reader
+        // cannot calibrate is worse than no number.
+        let html = render_delta_html(&d, "region shift").to_lowercase();
+        assert!(
+            html.contains("region"),
+            "the page must disclose the region-path hazard"
+        );
+        assert!(
+            html.contains("not a certificate") || html.contains("not certif"),
+            "the page must say plainly that ordinal-stable is not a certificate"
+        );
     }
 
     /// DD-022, enforced mechanically: the published page must not make a
@@ -2532,10 +2587,22 @@ mod tests {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AliasStatus {
     /// The site's ordinal domain (`group_key`) holds exactly ONE site in both
-    /// runs. Aliasing needs a deleted same-kind sibling to inherit an ordinal
-    /// from (`ObligationId.v: survivor_inherits_deleted_identity`); a singleton
-    /// domain has none, so identity here provably did not alias.
-    AliasFree,
+    /// runs, so no same-kind SIBLING could have donated its ordinal
+    /// (`ObligationId.v: survivor_inherits_deleted_identity` needs one).
+    ///
+    /// SCOPE — this rules out ORDINAL donation only. It does NOT certify that
+    /// identity held. `group_key` hashes the region PATH, and a path is a
+    /// sibling ordinal at its depth: deleting a whole region renumbers its
+    /// later siblings, so a surviving region can occupy the deleted region's
+    /// path and its sole operator inherits the whole key while both domains
+    /// stay singletons. Demonstrated by
+    /// `feat072_region_shift_is_not_certified_as_identity_held`.
+    ///
+    /// This variant was called `AliasFree` in drafting. The name was wrong:
+    /// it reasoned from the one theorem that was proven rather than from what
+    /// aliasing is, and a proof of one sufficient condition does not enumerate
+    /// them. Renamed before publication.
+    OrdinalStable,
     /// The domain holds two or more sites in one or both runs, so a deletion
     /// could have shifted ordinals within it. NOT a claim that aliasing
     /// happened — a claim that it is not excluded, which is the honest default.
@@ -2619,10 +2686,10 @@ impl Delta {
             .count()
     }
     /// Sites present in both runs whose identity provably did not alias.
-    pub fn alias_free(&self) -> usize {
+    pub fn ordinal_stable(&self) -> usize {
         self.rows
             .iter()
-            .filter(|r| r.in_both() && r.alias == AliasStatus::AliasFree)
+            .filter(|r| r.in_both() && r.alias == AliasStatus::OrdinalStable)
             .count()
     }
     /// Sites present in both runs where aliasing is not excluded.
@@ -2635,10 +2702,10 @@ impl Delta {
     /// The rows a future adjudicator (REQ-021) could act on soundly TODAY:
     /// present in both runs, obligation set changed, and provably alias-free.
     /// Reported as a COUNT OF CANDIDATES, never as discharges.
-    pub fn attributable_changes(&self) -> usize {
+    pub fn ordinal_stable_changes(&self) -> usize {
         self.rows
             .iter()
-            .filter(|r| r.in_both() && r.changed() && r.alias == AliasStatus::AliasFree)
+            .filter(|r| r.in_both() && r.changed() && r.alias == AliasStatus::OrdinalStable)
             .count()
     }
 }
@@ -2695,7 +2762,7 @@ pub fn compute_delta(before: &AnalysisResult, after: &AnalysisResult) -> Delta {
         let alias = if gb.get(group).is_some_and(|s| s.len() == 1)
             && ga.get(group).is_some_and(|s| s.len() == 1)
         {
-            AliasStatus::AliasFree
+            AliasStatus::OrdinalStable
         } else {
             AliasStatus::NotExcluded
         };
@@ -2753,20 +2820,31 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
          so an unchanged domain does <em>not</em> imply identity held. An \
          adjudicator that can wrongly report success is worse than none, \
          because the cheapest way to satisfy it is to delete the code.</p>\
-         <p>The one claim made here is <strong>alias-free</strong>: a site whose \
-         ordinal domain holds exactly one member in <em>both</em> runs. Aliasing \
-         requires a deleted same-kind sibling to inherit an ordinal from \
-         (<code>ObligationId.v: survivor_inherits_deleted_identity</code>); a \
-         singleton domain has none. Everything else is <strong>not \
-         excluded</strong> — which is a statement about our knowledge, not about \
-         the code.</p></section>",
+         <p>The one claim made here is narrow and its name says so: \
+         <strong>ordinal-stable</strong>. A site whose ordinal domain holds \
+         exactly one member in <em>both</em> runs cannot have had its ordinal \
+         donated by a same-kind sibling, because \
+         <code>ObligationId.v: survivor_inherits_deleted_identity</code> needs \
+         one and a singleton domain has none.</p>\
+         <p><strong>That is not a certificate that identity held.</strong> The \
+         key hashes a region <em>path</em>, and a path is a sibling index at \
+         its depth — so deleting a whole region renumbers its later siblings, \
+         and a surviving region can move into the deleted one's path. Its sole \
+         operator then inherits the entire key while both domains remain \
+         singletons. An obligation removed by deleting its region can therefore \
+         look, from the keys alone, exactly like one that changed state. This \
+         page reports what moved; establishing that a change belongs to a \
+         particular site needs corroboration these keys do not carry \
+         (<code>scry#122</code>, <code>scry#123</code>).</p>\
+         <p>Everything not ordinal-stable is <strong>not excluded</strong> — a \
+         statement about our knowledge, not about the code.</p></section>",
     );
 
-    let both = d.alias_free() + d.not_excluded();
+    let both = d.ordinal_stable() + d.not_excluded();
     let pct = if both == 0 {
         0.0
     } else {
-        100.0 * d.alias_free() as f64 / both as f64
+        100.0 * d.ordinal_stable() as f64 / both as f64
     };
     s.push_str("<section><h2>Summary</h2><dl>");
     let _ = write!(
@@ -2775,32 +2853,32 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
          <dt>module after</dt><dd><code>{}</code></dd>\
          <dt>sites before / after</dt><dd>{} / {}</dd>\
          <dt>present in both</dt><dd>{}</dd>\
-         <dt class=\"ok\">…provably alias-free</dt><dd class=\"ok\">{} ({:.1}%)</dd>\
-         <dt class=\"warn\">…aliasing not excluded</dt><dd class=\"warn\">{}</dd>\
+         <dt class=\"ok\">…ordinal-stable</dt><dd class=\"ok\">{} ({:.1}%)</dd>\
+         <dt class=\"warn\">…ordinal donation not excluded</dt><dd class=\"warn\">{}</dd>\
          <dt>only in before (site gone)</dt><dd>{}</dd>\
          <dt>only in after (site new)</dt><dd>{}</dd>\
          <dt>obligation set changed</dt><dd>{}</dd>\
-         <dt>…of those, attributable</dt><dd>{}</dd>",
+         <dt>…of those, ordinal-stable</dt><dd>{}</dd>",
         esc(&d.sha_before),
         esc(&d.sha_after),
         d.sites_before(),
         d.sites_after(),
         both,
-        d.alias_free(),
+        d.ordinal_stable(),
         pct,
         d.not_excluded(),
         d.only_before(),
         d.only_after(),
         d.changed(),
-        d.attributable_changes(),
+        d.ordinal_stable_changes(),
     );
     s.push_str("</dl>");
     s.push_str(
-        "<p class=\"muted\"><em>Attributable</em> = present in both runs, the \
-         obligation set changed, and the site is provably alias-free — so the \
-         change can be pinned to <em>this</em> site rather than to a neighbour \
-         that inherited its ordinal. These are the rows a sound adjudicator \
-         could act on today. They are candidates, not verdicts.</p>",
+        "<p class=\"muted\">The <em>ordinal-stable</em> subtotal is the rows on \
+         which one specific hazard — a same-kind sibling donating its ordinal — \
+         is excluded. It is a filter, not a warrant: a region-path shift can \
+         still move a key between operators, so these are the rows worth \
+         looking at FIRST, not the rows that are settled.</p>",
     );
     s.push_str(
         "<p class=\"muted\">A site \"only in before\" is <strong>not</strong> a \
@@ -2848,7 +2926,7 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
                 _ => ("warn", "changed"),
             };
             let (acls, atxt) = match r.alias {
-                AliasStatus::AliasFree => ("ok", "alias-free"),
+                AliasStatus::OrdinalStable => ("ok", "alias-free"),
                 AliasStatus::NotExcluded => ("warn", "not excluded"),
             };
             let pcs = match (r.pc_before, r.pc_after) {
@@ -2905,21 +2983,21 @@ pub fn render_delta_json(d: &Delta) -> String {
          \"adjudicated\":false,\"adjudication_issue\":\"scry#122\",\
          \"module_sha256_before\":\"{}\",\"module_sha256_after\":\"{}\",\
          \"sites_before\":{},\"sites_after\":{},\
-         \"alias_free\":{},\"not_excluded\":{},\
+         \"ordinal_stable\":{},\"not_excluded\":{},\
          \"only_before\":{},\"only_after\":{},\
-         \"changed\":{},\"unchanged\":{},\"attributable_changes\":{}}}",
+         \"changed\":{},\"unchanged\":{},\"ordinal_stable_changes\":{}}}",
         GUIDANCE_SCHEMA_VERSION,
         json_esc(&d.sha_before),
         json_esc(&d.sha_after),
         d.sites_before(),
         d.sites_after(),
-        d.alias_free(),
+        d.ordinal_stable(),
         d.not_excluded(),
         d.only_before(),
         d.only_after(),
         d.changed(),
         d.unchanged(),
-        d.attributable_changes(),
+        d.ordinal_stable_changes(),
     );
     s
 }
