@@ -877,6 +877,12 @@ fn advisory_class_name(c: AdvisoryClass) -> &'static str {
 
 /// Render one advisory as a `<li>` — the shared body of the (capped) HTML
 /// Guidance list.
+///
+/// FEAT-072: the row carries `id="ob-<obligation_id>"` and a `¶` permalink, so
+/// an obligation is CITABLE by URL. Until now the only handle a consumer could
+/// quote was `fn{index}:{pc}` — which is precisely the key that shifts on the
+/// next edit, so the dashboard was handing out references it knew would break.
+/// The `(func_index, pc)` pair stays visible as a positional convenience.
 fn render_advisory_row(s: &mut String, a: &scry_analyze_core::Advisory) {
     let (cls, label) = match a.class {
         AdvisoryClass::DefiniteFault => ("err", "FIX"),
@@ -884,9 +890,21 @@ fn render_advisory_row(s: &mut String, a: &scry_analyze_core::Advisory) {
         AdvisoryClass::PrecisionGap => ("info", "PRECISION"),
         AdvisoryClass::LeverageableFact => ("info", "LEVERAGE"),
     };
+    // An empty id means no identity could be derived (FEAT-064). Emit no anchor
+    // rather than a dead `#ob-` fragment that would resolve to the wrong row.
+    if a.obligation_id.is_empty() {
+        let _ = write!(s, "<li class=\"{cls}\">");
+    } else {
+        let _ = write!(
+            s,
+            "<li id=\"ob-{0}\" class=\"{cls}\"><a class=\"anchor\" href=\"#ob-{0}\" \
+             title=\"stable obligation id — survives edits elsewhere in the module\">¶</a>",
+            esc(&a.obligation_id),
+        );
+    }
     let _ = write!(
         s,
-        "<li class=\"{cls}\"><span class=\"sev\">{label}</span> \
+        "<span class=\"sev\">{label}</span> \
          <code>fn{}:{} {}</code> — {}<br><em>Action:</em> {}<br><em>Verify:</em> {}",
         a.func_index,
         a.pc,
@@ -1413,14 +1431,32 @@ fn esc(raw: &str) -> String {
 
 // ── structured guidance feed ────────────────────────────────────────────────
 
+/// FEAT-068: the guidance-feed schema version. Bumped when a field is added or
+/// its meaning changes, so a consumer can tell "this producer is old" from
+/// "this module has no such finding" — the distinction the un-versioned v1 feed
+/// could not express.
+///
+/// v2 (this release) adds `guidance_schema` itself plus `obligation_id`,
+/// `site_key` and `group_key` on every advisory.
+pub const GUIDANCE_SCHEMA_VERSION: u32 = 2;
+
 /// Serialize the actionable findings as a machine-consumable JSON document — the
 /// feed an AI-agent consumer reads instead of scraping the (now capped) HTML.
 ///
-/// Shape (stable): a top-level object
-/// `{ "module_sha256": "…", "schema": "…", "advisories": [ … ], "trap_checks": [ … ] }`.
+/// Shape: a top-level object
+/// `{ "guidance_schema": 2, "module_sha256": "…", "schema": "…",
+///    "advisories": [ … ], "trap_checks": [ … ] }`.
+///
+/// FEAT-068: `guidance_schema` is an explicit integer version. v1 (the v3.2.2
+/// feed) had none, so a consumer could not tell a field's ABSENCE from an old
+/// producer. v2 adds the version and the three FEAT-064/DD-021 identity keys.
+/// Absence of `guidance_schema` means v1; a consumer requiring identity must
+/// check for it rather than assume.
+///
 /// Each advisory is
 /// `{ "func_index", "pc", "class", "code", "detail", "suggested_action",
-///    "verification", "counterexample"? }`, mirroring the [`Advisory`] fields
+///    "verification", "obligation_id", "site_key", "group_key",
+///    "counterexample"? }`, mirroring the [`Advisory`] fields
 /// (`class` uses the machine-stable name, e.g. `"unproven-obligation"`). Each
 /// trap check is `{ "func_index", "pc", "op", "kind", "verdict" }`.
 ///
@@ -1432,7 +1468,8 @@ pub fn render_guidance_json(result: &AnalysisResult) -> String {
     s.push('{');
     let _ = write!(
         s,
-        "\"module_sha256\":\"{}\",\"schema\":\"{}\",",
+        "\"guidance_schema\":{},\"module_sha256\":\"{}\",\"schema\":\"{}\",",
+        GUIDANCE_SCHEMA_VERSION,
         json_esc(&result.invariants.module_sha256),
         json_esc(&result.invariants.schema),
     );
@@ -1445,7 +1482,8 @@ pub fn render_guidance_json(result: &AnalysisResult) -> String {
         let _ = write!(
             s,
             "{{\"func_index\":{},\"pc\":{},\"class\":\"{}\",\"code\":\"{}\",\
-             \"detail\":\"{}\",\"suggested_action\":\"{}\",\"verification\":\"{}\"",
+             \"detail\":\"{}\",\"suggested_action\":\"{}\",\"verification\":\"{}\",\
+             \"obligation_id\":\"{}\",\"site_key\":\"{}\",\"group_key\":\"{}\"",
             a.func_index,
             a.pc,
             advisory_class_name(a.class),
@@ -1453,6 +1491,9 @@ pub fn render_guidance_json(result: &AnalysisResult) -> String {
             json_esc(&a.detail),
             json_esc(&a.suggested_action),
             json_esc(&a.verification),
+            json_esc(&a.obligation_id),
+            json_esc(&a.site_key),
+            json_esc(&a.group_key),
         );
         if let Some(cx) = &a.counterexample {
             let _ = write!(
@@ -1548,6 +1589,12 @@ const STYLE: &str = "<style>\
     .ok{color:var(--ok);font-weight:600}.warn{color:var(--warn);font-weight:600}\
     .err{color:var(--err);font-weight:600}.muted,.empty{color:var(--muted)}\
     .diags{list-style:none;padding:0}.diags li{padding:4px 0;border-bottom:1px solid var(--line)}\
+    .anchor{float:right;color:var(--line);text-decoration:none;font-weight:400;\
+    padding:0 2px;margin-left:8px}\
+    .diags li:hover .anchor{color:var(--muted)}.anchor:hover{color:var(--fg)}\
+    .diags li:target{background:#fffbe6;outline:2px solid #f0d98a;outline-offset:2px;\
+    scroll-margin-top:16px}\
+    .diags li:target .anchor{color:var(--fg)}\
     .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:10px;\
     border:1px solid var(--line);white-space:nowrap}\
     .badge.import{background:#eef4ff;border-color:#cdd9f0}\
@@ -2131,6 +2178,8 @@ mod tests {
             verification: "re-run scry".into(),
             counterexample: None,
             obligation_id: format!("test-{i:04x}"),
+            site_key: format!("site-{i:04x}"),
+            group_key: format!("grp-{:04x}", i / 4),
         };
         for i in 0..(ADVISORY_PER_CLASS_CAP as u32 + 25) {
             r.advisories.push(mk(i));
@@ -2212,4 +2261,612 @@ mod tests {
         assert_eq!(depth, 0, "unbalanced braces/brackets in JSON");
         assert!(!in_str, "unterminated string in JSON");
     }
+
+    // ── FEAT-068 / FEAT-072 ─────────────────────────────────────────────
+
+    /// One `i32.div_s` on an unknown divisor — the smallest fixture that
+    /// raises a real, identity-stamped obligation.
+    const DIV_A: &str = "(module (func (export \"a\") (param i32) (result i32) \
+                         i32.const 10 local.get 0 i32.div_s))";
+
+    #[test]
+    fn feat068_guidance_json_carries_a_schema_version_and_the_identity_keys() {
+        let r = analyze_wat(DIV_A);
+        assert!(!r.advisories.is_empty(), "fixture must raise an advisory");
+        // Non-vacuity: the analyzer must actually have stamped an id, else the
+        // feed could carry three empty strings and still "contain" the keys.
+        assert!(
+            r.advisories.iter().any(|a| !a.obligation_id.is_empty()),
+            "FEAT-064 must stamp an obligation_id"
+        );
+        assert!(
+            r.advisories.iter().any(|a| !a.site_key.is_empty()),
+            "site_key must be stamped"
+        );
+        let json = render_guidance_json(&r);
+        assert!(
+            json.contains("\"guidance_schema\":2"),
+            "v2 feed must declare its version"
+        );
+        for k in ["obligation_id", "site_key", "group_key"] {
+            assert!(json.contains(&format!("\"{k}\":\"")), "feed must carry {k}");
+        }
+        // And the values must be the real ones, not placeholders.
+        let a = r
+            .advisories
+            .iter()
+            .find(|a| !a.obligation_id.is_empty())
+            .unwrap();
+        assert!(
+            json.contains(&format!("\"obligation_id\":\"{}\"", a.obligation_id)),
+            "the feed's id must be the analyzer's id"
+        );
+    }
+
+    #[test]
+    fn feat072_advisory_rows_are_addressable_by_stable_id() {
+        let r = analyze_wat(DIV_A);
+        let a = r
+            .advisories
+            .iter()
+            .find(|a| !a.obligation_id.is_empty())
+            .expect("an identity-stamped advisory");
+        let html = render_html(&r, "anchors");
+        assert!(
+            html.contains(&format!("id=\"ob-{}\"", a.obligation_id)),
+            "every identified obligation must be an anchor target"
+        );
+        assert!(
+            html.contains(&format!("href=\"#ob-{}\"", a.obligation_id)),
+            "and must carry its own permalink"
+        );
+    }
+
+    /// FEAT-072 AC: the citable URL must survive an edit in a DIFFERENT
+    /// function — otherwise the anchor is no better than the `fn:pc` it
+    /// replaces.
+    #[test]
+    fn feat072_anchor_survives_an_edit_in_an_unrelated_function() {
+        let before = analyze_wat(
+            "(module \
+             (func (export \"a\") (param i32) (result i32) i32.const 10 local.get 0 i32.div_s) \
+             (func (export \"b\") (param i32) (result i32) local.get 0))",
+        );
+        let after = analyze_wat(
+            "(module \
+             (func (export \"a\") (param i32) (result i32) i32.const 10 local.get 0 i32.div_s) \
+             (func (export \"b\") (param i32) (result i32) local.get 0 i32.const 1 i32.add \
+             local.get 0 i32.add))",
+        );
+        // Non-vacuity: the edit must actually have changed the module.
+        assert_ne!(
+            before.invariants.module_sha256, after.invariants.module_sha256,
+            "the two fixtures must really differ, or this test proves nothing"
+        );
+        let id = before
+            .advisories
+            .iter()
+            .find(|a| a.func_index == 0 && !a.obligation_id.is_empty())
+            .map(|a| a.obligation_id.clone())
+            .expect("fn a raises an identified obligation");
+        let frag = format!("id=\"ob-{id}\"");
+        assert!(render_html(&before, "before").contains(&frag));
+        assert!(
+            render_html(&after, "after").contains(&frag),
+            "a link handed out before the edit must still resolve after it"
+        );
+    }
+
+    /// The delta's own vacuity check: comparing a module with ITSELF must
+    /// report nothing changed. A delta that "found changes" here would make
+    /// every later number meaningless.
+    #[test]
+    fn feat072_delta_of_a_module_with_itself_reports_no_change() {
+        let r = analyze_wat(DIV_A);
+        let d = compute_delta(&r, &r);
+        assert!(
+            d.sites_before() > 0,
+            "fixture must produce sites to compare"
+        );
+        assert_eq!(d.changed(), 0, "self-comparison must show no change");
+        assert_eq!(d.only_before(), 0, "self-comparison loses no site");
+        assert_eq!(d.only_after(), 0, "self-comparison gains no site");
+        assert_eq!(d.unchanged(), d.sites_before(), "every site unchanged");
+        assert_eq!(d.attributable_changes(), 0);
+    }
+
+    /// The DUAL check — without it, "no changes" could silently be the result
+    /// of a broken match rather than of two equivalent modules.
+    #[test]
+    fn feat072_delta_of_known_different_modules_is_non_empty() {
+        // Same site, but the divisor is now a non-zero constant, so the
+        // div-by-zero obligation is discharged into a proven-safe fact.
+        let before = analyze_wat(DIV_A);
+        let after = analyze_wat(
+            "(module (func (export \"a\") (param i32) (result i32) \
+             i32.const 10 i32.const 2 i32.div_s))",
+        );
+        assert_ne!(
+            before.invariants.module_sha256, after.invariants.module_sha256,
+            "fixtures must differ"
+        );
+        let d = compute_delta(&before, &after);
+        assert!(
+            d.changed() > 0 || d.only_before() > 0 || d.only_after() > 0,
+            "a real edit must show up somewhere in the delta; got {d:?}"
+        );
+    }
+
+    /// The soundness carve-out. Aliasing needs a same-kind SIBLING in the same
+    /// ordinal domain (`ObligationId.v: survivor_inherits_deleted_identity`),
+    /// so a singleton domain is provably alias-free and a populated one is not.
+    #[test]
+    fn feat072_alias_free_requires_a_singleton_ordinal_domain() {
+        let one = analyze_wat(DIV_A);
+        let d1 = compute_delta(&one, &one);
+        assert!(
+            d1.alias_free() > 0,
+            "a lone div_s must be provably alias-free"
+        );
+        assert_eq!(
+            d1.not_excluded(),
+            0,
+            "…and nothing in that module should be flagged"
+        );
+
+        // Two same-kind operators in one region share an ordinal domain, so a
+        // deletion could shift ordinals within it.
+        let two = analyze_wat(
+            "(module (func (export \"a\") (param i32) (result i32) \
+             i32.const 10 local.get 0 i32.div_s local.get 0 i32.div_s))",
+        );
+        let d2 = compute_delta(&two, &two);
+        assert!(
+            d2.not_excluded() > 0,
+            "two same-kind sites must NOT be certified alias-free"
+        );
+        assert_eq!(
+            d2.alias_free(),
+            0,
+            "no site in a populated domain may be certified"
+        );
+    }
+
+    /// DD-022, enforced mechanically: the published page must not make a
+    /// verdict claim while scry#122 is open. Checked by grepping the rendered
+    /// output, not by reviewer discipline.
+    #[test]
+    fn feat072_delta_page_makes_no_verdict_claim() {
+        let before = analyze_wat(DIV_A);
+        let after = analyze_wat(
+            "(module (func (export \"a\") (param i32) (result i32) \
+             i32.const 10 i32.const 2 i32.div_s))",
+        );
+        let html = render_delta_html(&compute_delta(&before, &after), "delta");
+        let lower = html.to_lowercase();
+        for banned in ["discharg", "verified fix", "obligation closed"] {
+            assert!(
+                !lower.contains(banned),
+                "the delta page must not claim {banned:?} while scry#122 is open"
+            );
+        }
+        // It must instead say what it DOES claim, and cite the refutation.
+        assert!(
+            lower.contains("alias-free"),
+            "the honest headline must appear"
+        );
+        assert!(
+            lower.contains("scry#122"),
+            "the page must cite the refutation"
+        );
+        // The machine feed must be equally explicit.
+        let json = render_delta_json(&compute_delta(&before, &after));
+        assert!(json.contains("\"adjudicated\":false"));
+        assert!(!json.to_lowercase().contains("discharg"));
+    }
+}
+
+// ── FEAT-072: the delta view ────────────────────────────────────────────────
+//
+// The dashboard renders ONE snapshot, but the whole value of a stable
+// obligation identity (FEAT-064) is ACROSS TIME. This module compares two
+// analyses by identity rather than by position.
+//
+// WHAT IT DELIBERATELY DOES NOT DO: adjudicate. It reports no `discharged`
+// count and draws no conclusion about whether a fix worked. Matching on a
+// positional ordinal was refuted in review (scry#122) — a deletion paired with
+// a same-kind insertion leaves a group's site set byte-identical, so "the
+// group is unchanged" does NOT imply "identity did not alias".
+//
+// WHAT IT CAN SAY SOUNDLY. `ObligationId.v` proves aliasing via
+// `survivor_inherits_deleted_identity`: a surviving site inherits a DELETED
+// SIBLING's ordinal. That requires a sibling *in the same ordinal domain*.
+// A domain (`group_key`) holding exactly one site in both runs therefore has
+// no sibling to inherit from, and identity there provably cannot have aliased.
+// That is a real, checkable carve-out, and it is the honest headline: not "K
+// adjudicable" but "K provably alias-free, the rest not excluded".
+
+/// FEAT-072: whether an obligation's identity could have aliased between two
+/// runs — the only soundness claim the delta view makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AliasStatus {
+    /// The site's ordinal domain (`group_key`) holds exactly ONE site in both
+    /// runs. Aliasing needs a deleted same-kind sibling to inherit an ordinal
+    /// from (`ObligationId.v: survivor_inherits_deleted_identity`); a singleton
+    /// domain has none, so identity here provably did not alias.
+    AliasFree,
+    /// The domain holds two or more sites in one or both runs, so a deletion
+    /// could have shifted ordinals within it. NOT a claim that aliasing
+    /// happened — a claim that it is not excluded, which is the honest default.
+    NotExcluded,
+}
+
+/// FEAT-072: one site's fate across two analyses, keyed on `site_key` (stable
+/// across a code/class change) rather than on `(func_index, pc)`.
+#[derive(Clone, Debug)]
+pub struct DeltaRow {
+    pub site_key: String,
+    pub group_key: String,
+    /// Advisory codes at this site in each run. A SET, not a scalar: one
+    /// operator can raise several obligations (an `i32.div_s` raises both
+    /// div-by-zero and signed-overflow), and `site_key` excludes the code, so
+    /// they share a site. Modelling it as a set surfaces that multiplicity
+    /// rather than silently picking one.
+    pub codes_before: Vec<String>,
+    pub codes_after: Vec<String>,
+    pub func_index: u32,
+    pub pc_before: Option<u32>,
+    pub pc_after: Option<u32>,
+    pub alias: AliasStatus,
+}
+
+impl DeltaRow {
+    /// Present in both runs.
+    pub fn in_both(&self) -> bool {
+        !self.codes_before.is_empty() && !self.codes_after.is_empty()
+    }
+    /// The set of obligations at this site differs between the runs. NOTE: this
+    /// is an OBSERVATION about the two reports, never a verdict about a fix.
+    pub fn changed(&self) -> bool {
+        self.codes_before != self.codes_after
+    }
+}
+
+/// FEAT-072: the computed delta between two analyses.
+#[derive(Clone, Debug, Default)]
+pub struct Delta {
+    pub rows: Vec<DeltaRow>,
+    pub sha_before: String,
+    pub sha_after: String,
+}
+
+impl Delta {
+    pub fn sites_before(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| !r.codes_before.is_empty())
+            .count()
+    }
+    pub fn sites_after(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| !r.codes_after.is_empty())
+            .count()
+    }
+    pub fn only_before(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| !r.codes_before.is_empty() && r.codes_after.is_empty())
+            .count()
+    }
+    pub fn only_after(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| r.codes_before.is_empty() && !r.codes_after.is_empty())
+            .count()
+    }
+    pub fn changed(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| r.in_both() && r.changed())
+            .count()
+    }
+    pub fn unchanged(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| r.in_both() && !r.changed())
+            .count()
+    }
+    /// Sites present in both runs whose identity provably did not alias.
+    pub fn alias_free(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| r.in_both() && r.alias == AliasStatus::AliasFree)
+            .count()
+    }
+    /// Sites present in both runs where aliasing is not excluded.
+    pub fn not_excluded(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| r.in_both() && r.alias == AliasStatus::NotExcluded)
+            .count()
+    }
+    /// The rows a future adjudicator (REQ-021) could act on soundly TODAY:
+    /// present in both runs, obligation set changed, and provably alias-free.
+    /// Reported as a COUNT OF CANDIDATES, never as discharges.
+    pub fn attributable_changes(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| r.in_both() && r.changed() && r.alias == AliasStatus::AliasFree)
+            .count()
+    }
+}
+
+/// FEAT-072: compare two analyses by stable identity.
+///
+/// Both inputs must come from the same producer version — `site_key` is a hash
+/// over a key tuple whose derivation is not a cross-version contract.
+pub fn compute_delta(before: &AnalysisResult, after: &AnalysisResult) -> Delta {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // group_key -> the set of distinct sites in that ordinal domain, per run.
+    fn groups(r: &AnalysisResult) -> BTreeMap<&str, BTreeSet<&str>> {
+        let mut m: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for a in r.advisories.iter().filter(|a| !a.site_key.is_empty()) {
+            m.entry(a.group_key.as_str())
+                .or_default()
+                .insert(a.site_key.as_str());
+        }
+        m
+    }
+    // site_key -> (group_key, func_index, pc, sorted distinct codes)
+    fn sites(r: &AnalysisResult) -> BTreeMap<&str, (&str, u32, u32, BTreeSet<&str>)> {
+        let mut m: BTreeMap<&str, (&str, u32, u32, BTreeSet<&str>)> = BTreeMap::new();
+        for a in r.advisories.iter().filter(|a| !a.site_key.is_empty()) {
+            let e = m.entry(a.site_key.as_str()).or_insert((
+                a.group_key.as_str(),
+                a.func_index,
+                a.pc,
+                BTreeSet::new(),
+            ));
+            e.3.insert(a.code.as_str());
+        }
+        m
+    }
+
+    let (gb, ga) = (groups(before), groups(after));
+    let (sb, sa) = (sites(before), sites(after));
+
+    let mut keys: BTreeSet<&str> = BTreeSet::new();
+    keys.extend(sb.keys().copied());
+    keys.extend(sa.keys().copied());
+
+    let mut rows = Vec::with_capacity(keys.len());
+    for k in keys {
+        let b = sb.get(k);
+        let a = sa.get(k);
+        let group = b.map(|x| x.0).or_else(|| a.map(|x| x.0)).unwrap_or("");
+        // Alias-free ONLY when the ordinal domain is a singleton in BOTH runs:
+        // with no sibling there is nothing for a survivor to inherit from.
+        // A domain absent from one run cannot be certified, so `is_some_and`
+        // (false when absent) is the correct conservative default — a vacuous
+        // `true` here would certify exactly the sites we know least about.
+        let alias = if gb.get(group).is_some_and(|s| s.len() == 1)
+            && ga.get(group).is_some_and(|s| s.len() == 1)
+        {
+            AliasStatus::AliasFree
+        } else {
+            AliasStatus::NotExcluded
+        };
+        rows.push(DeltaRow {
+            site_key: k.to_string(),
+            group_key: group.to_string(),
+            codes_before: b
+                .map(|x| x.3.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default(),
+            codes_after: a
+                .map(|x| x.3.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default(),
+            func_index: b.map(|x| x.1).or_else(|| a.map(|x| x.1)).unwrap_or(0),
+            pc_before: b.map(|x| x.2),
+            pc_after: a.map(|x| x.2),
+            alias,
+        });
+    }
+
+    Delta {
+        rows,
+        sha_before: before.invariants.module_sha256.clone(),
+        sha_after: after.invariants.module_sha256.clone(),
+    }
+}
+
+/// FEAT-072: render a [`Delta`] as a self-contained page.
+///
+/// HONESTY CONSTRAINT (DD-022, enforced by `delta_page_makes_no_discharge_claim`):
+/// this page contains NO discharge count and no verdict vocabulary. Its
+/// headline is the alias-free fraction, because that is the one figure the
+/// scry#122 refutation did not undermine and because it states exactly how far
+/// a future adjudicator (REQ-021) could be trusted on this pair. When REQ-021
+/// lands, verdicts are ADDED here — the framing above does not have to be
+/// walked back.
+pub fn render_delta_html(d: &Delta, title: &str) -> String {
+    let mut s = String::with_capacity(8 * 1024);
+    let _ = write!(s, "{}", DOCTYPE_AND_HEAD_OPEN);
+    let _ = write!(s, "<title>{} — {}</title>", esc(HERO_TITLE), esc(title));
+    let _ = write!(s, "{}", STYLE);
+    s.push_str("</head><body>");
+    let _ = write!(s, "<h1>{} — {}</h1>", esc(HERO_TITLE), esc(title));
+
+    // What this page is, and — more importantly — what it is not.
+    s.push_str(
+        "<section><h2>What this page claims</h2>\
+         <p>This is a comparison of two analyses <strong>by stable obligation \
+         identity</strong> (FEAT-064), not by <code>(func_index, pc)</code>. \
+         It reports what <em>changed</em>. It does <strong>not</strong> report \
+         that anything was proved.</p>\
+         <p>Adjudication — turning an observed change into a <em>verdict</em> — \
+         is deliberately absent. Matching obligations on a positional ordinal \
+         was refuted in review (<code>scry#122</code>): a deletion paired with a \
+         same-kind insertion leaves an ordinal domain's site set byte-identical, \
+         so an unchanged domain does <em>not</em> imply identity held. An \
+         adjudicator that can wrongly report success is worse than none, \
+         because the cheapest way to satisfy it is to delete the code.</p>\
+         <p>The one claim made here is <strong>alias-free</strong>: a site whose \
+         ordinal domain holds exactly one member in <em>both</em> runs. Aliasing \
+         requires a deleted same-kind sibling to inherit an ordinal from \
+         (<code>ObligationId.v: survivor_inherits_deleted_identity</code>); a \
+         singleton domain has none. Everything else is <strong>not \
+         excluded</strong> — which is a statement about our knowledge, not about \
+         the code.</p></section>",
+    );
+
+    let both = d.alias_free() + d.not_excluded();
+    let pct = if both == 0 {
+        0.0
+    } else {
+        100.0 * d.alias_free() as f64 / both as f64
+    };
+    s.push_str("<section><h2>Summary</h2><dl>");
+    let _ = write!(
+        s,
+        "<dt>module before</dt><dd><code>{}</code></dd>\
+         <dt>module after</dt><dd><code>{}</code></dd>\
+         <dt>sites before / after</dt><dd>{} / {}</dd>\
+         <dt>present in both</dt><dd>{}</dd>\
+         <dt class=\"ok\">…provably alias-free</dt><dd class=\"ok\">{} ({:.1}%)</dd>\
+         <dt class=\"warn\">…aliasing not excluded</dt><dd class=\"warn\">{}</dd>\
+         <dt>only in before (site gone)</dt><dd>{}</dd>\
+         <dt>only in after (site new)</dt><dd>{}</dd>\
+         <dt>obligation set changed</dt><dd>{}</dd>\
+         <dt>…of those, attributable</dt><dd>{}</dd>",
+        esc(&d.sha_before),
+        esc(&d.sha_after),
+        d.sites_before(),
+        d.sites_after(),
+        both,
+        d.alias_free(),
+        pct,
+        d.not_excluded(),
+        d.only_before(),
+        d.only_after(),
+        d.changed(),
+        d.attributable_changes(),
+    );
+    s.push_str("</dl>");
+    s.push_str(
+        "<p class=\"muted\"><em>Attributable</em> = present in both runs, the \
+         obligation set changed, and the site is provably alias-free — so the \
+         change can be pinned to <em>this</em> site rather than to a neighbour \
+         that inherited its ordinal. These are the rows a sound adjudicator \
+         could act on today. They are candidates, not verdicts.</p>",
+    );
+    s.push_str(
+        "<p class=\"muted\">A site \"only in before\" is <strong>not</strong> a \
+         fix: the code that carried the obligation may simply be gone, which \
+         proves nothing.</p></section>",
+    );
+
+    // Changed rows only — an unchanged row carries no information and the
+    // whole point of a delta is that it is small.
+    s.push_str("<section><h2>Changed sites</h2>");
+    let changed: Vec<&DeltaRow> = d
+        .rows
+        .iter()
+        .filter(|r| r.changed())
+        .take(SECTION_ROW_CAP)
+        .collect();
+    let total_changed = d.rows.iter().filter(|r| r.changed()).count();
+    if total_changed == 0 {
+        s.push_str(
+            "<p class=\"empty\">No site changed its obligation set. If the two \
+             modules differ, that is itself worth investigating — see the \
+             self-comparison and known-different checks in the test suite.</p>",
+        );
+    } else {
+        let _ = write!(
+            s,
+            "<p>{} changed site(s){}.</p>\
+             <table><tr><th>site</th><th>fn:pc</th><th>alias</th>\
+             <th>before</th><th>after</th></tr>",
+            total_changed,
+            if total_changed > changed.len() {
+                format!(" — showing the first {}", changed.len())
+            } else {
+                String::new()
+            },
+        );
+        for r in changed {
+            let (acls, atxt) = match r.alias {
+                AliasStatus::AliasFree => ("ok", "alias-free"),
+                AliasStatus::NotExcluded => ("warn", "not excluded"),
+            };
+            let pcs = match (r.pc_before, r.pc_after) {
+                (Some(b), Some(a)) if b == a => format!("fn{}:{}", r.func_index, b),
+                (Some(b), Some(a)) => format!("fn{}:{}→{}", r.func_index, b, a),
+                (Some(b), None) => format!("fn{}:{} (gone)", r.func_index, b),
+                (None, Some(a)) => format!("fn{}:{} (new)", r.func_index, a),
+                (None, None) => "—".to_string(),
+            };
+            let fmt = |v: &Vec<String>| {
+                if v.is_empty() {
+                    "<span class=\"muted\">—</span>".to_string()
+                } else {
+                    v.iter()
+                        .map(|c| format!("<code>{}</code>", esc(c)))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }
+            };
+            let _ = write!(
+                s,
+                "<tr><td><code>{}</code></td><td><code>{}</code></td>\
+                 <td class=\"{}\">{}</td><td>{}</td><td>{}</td></tr>",
+                esc(&r.site_key),
+                esc(&pcs),
+                acls,
+                atxt,
+                fmt(&r.codes_before),
+                fmt(&r.codes_after),
+            );
+        }
+        s.push_str("</table>");
+    }
+    s.push_str("</section>");
+
+    s.push_str(
+        "<footer>Rendered by scry-viz · a comparison of two analyses by stable \
+        identity. No verdict is asserted; see scry#122. MIT OR Apache-2.0.</footer>",
+    );
+    s.push_str("</body></html>");
+    s
+}
+
+/// FEAT-072: the delta as a machine-consumable summary — what the FEAT-073
+/// harness aggregates across a run of commits.
+pub fn render_delta_json(d: &Delta) -> String {
+    let mut s = String::with_capacity(1024);
+    let _ = write!(
+        s,
+        "{{\"guidance_schema\":{},\"kind\":\"delta\",\
+         \"adjudicated\":false,\"adjudication_issue\":\"scry#122\",\
+         \"module_sha256_before\":\"{}\",\"module_sha256_after\":\"{}\",\
+         \"sites_before\":{},\"sites_after\":{},\
+         \"alias_free\":{},\"not_excluded\":{},\
+         \"only_before\":{},\"only_after\":{},\
+         \"changed\":{},\"unchanged\":{},\"attributable_changes\":{}}}",
+        GUIDANCE_SCHEMA_VERSION,
+        json_esc(&d.sha_before),
+        json_esc(&d.sha_after),
+        d.sites_before(),
+        d.sites_after(),
+        d.alias_free(),
+        d.not_excluded(),
+        d.only_before(),
+        d.only_after(),
+        d.changed(),
+        d.unchanged(),
+        d.attributable_changes(),
+    );
+    s
 }
