@@ -2432,6 +2432,47 @@ mod tests {
         );
     }
 
+    /// The page's own arithmetic must add up. This caught a real defect: the
+    /// moved-sites table filtered on `changed()` (true for gone and new rows
+    /// too) while the summary counted in-place changes only, so a page could
+    /// announce "7633 changed" above a summary saying "0 changed". Conflating
+    /// vanished / new / changed is exactly how a delta misleads.
+    #[test]
+    fn feat072_moved_rows_reconcile_with_the_summary_counts() {
+        let before = analyze_wat(
+            "(module (func (export \"a\") (param i32) (result i32) \
+             i32.const 10 local.get 0 i32.div_s) \
+             (func (export \"b\") (param i32) (result i32) \
+             i32.const 7 local.get 0 i32.div_s))",
+        );
+        // `b` is gone entirely, and `a`'s divisor becomes a non-zero constant.
+        let after = analyze_wat(
+            "(module (func (export \"a\") (param i32) (result i32) \
+             i32.const 10 i32.const 2 i32.div_s))",
+        );
+        let d = compute_delta(&before, &after);
+        let moved = d.rows.iter().filter(|r| r.changed()).count();
+        assert_eq!(
+            moved,
+            d.only_before() + d.only_after() + d.changed(),
+            "every moved row must be exactly one of gone / new / changed-in-place"
+        );
+        // Non-vacuity: this fixture must actually move something, or the
+        // identity above holds trivially at 0 == 0.
+        assert!(moved > 0, "the fixture must move at least one site");
+        // And the three buckets must be disjoint by construction.
+        for r in d.rows.iter().filter(|r| r.changed()) {
+            let gone = !r.codes_before.is_empty() && r.codes_after.is_empty();
+            let new = r.codes_before.is_empty() && !r.codes_after.is_empty();
+            let inplace = r.in_both();
+            assert_eq!(
+                u8::from(gone) + u8::from(new) + u8::from(inplace),
+                1,
+                "a moved row must fall in exactly one bucket: {r:?}"
+            );
+        }
+    }
+
     /// DD-022, enforced mechanically: the published page must not make a
     /// verdict claim while scry#122 is open. Checked by grepping the rendered
     /// output, not by reviewer discipline.
@@ -2767,36 +2808,45 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
          proves nothing.</p></section>",
     );
 
-    // Changed rows only — an unchanged row carries no information and the
+    // Only rows that MOVED. An unchanged row carries no information, and the
     // whole point of a delta is that it is small.
-    s.push_str("<section><h2>Changed sites</h2>");
-    let changed: Vec<&DeltaRow> = d
-        .rows
-        .iter()
-        .filter(|r| r.changed())
-        .take(SECTION_ROW_CAP)
-        .collect();
-    let total_changed = d.rows.iter().filter(|r| r.changed()).count();
-    if total_changed == 0 {
+    //
+    // The `fate` column exists because "changed" is three different events and
+    // conflating them is how a delta misleads: a site that VANISHED is not a
+    // site that changed class, and neither is a fix. The summary above counts
+    // in-place changes only; this table shows all three and says which is which.
+    s.push_str("<section><h2>Sites that moved</h2>");
+    let moved: Vec<&DeltaRow> = d.rows.iter().filter(|r| r.changed()).collect();
+    let shown: Vec<&&DeltaRow> = moved.iter().take(SECTION_ROW_CAP).collect();
+    if moved.is_empty() {
         s.push_str(
-            "<p class=\"empty\">No site changed its obligation set. If the two \
-             modules differ, that is itself worth investigating — see the \
-             self-comparison and known-different checks in the test suite.</p>",
+            "<p class=\"empty\">No site moved. If the two modules differ, that is \
+             itself worth investigating — see the self-comparison and \
+             known-different controls in the test suite.</p>",
         );
     } else {
         let _ = write!(
             s,
-            "<p>{} changed site(s){}.</p>\
-             <table><tr><th>site</th><th>fn:pc</th><th>alias</th>\
+            "<p><strong>{}</strong> site(s) moved — {} gone, {} new, \
+             {} changed in place{}.</p>\
+             <table><tr><th>site</th><th>fn:pc</th><th>fate</th><th>alias</th>\
              <th>before</th><th>after</th></tr>",
-            total_changed,
-            if total_changed > changed.len() {
-                format!(" — showing the first {}", changed.len())
+            moved.len(),
+            d.only_before(),
+            d.only_after(),
+            d.changed(),
+            if moved.len() > shown.len() {
+                format!(" — showing the first {}", shown.len())
             } else {
                 String::new()
             },
         );
-        for r in changed {
+        for r in shown {
+            let (fcls, ftxt) = match (r.codes_before.is_empty(), r.codes_after.is_empty()) {
+                (true, false) => ("info", "new"),
+                (false, true) => ("muted", "gone"),
+                _ => ("warn", "changed"),
+            };
             let (acls, atxt) = match r.alias {
                 AliasStatus::AliasFree => ("ok", "alias-free"),
                 AliasStatus::NotExcluded => ("warn", "not excluded"),
@@ -2804,8 +2854,8 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
             let pcs = match (r.pc_before, r.pc_after) {
                 (Some(b), Some(a)) if b == a => format!("fn{}:{}", r.func_index, b),
                 (Some(b), Some(a)) => format!("fn{}:{}→{}", r.func_index, b, a),
-                (Some(b), None) => format!("fn{}:{} (gone)", r.func_index, b),
-                (None, Some(a)) => format!("fn{}:{} (new)", r.func_index, a),
+                (Some(b), None) => format!("fn{}:{}", r.func_index, b),
+                (None, Some(a)) => format!("fn{}:{}", r.func_index, a),
                 (None, None) => "—".to_string(),
             };
             let fmt = |v: &Vec<String>| {
@@ -2821,9 +2871,12 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
             let _ = write!(
                 s,
                 "<tr><td><code>{}</code></td><td><code>{}</code></td>\
-                 <td class=\"{}\">{}</td><td>{}</td><td>{}</td></tr>",
+                 <td class=\"{}\">{}</td><td class=\"{}\">{}</td>\
+                 <td>{}</td><td>{}</td></tr>",
                 esc(&r.site_key),
                 esc(&pcs),
+                fcls,
+                ftxt,
                 acls,
                 atxt,
                 fmt(&r.codes_before),

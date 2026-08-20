@@ -321,6 +321,14 @@ fn run_index(args: &[String]) -> Result<PathBuf, CliError> {
             "MC/DC truth-table dashboard",
             "witness-viz coverage of scry's real analyzer decision corpus.",
         ),
+        (
+            "delta.html",
+            "delta.html",
+            "Release delta (by stable obligation identity)",
+            "What changed between this release's module and the previous one, \
+             keyed on stable obligation identity rather than on (func_index, pc). \
+             Reports what moved; asserts no verdict — see scry#122.",
+        ),
     ];
     let entries: Vec<scry_viz::IndexEntry> = known
         .iter()

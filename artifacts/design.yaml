@@ -843,9 +843,19 @@ artifacts:
         before implementing any of them.
         (2) Enforce observation mode STRUCTURALLY — the harness cannot return
         non-zero — rather than by a comment asking readers not to gate on it.
-        (3) Publish the ADJUDICABLE FRACTION ("of M obligations, K adjudicable,
-        N uncertain") and suppress the discharge count entirely while scry#122
-        is open, enforced by a test that greps the rendered page.
+        (3) Publish the ALIAS-FREE FRACTION ("of M shared sites, K provably
+        alias-free, the rest not excluded") and suppress the discharge count
+        entirely while scry#122 is open, enforced by a test that greps the
+        rendered page.
+        CORRECTED IN DRAFTING: this decision first said "K adjudicable", which
+        over-claims — nothing here certifies that a site can be adjudicated.
+        What IS certifiable is narrower and provable: aliasing requires a
+        deleted same-kind sibling to inherit an ordinal from
+        (`ObligationId.v: survivor_inherits_deleted_identity`), so an ordinal
+        domain holding exactly ONE member in BOTH runs has nothing to inherit
+        from. Note this is strictly STRONGER than DD-021's refuted rule — a
+        singleton domain rules aliasing out, whereas an unchanged domain does
+        not — and it is the wording the code implements.
       rationale: >
         ALTERNATIVE REJECTED for (1) — fix all nine items, then dogfood.
         Nine fixes guessed at in the dark is exactly how the first

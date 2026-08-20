@@ -347,3 +347,38 @@ jobs:
           path: ${{ github.workspace }}/scry-self-analysis.html
           if-no-files-found: error
           retention-days: 14
+      # FEAT-073 self-adjudication harness — OBSERVATION MODE.
+      #
+      # FEAT-025 (above) dogfoods scry on its own module at ONE commit. This
+      # extends the same instrument across TIME: build scry_mcdc.wasm at the
+      # last few commits and compare consecutive pairs BY STABLE OBLIGATION
+      # IDENTITY (FEAT-064/072).
+      #
+      # It DOES NOT GATE, and that is deliberate, not an oversight (DD-022).
+      # The adjudicator this would drive was refuted in review (scry#122): an
+      # adjudicator that can wrongly report a fix is worse than none, because
+      # the cheapest way for an agent to satisfy it is to delete the code. So
+      # the harness reports and never judges — `continue-on-error` is belt to
+      # the script's braces, which exits 0 unconditionally by construction.
+      #
+      # This already paid for itself: its first run surfaced scry#123 (43-45%
+      # of function identities churn per build via the Rust symbol
+      # disambiguator), a defect no fixture suite could have found because it
+      # lives in the toolchain's output rather than in scry's logic.
+      #
+      # It graduates to a gate only when REQ-021 closes.
+      - name: Self-adjudication harness (FEAT-073, observation only — never gates)
+        continue-on-error: true
+        run: |
+          git fetch --deepen=5 origin "$GITHUB_SHA" 2>/dev/null || true
+          bash scripts/self-history.sh 3 "${{ github.workspace }}/self-history"
+      - name: Upload self-history observation
+        uses: actions/upload-artifact@v4
+        with:
+          name: scry-self-history
+          # if-no-files-found: warn — an observation that produced nothing is a
+          # fact to report, not a build failure. `error` here would turn the
+          # non-gating harness into a gate through the back door.
+          if-no-files-found: warn
+          path: ${{ github.workspace }}/self-history
+          retention-days: 14
