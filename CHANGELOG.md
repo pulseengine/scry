@@ -7,6 +7,71 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.2.5] — 2026-08-21
+
+Issue-driven patch, cut ahead of v3.3.0. Both defects were reported by a user
+running the RELEASED 3.2.4 artifact over a 468-module real-world corpus — not
+found by the fixture suite. Both turned out to be a correct helper existing and
+the call site not using it.
+
+### Fixed — scry-sai-core
+
+- **`analyze` no longer panics on a branch to the function label** (#125,
+  FEAT-074). `Interp::target()` resolved a branch's label with
+  `saturating_sub` and then INDEXED; the label stack is pushed only on
+  *entering* a block/loop/if, so the function body's own implicit label is
+  never on it and `br 0` at function top level indexed an empty slice. A panic
+  inside the component traps the guest, so the host received neither arm of
+  `result<analysis-result, analyze-error>` — bypassing the interface's own
+  channel for "I could not analyse this". 2 of 281 analysed corpus modules hit
+  this deterministically.
+
+  The same line held a second defect: when the clamp did *not* panic it sent a
+  branch that exits the function into the OUTERMOST region's label, recording a
+  state that never arrives there. `checked_sub` fixes both — reaching past every
+  enclosing region means the function label, which is a return.
+
+  Verified before/after on the two spec-suite sources the reporter named: both
+  panicked before; after, `unwind.wast` analyses cleanly (49 functions, 100
+  program points) and `func.wast` returns a structured error. No precision or
+  soundness change on real code — the same 8.2 MB compiler-emitted module gives
+  identical results through both analyzers (8530 advisories, 6490 trap checks,
+  28 proven-safe, 6462 potential-trap).
+
+- **Every diagnostic that names an operator now names it** (#126, FEAT-075).
+  579 fallbacks in the corpus said only `<unsupported>` — the largest bucket,
+  larger than any named operator. `op_report_name()` already falls back to the
+  operator's Debug variant name and was already wired into the *gap* records;
+  the *diagnostics* used the lower-level `op_name()`, so the two surfaces
+  disagreed about the same event at the same pc. Fixed at both defective sites:
+  the interpreter's unsoundness fallback and the taint pass's "operator not
+  modelled" (whose trigger *is* an unmodelled operator, so it printed the
+  placeholder for exactly the population it describes).
+
+  Treated as a REQ-017 defect rather than a cosmetic one: "no silent ⊤" is not
+  met by a record that announces a degradation without identifying its cause,
+  and an unnameable fallback is *worse* than silence for an agent, which cannot
+  ask a follow-up question.
+
+  This NAMES the operators; it does not MODEL any of them. The operator ranking
+  behind #126 (nop/drop/unreachable, the bitwise/shift family, select) is
+  precision work for a later release.
+
+### Known issues
+
+- #128 — fixing the panic unmasked a pre-existing operand-stack defect in
+  `func.wast` that the crash was hiding: `Internal("i32 binop with single
+  operand")`. It takes the `analyze-error` channel correctly, so it is a defect
+  rather than a crash. Two hypotheses were tested and refuted, so its cause is
+  recorded as uncharacterised rather than guessed at.
+
+### Falsification
+
+This release is wrong if a module that analysed successfully under 3.2.4 now
+returns an error or a different verdict set. The A/B above tested exactly one
+module; a corpus-wide before/after would falsify it properly, and #126's
+reporter has offered to re-run theirs.
+
 ## [3.2.4] — 2026-07-15
 
 Fix (final page-size pass): after v3.2.3 the deployed `self-analysis.html` was
