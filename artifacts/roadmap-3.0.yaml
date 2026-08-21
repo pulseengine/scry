@@ -1373,3 +1373,72 @@ artifacts:
         target: FEAT-064
       - type: traces-to
         target: DD-022
+
+  # ══════════════════════════════════════════════════════════════════════
+  # RELEASE v3.2.5 — "Do not trap the host" (patch, issue-driven)
+  # Cut ahead of v3.3.0 rather than folded into it: scry#125 is a crash in the
+  # RELEASED 3.2.4 that traps the guest, so a consumer is blocked TODAY and
+  # v3.3.0's scope is nowhere near closed. A single high-value fix is allowed
+  # to be its own release.
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: FEAT-074
+    type: feature
+    title: "v3.2.5 — A branch to the function label must not panic (scry#125)"
+    status: proposed
+    release: v3.2.5
+    description: >
+      `analyze` PANICKED with "index out of bounds: the len is 0 but the index
+      is 0" on valid, tiny modules from the official WebAssembly test suite —
+      reported by avrabe (scry#125) after running the released
+      scry-3.2.4-wasm32-wasip2.wasm over a 468-module real-world corpus, where
+      2 of 281 analysed modules crashed deterministically.
+
+      WHY A PANIC IS WORSE THAN AN ERROR HERE. The WIT signature is
+      `analyze: func(...) -> result<analysis-result, analyze-error>`, and
+      `analyze-error` exists precisely so an unanalysable module gets a
+      STRUCTURED refusal. A panic inside the component traps the guest, so the
+      host receives NEITHER arm of the result. The interface's own channel for
+      "I could not analyse this" is bypassed, and a consumer cannot distinguish
+      "scry declined" from "scry died".
+
+      ROOT CAUSE. `Interp::target()` resolves a branch's label with
+      `labels.len().saturating_sub(1 + relative_depth)` and then INDEXES. The
+      label stack is pushed only on ENTERING a block/loop/if, so the function
+      body's own implicit label is never on it — and a branch at function top
+      level (`br 0` with no enclosing region) indexes an empty slice.
+      `saturating_sub` guards `relative_depth >= n` but not `n == 0`.
+
+      SECOND DEFECT IN THE SAME LINE. The clamp was also wrong when it did NOT
+      panic: a branch that exits the function from inside a region (`(block br 1)`)
+      was clamped to index 0 and recorded the function-exit state into the
+      OUTERMOST region's label — a state that never arrives there. Over-approximate
+      and therefore sound, but attributed to the wrong label. `checked_sub` fixes
+      both: past every enclosing region means the function label, which is a
+      RETURN with no in-function successor to carry state to.
+
+      NOT A GAP. Returning `None` records nothing, and that is not an
+      unsoundness fallback: a return is fully modelled. Emitting a gap here
+      would inflate the gap report with an ordinary construct and make
+      REQ-017's "no silent top" surface less readable, not more.
+    tags: [robustness, crash, spec-suite, issue-driven, v3.2.5]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a module whose function branches to the function label (`br 0` / `br_if 0` at top level, or `br 1` out of a single block), When analyze runs, Then it returns normally instead of panicking."
+        - "Given the two spec-suite sources the reporter named — test/core/func.wast and test/core/unwind.wast — When their first modules are analysed, Then neither traps. MEASURED before/after on the real sources: both PANICKED at HEAD; after the fix unwind.wast analyses cleanly (49 functions, 100 program points) and func.wast returns a STRUCTURED Internal error rather than a trap."
+        - "Given the fix, When the existing suite runs, Then no analyzer test regresses — the change alters which label a function-exiting branch records into, so a silent precision or soundness regression must be excluded rather than assumed."
+        - "REGRESSION ORACLE, written RED FIRST: issue125_branch_to_the_function_label_does_not_panic reproduced the reporter's exact message (`index out of bounds: the len is 0 but the index is 0`) at the same site from a one-line module BEFORE the fix, and covers every branch form that resolves a label — a fix guarding only `br` would leave `br_if` live."
+      residual: >
+        Fixing the panic UNMASKED a separate, pre-existing defect that the crash
+        was hiding: func.wast now reports `Internal("func 90 pc 7: i32 binop
+        with single operand")`. That is an operand-stack modelling defect, not a
+        crash, and it is filed separately rather than folded in here. Two
+        hypotheses were tested and REFUTED (a polymorphic stack after `br`, and
+        after `unreachable` — both analyse cleanly in isolation), so its cause is
+        recorded as uncharacterised rather than guessed at.
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: REQ-017

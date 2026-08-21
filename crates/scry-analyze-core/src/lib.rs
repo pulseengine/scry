@@ -4047,11 +4047,10 @@ impl Interp<'_, '_> {
             // ── Branches: contribute to the targeted label ──────────
             match &self.ops[pc] {
                 Operator::Br { relative_depth } => {
-                    self.target(labels, *relative_depth).record(
-                        &ctx.locals,
-                        &ctx.octagon,
-                        &ctx.mem,
-                    );
+                    // `None` = the branch exits the function; nothing to record.
+                    if let Some(l) = self.target(labels, *relative_depth) {
+                        l.record(&ctx.locals, &ctx.octagon, &ctx.mem);
+                    }
                     return Ok(Flow::Diverged);
                 }
                 Operator::BrIf { relative_depth } => {
@@ -4059,11 +4058,11 @@ impl Interp<'_, '_> {
                     // locals reach the target, on the not-taken edge we fall
                     // through (both modelled — sound).
                     let _ = ctx.operand_stack.pop();
-                    self.target(labels, *relative_depth).record(
-                        &ctx.locals,
-                        &ctx.octagon,
-                        &ctx.mem,
-                    );
+                    // `None` = the taken edge exits the function; the
+                    // fall-through below is still modelled.
+                    if let Some(l) = self.target(labels, *relative_depth) {
+                        l.record(&ctx.locals, &ctx.octagon, &ctx.mem);
+                    }
                     pc += 1;
                     continue;
                 }
@@ -4119,11 +4118,30 @@ impl Interp<'_, '_> {
         Ok(Flow::Fall)
     }
 
-    /// The label a `br relative_depth` targets (innermost = depth 0).
-    fn target<'l>(&self, labels: &'l mut [Label], relative_depth: u32) -> &'l mut Label {
-        let n = labels.len();
-        let idx = n.saturating_sub(1 + relative_depth as usize);
-        &mut labels[idx]
+    /// The label a `br relative_depth` targets (innermost = depth 0), or `None`
+    /// when the branch leaves the FUNCTION rather than an enclosing region.
+    ///
+    /// scry#125: `labels` is pushed only on ENTERING a block/loop/if, so the
+    /// function body's own implicit label is never on it. A branch whose depth
+    /// reaches past every enclosing region therefore targets that label — which
+    /// is a RETURN, with no in-function successor to carry state to. `n == 0`
+    /// (a branch at function top level) is the degenerate case of the same
+    /// thing, and it used to index an empty slice and PANIC, trapping the guest
+    /// so the host got neither arm of `result<analysis-result, analyze-error>`.
+    ///
+    /// `checked_sub` rather than `saturating_sub` is deliberate and fixes a
+    /// second defect: clamping sent a branch that exits the function into the
+    /// OUTERMOST region's label, so `(block br 1)` recorded the function-exit
+    /// state as if it reached that block. Over-approximate, hence sound, but
+    /// attributed to a label the state never arrives at.
+    ///
+    /// Returning `None` records nothing, which is sound: the branch genuinely
+    /// leaves the function, so no in-function path is being dropped. It is not
+    /// a gap either — a return is fully modelled, and emitting one would
+    /// inflate the gap report with an ordinary construct.
+    fn target<'l>(&self, labels: &'l mut [Label], relative_depth: u32) -> Option<&'l mut Label> {
+        let idx = labels.len().checked_sub(1 + relative_depth as usize)?;
+        labels.get_mut(idx)
     }
 
     /// FEAT-016 slice-2b-i guard refinement, extended by FEAT-070 (REQ-020).
@@ -4226,8 +4244,9 @@ impl Interp<'_, '_> {
         // injecting it into the octagon would be redundant for projection).
         let mut taken_locals = ctx.locals.clone();
         taken_locals[local as usize] = AbstractValue::I32Interval(taken_iv);
-        self.target(labels, depth)
-            .record(&taken_locals, &ctx.octagon, &ctx.mem);
+        if let Some(l) = self.target(labels, depth) {
+            l.record(&taken_locals, &ctx.octagon, &ctx.mem);
+        }
 
         // Not-taken edge (guard false) → fall through.
         ctx.locals[local as usize] = AbstractValue::I32Interval(not_taken_iv);
@@ -4270,9 +4289,11 @@ impl Interp<'_, '_> {
         }
         let taken_oct = refine_octagon_rel(&ctx.octagon, a, b, op, true);
         let not_taken_oct = refine_octagon_rel(&ctx.octagon, a, b, op, false);
-        // Taken edge (guard true) → label D (locals unchanged).
-        self.target(labels, depth)
-            .record(&ctx.locals, &taken_oct, &ctx.mem);
+        // Taken edge (guard true) → label D (locals unchanged). `None` when
+        // that edge exits the function; the not-taken refinement still applies.
+        if let Some(l) = self.target(labels, depth) {
+            l.record(&ctx.locals, &taken_oct, &ctx.mem);
+        }
         // Not-taken edge (guard false) → fall through.
         ctx.octagon = not_taken_oct;
         Some(next)
@@ -8780,6 +8801,39 @@ mod tests {
         assert_eq!(res.function_meta.len(), 1);
         assert_eq!(res.function_meta[0].name, None, "no name source → None");
         assert!(!res.function_meta[0].imported);
+    }
+
+    /// scry#125 (avrabe): `analyze` PANICKED with "index out of bounds: the len
+    /// is 0 but the index is 0" on two valid spec-suite modules. A panic inside
+    /// the component TRAPS the guest, so a host gets neither arm of
+    /// `result<analysis-result, analyze-error>` — the interface's own channel
+    /// for "I could not analyse this" is bypassed entirely.
+    ///
+    /// Root cause: `target()` clamps `relative_depth` with `saturating_sub`, but
+    /// nothing guards `labels.len() == 0`. The label stack is pushed only when
+    /// ENTERING a block/loop/if, so the function body's own implicit label is
+    /// never on it — and a branch at function top level targets exactly that.
+    /// `unwind.wast`, one of the two reported modules, is the spec suite's test
+    /// for unwinding out of blocks, which is why it found this.
+    #[test]
+    fn issue125_branch_to_the_function_label_does_not_panic() {
+        // `br 0` with no enclosing region targets the function label = return.
+        let r = analyze_default("(module (func (export \"f\") br 0))");
+        assert_eq!(
+            r.function_meta.len(),
+            1,
+            "the function must still be analysed"
+        );
+
+        // The same shape for every branch form that resolves a label, since
+        // they share `target()` and a fix that guards only `br` would leave the
+        // others live.
+        let _ = analyze_default("(module (func (export \"f\") (param i32) local.get 0 br_if 0))");
+        let _ =
+            analyze_default("(module (func (export \"f\") (param i32) local.get 0 br_table 0 0))");
+        // And a branch nested one level deep that targets PAST its own region
+        // out to the function label — depth 1 with a single pushed label.
+        let _ = analyze_default("(module (func (export \"f\") (block br 1)))");
     }
 
     fn analyze_default(src: &str) -> AnalysisResult {
