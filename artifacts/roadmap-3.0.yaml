@@ -1371,3 +1371,5 @@ artifacts:
         target: FEAT-025
       - type: traces-to
         target: FEAT-064
+      - type: traces-to
+        target: DD-022
