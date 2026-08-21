@@ -1385,7 +1385,7 @@ artifacts:
   - id: FEAT-074
     type: feature
     title: "v3.2.5 — A branch to the function label must not panic (scry#125)"
-    status: proposed
+    status: accepted
     release: v3.2.5
     description: >
       `analyze` PANICKED with "index out of bounds: the len is 0 but the index
@@ -1446,7 +1446,7 @@ artifacts:
   - id: FEAT-075
     type: feature
     title: "v3.2.5 — Every unsoundness fallback names its operator (scry#126)"
-    status: proposed
+    status: accepted
     release: v3.2.5
     description: >
       In avrabe's real-world corpus run (scry#126) the LARGEST bucket of
