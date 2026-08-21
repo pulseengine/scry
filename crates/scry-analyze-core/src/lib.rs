@@ -5630,8 +5630,16 @@ fn interpret_op(
                     func_index,
                     pc,
                     message: format!(
+                        // scry#126: `op_report_name`, NOT `op_name`. The latter
+                        // returns the literal "<unsupported>" for anything
+                        // outside its small hardcoded list, which made the
+                        // LARGEST bucket of fallbacks in a real-world corpus
+                        // (579 of them) name nothing at all. The operator is
+                        // known here, the Debug-variant fallback already
+                        // existed, and the GAP record was already using it —
+                        // so the two surfaces disagreed about the same event.
                         "unsupported operator at v0.2 AC#1: {} — locals degraded to top",
-                        op_name(other)
+                        op_report_name(other)
                     ),
                 });
             }
@@ -8834,6 +8842,80 @@ mod tests {
         // And a branch nested one level deep that targets PAST its own region
         // out to the function label — depth 1 with a single pushed label.
         let _ = analyze_default("(module (func (export \"f\") (block br 1)))");
+    }
+
+    /// scry#126 (avrabe): 579 of the fallback diagnostics in a real-world
+    /// corpus — the LARGEST bucket, larger than any named operator — said only
+    /// `<unsupported>`. A consumer was told THAT analysis degraded but not WHAT
+    /// caused it, which makes the diagnostic non-actionable in exactly the case
+    /// it exists for.
+    ///
+    /// The operator is known at the point the fallback is raised, and the
+    /// naming helper already existed: `op_report_name` falls back to the Debug
+    /// variant name. It was wired into the GAP records but not into this
+    /// diagnostic, so the two surfaces disagreed about the same event.
+    #[test]
+    fn issue126_fallback_diagnostic_names_the_operator() {
+        // f64.add is outside the modelled set, so it takes the fallback path.
+        // `emit_diagnostics` is OFF in the default config, so the fallback
+        // diagnostic is never pushed — using analyze_default here made the test
+        // pass its own precondition vacuously the first time.
+        let r = analyze(
+            wat::parse_str(
+                "(module (func (param f64) (result f64) local.get 0 local.get 0 f64.add))",
+            )
+            .expect("assemble"),
+            AnalysisConfig {
+                emit_diagnostics: true,
+                ..Default::default()
+            },
+        )
+        .expect("analyze");
+        let fallbacks: Vec<&Diagnostic> = r
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == DiagnosticSeverity::UnsoundnessFallback)
+            .collect();
+        assert!(
+            !fallbacks.is_empty(),
+            "f64 ops must raise unsoundness fallbacks"
+        );
+        // The property that matters: NO fallback names a placeholder.
+        for d in &fallbacks {
+            assert!(
+                !d.message.contains("<unsupported>"),
+                "every fallback must name its operator: {:?}",
+                d.message
+            );
+        }
+        // Non-vacuity: it must name the operators actually present. `f64.const`
+        // is itself unmodelled and raises the FIRST fallback — asserting only
+        // on `F64Add` made this test fail against a working fix.
+        let all = fallbacks
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        // Non-vacuity: it must name the operator actually present. Only ONE
+        // fallback fires per function (the scrub degrades the locals once), so
+        // the fixture makes f64.add the only unmodelled op — `local.get` is
+        // modelled; `f64.const` takes the fallback first and the test would
+        // otherwise assert on the wrong operator.
+        assert!(all.contains("F64Add"), "must name f64.add: {all}");
+        let d = fallbacks[0];
+        // The gap record already named it; the two surfaces must now agree, so
+        // a consumer correlating them does not see two different events.
+        let g = r
+            .gaps
+            .iter()
+            .find(|g| g.pc == d.pc && g.func_index == d.func_index)
+            .expect("the same site must carry a gap record");
+        assert!(
+            d.message.contains(&g.op),
+            "diagnostic {:?} must name the same operator as its gap {:?}",
+            d.message,
+            g.op
+        );
     }
 
     fn analyze_default(src: &str) -> AnalysisResult {

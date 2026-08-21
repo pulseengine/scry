@@ -1442,3 +1442,50 @@ artifacts:
         target: REQ-001
       - type: traces-to
         target: REQ-017
+
+  - id: FEAT-075
+    type: feature
+    title: "v3.2.5 — Every unsoundness fallback names its operator (scry#126)"
+    status: proposed
+    release: v3.2.5
+    description: >
+      In avrabe's real-world corpus run (scry#126) the LARGEST bucket of
+      fallback diagnostics was not an operator at all: 579 of them said only
+      `<unsupported>`, more than any named operator including `i32.and` (433).
+      A consumer was told THAT analysis degraded but not WHAT caused it — the
+      diagnostic is non-actionable in exactly the case it exists for, and the
+      operator ranking that makes the precision work prioritisable had to be
+      reconstructed from outside rather than read off scry's own output.
+
+      ROOT CAUSE, and it is embarrassing in the useful way: the fix already
+      existed. `op_report_name()` falls back to the operator's Debug variant
+      name precisely so an unsupported op is still identified, and it was
+      already wired into the GAP records. The fallback DIAGNOSTIC used the
+      lower-level `op_name()`, which returns the literal `<unsupported>` for
+      anything outside its short hardcoded list. So the two surfaces disagreed
+      about the same event at the same pc: the gap named the operator and the
+      diagnostic did not.
+
+      This is a REQ-017 defect, not merely cosmetic. "No silent top" is not met
+      by a record that announces a degradation without identifying its cause —
+      an unnameable fallback is only marginally better than silence, and it is
+      worse than silence for an agent, which cannot ask a follow-up question.
+    tags: [diagnostics, observability, issue-driven, honesty, v3.2.5]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a module containing an unmodelled operator, When analysis emits its unsoundness-fallback diagnostic, Then the message names the operator and never contains the literal `<unsupported>`."
+        - "Given the same site, When a consumer correlates the diagnostic with the gap record, Then both name the SAME operator — the surfaces may not disagree about one event."
+        - "MUTATION-CHECKED: reverting the one-word change reproduces the reporter's exact string, `unsupported operator at v0.2 AC#1: <unsupported> — locals degraded to top`, so the oracle is known to test the fix rather than the fixture."
+        - "NON-VACUITY, learned the hard way: the first version of this test used AnalysisConfig::default(), where emit_diagnostics is FALSE, so it asserted on an empty diagnostic set and would have passed against no fix at all. The second version asserted on the wrong operator — `f64.const` is itself unmodelled and takes the fallback first, and only ONE fallback fires per function. The fixture now makes the operator under test the only unmodelled one."
+      residual: >
+        This names the operators; it does not MODEL any of them. avrabe's
+        ranking (nop/drop/unreachable 215, the bitwise/shift family 597,
+        select 203) is the actual precision work and is not in this release.
+        What changes here is that the ranking becomes readable from scry's own
+        output instead of reconstructed by a third party.
+    links:
+      - type: traces-to
+        target: REQ-017
+      - type: traces-to
+        target: REQ-001
