@@ -664,3 +664,256 @@ artifacts:
         target: FEAT-064
       - type: traces-to
         target: FEAT-065
+
+  - id: DD-021
+    type: design-decision
+    title: "v3.3 — Adjudicating a NON-INJECTIVE identity: three keys, and `discharged` as a certainty claim"
+    status: proposed
+    tags: [ai-agent, fix-verify-loop, oracle, conservatism, v3.3]
+    description: >
+      How FEAT-065 compares two runs given that FEAT-064's identity is provably
+      NOT injective across arbitrary edits. Two findings forced this to be a
+      decision rather than an implementation detail.
+      (1) `proofs/rocq/ObligationId.v` PROVES the aliasing hazard
+      (`survivor_inherits_deleted_identity`): delete the first of two same-kind
+      operators in a region and the survivor's ordinal — hence its identity —
+      becomes exactly the deleted site's. A naive diff-by-identity can therefore
+      report a FALSE `discharged`: site A is an open obligation, site B at the
+      same kind is PROVEN-SAFE, A is deleted, B inherits A's identity, and A's
+      identity now resolves to a proven-safe advisory although A was never fixed.
+      (2) The advisory CODE is a required component of the identity (clean-room:
+      one `i32.div_s` raises both div-by-zero and signed-overflow at one pc, so
+      the site alone does not discriminate). But fixing an obligation CHANGES its
+      code — `div-by-zero` becomes `proven-safe` — so the full identity is
+      unstable across exactly the transition the adjudicator exists to detect.
+      Matching on it alone would render every genuine discharge as
+      "one identity vanished, an unrelated one appeared".
+    fields:
+      decision: >
+        Emit THREE keys per advisory, each with one job:
+          * `obligation_id`  = hash(func_ident, path, kind, ordinal, CODE) —
+            globally unique per obligation. What a consumer stores and cites.
+          * `site_key`       = hash(func_ident, path, kind, ordinal) — identifies
+            the SITE, stable across a code/class change. This is what FEAT-065
+            MATCHES ON, so a div-by-zero becoming proven-safe is recognised as
+            the same site changing state rather than two unrelated events.
+          * `group_key`      = hash(func_ident, path, kind) — the ORDINAL DOMAIN.
+            Its membership is what aliasing perturbs, so it is the conservatism
+            signal.
+        Adjudication outcomes: `discharged`, `still-open`, `regressed`, `moved`,
+        `removed-with-code`, `uncertain`.
+        `discharged` is a CERTAINTY CLAIM and requires all of: the site_key was an
+        open obligation before; it is proven-safe (or raises no obligation) after;
+        AND its `group_key`'s site_key SET is unchanged between the two runs.
+        If that set changed, the verdict is `uncertain` — never `discharged`.
+        `removed-with-code` (the site no longer exists) is a distinct outcome and
+        must never be reported as `discharged`.
+      rationale: >
+        The adjudicator inherits the analyzer's discipline one layer up: scry
+        claims PROVEN-SAFE only when the abstract state rules the trap out, and
+        FEAT-065 claims `discharged` only when identity cannot have aliased.
+        Over-claiming a discharge is the same class of error as an unsound
+        analysis, and it is the error an agent optimising against the verdict
+        would exploit fastest — an agent rewarded for `discharged` learns to
+        DELETE code, which is why `removed-with-code` is kept strictly separate.
+        RETRACTED 2026-08-11 by adversarial review — this decision originally
+        justified the group-set check by asserting that "aliasing by deletion or
+        insertion NECESSARILY changes the ordinal domain's membership". THAT IS
+        FALSE, and it was the sentence the whole conservatism rule rested on. A
+        deletion PAIRED WITH a same-kind insertion in the same region leaves the
+        group's site_key set byte-identical, so the check passes and a FALSE
+        `discharged` is produced — the delete-instead-of-fix reward hack this
+        rule exists to prevent. The group-set check is therefore a NECESSARY but
+        NOT SUFFICIENT condition, and on its own it does not make `discharged`
+        a certainty claim. Sound matching needs CONTENT corroboration (hashing
+        the operator's local context so a replaced operator cannot inherit a
+        predecessor's identity) rather than a positional ordinal plus a
+        population check. See the limitations field; the implementation is held
+        in draft until this is resolved.
+      limitations: >
+        FOUND BY ADVERSARIAL REVIEW 2026-08-11 (all reproduced; the
+        implementation is in draft, nothing shipped):
+        (1) CARDINALITY-PRESERVING DELETION defeats the group-set check — delete
+            the open operator and append a same-kind safe one, and the site set
+            is unchanged, yielding a false `discharged`. This falsifies the
+            rationale's central claim (see above).
+        (2) `body_shape_hash` is the WHOLE function identity in the no-name /
+            no-export case, so two structurally identical functions share
+            site/group keys — deleting a whole function carrying an obligation
+            reports `discharged`. Conversely ANY opcode edit in such a function
+            moves every key in it, so for stripped modules `discharged` is
+            unreachable for the canonical fix shape (insert a guard / replace a
+            `local.get` with a constant). Mitigation direction: never claim
+            `discharged` when the function identity came from the shape-hash
+            fallback — degrade to `uncertain`.
+        (3) OBLIGATION LAUNDERING: wrapping the site in a typed `block`/`if`
+            routes it through `havoc_region`, which emits no trap check, no gap
+            and no advisory when the write set is empty and the region contains
+            no call — so a LIVE obligation disappears and reads as
+            `removed-with-code`. Root cause is a pre-existing FEAT-040/046
+            reporting hole, tracked separately; the adjudicator must treat
+            "absent from a function that degraded or gained a havoc region" as
+            `uncertain`.
+        (4) `regressed` is FABRICATED on a byte-identical module: `site_key`
+            excludes the code, so an open div-by-zero and a proven
+            signed-overflow at one `i32.div_s` share a site key, putting it in
+            the proven set. Self-comparison returns contradictory `still-open`
+            and `regressed` verdicts under one id with an invented before-code.
+            The proven-safe advisory does not record WHICH trap kind it proves,
+            which is the underlying data gap.
+        (5) NEW obligations produce NO verdict at all (only sites that
+            previously carried a proven fact are checked), so a fault introduced
+            where nothing was flagged before passes the gate clean. This is the
+            blindest direction for an autonomous agent.
+        (6) `obligation_id` is not unique, against this decision's own claim: two
+            ProvenSafe trap kinds at one pc both use code `proven-safe`, and the
+            shape-hash collision duplicates ids across functions.
+        PRE-EXISTING RESIDUAL, disclosed from the start: a pure REORDERING of two
+        same-kind operators within one region preserves the group's site_key set
+        while swapping which site each key denotes (each op takes the other's
+        ordinal). The group-set check cannot see it, so that edit shape can still
+        mis-attribute a verdict. It is an unusual edit, its consequence is a
+        wrong verdict rather than an unsound analysis, and closing it would need
+        content corroboration beyond the key (e.g. hashing the operator's local
+        context) — deferred, and named here so a consumer is not surprised.
+        Consequence for consumers: a `discharged` verdict is evidence, not proof,
+        under a same-kind reordering; `uncertain` is the honest default whenever
+        the domain moved.
+    links:
+      - type: satisfies
+        target: REQ-021
+      - type: traces-to
+        target: FEAT-065
+      - type: traces-to
+        target: DD-020
+
+  - id: DD-022
+    type: design-decision
+    title: "Dogfood the adjudicator in OBSERVATION MODE, and publish the uncertain fraction rather than the discharge count"
+    status: proposed
+    description: >
+      Two coupled decisions taken on 2026-08-20, after adversarial review found
+      six wrong-verdict paths in the FEAT-065 adjudicator (scry#122) and DD-021's
+      central rationale was retracted in place.
+
+      DECISION 1 — MEASURE BEFORE REWORKING. Run the REFUTED adjudicator over
+      scry's own commit history (FEAT-073) before implementing any of scry#122's
+      nine work items, and let the observed distribution order them.
+      Alternative rejected: fix all nine, then dogfood. Rejected because nine
+      fixes guessed at in the dark is how the first implementation was built, and
+      because scry's own history is a better adversary than any fixture we would
+      write — it contains real deletions, real same-kind insertions and real
+      renames at 6,191-obligation scale. Four vacuous oracles were written in
+      this project during August 2026; every one passed a fixture chosen by the
+      same person who wrote the code. Real history is not chosen.
+
+      DECISION 2 — OBSERVATION MODE IS STRUCTURAL, NOT PROCEDURAL. The harness
+      exits 0 unconditionally and stamps scry#122 into every artifact it writes.
+      Alternative rejected: run it as a gate with a generous threshold. Rejected
+      because an adjudicator that can wrongly report `discharged` is worse than
+      none — an agent optimising against the verdict finds the cheapest exploit
+      (delete the code) before it finds a fix — and a threshold makes that
+      exploit merely quieter. A comment saying "do not gate on this" is a
+      convention; a function that cannot return non-zero is a property.
+
+      DECISION 3 — THE PUBLISHED HEADLINE IS THE ADJUDICABLE FRACTION. While
+      scry#122 is open, the delta view (FEAT-072) renders "of M obligations, K
+      adjudicable, N uncertain" and NO discharge count, enforced by a test that
+      greps the rendered page.
+      Alternative rejected: publish discharges with a caveat paragraph. Rejected
+      because the dashboard is public, the standing bar is that every public
+      claim survives Conrad Watt, and a caveat does not travel — the number gets
+      quoted, the paragraph does not. The uncertain fraction is the one figure
+      the refutation did not undermine, and it is also the more useful one: it
+      states how far the matcher can be trusted. When REQ-021 closes, the
+      discharge count is UN-SUPPRESSED rather than re-implemented, so the
+      constraint carries no rework cost.
+
+      SEPARATION OF CONCERNS (recorded because it was nearly conflated): scale
+      does not substitute for adversarial reading. The six findings came from
+      reading, not from volume, and a 6,191-obligation run producing plausible
+      numbers has exactly the shape of the vacuous oracles. FEAT-073 measures
+      WHICH failures occur; REQ-021's adversarial acceptance bar establishes
+      THAT each is fixed. Both are required; neither is evidence for the other.
+    tags: [ai-agent, dogfood, honesty, observability, v3.3]
+    fields:
+      decision: >
+        (1) Run the REFUTED adjudicator over scry's own commit history and let
+        the observed verdict distribution ORDER scry#122's nine work items,
+        before implementing any of them.
+        (2) Enforce observation mode STRUCTURALLY — the harness cannot return
+        non-zero — rather than by a comment asking readers not to gate on it.
+        (3) Publish the ORDINAL-STABLE FRACTION and suppress the discharge
+        count entirely while scry#122 is open, enforced by a test that greps the
+        rendered page — which must also assert the LIMITATION is disclosed, not
+        merely that the over-claim is absent.
+        CORRECTED TWICE IN DRAFTING, and the second correction matters more than
+        the first.
+        (a) It first said "K adjudicable", which over-claims: nothing here
+        certifies that a site can be adjudicated.
+        (b) It was then changed to "K provably ALIAS-FREE", justified by
+        `ObligationId.v: survivor_inherits_deleted_identity` needing a same-kind
+        sibling that a singleton ordinal domain does not have. THAT IS ALSO
+        WRONG, and it is wrong in the same way DD-021 was. It reasons from the
+        one theorem that happens to be proven rather than from what aliasing is;
+        a proof of ONE sufficient condition does not enumerate them.
+        The counterexample, found before publication and now pinned as
+        `feat072_region_shift_is_not_certified_as_identity_held`: `group_key`
+        hashes the region PATH, and a path is a sibling index at its depth.
+        Delete a whole region and its later siblings renumber, so a surviving
+        region moves into the deleted region's path and its sole operator
+        inherits the entire key — while BOTH domains remain singletons, so the
+        ordinal check sees nothing. An obligation removed by deleting its region
+        is then indistinguishable from one that changed state.
+        The claim is therefore named for its SCOPE: `OrdinalStable` excludes
+        sibling-ORDINAL donation and nothing else. It is a filter that says which
+        rows to look at first, never a warrant that a change belongs to a site.
+        RECORDED AS A PATTERN, because this is now the third instance: every
+        attempt to certify identity from the KEYS ALONE has failed, at three
+        different levels — the ordinal (DD-021), the region path (here), and the
+        function ident (scry#123). The keys are a good address and a bad proof.
+        Corroboration has to come from CONTENT.
+      rationale: >
+        ALTERNATIVE REJECTED for (1) — fix all nine items, then dogfood.
+        Nine fixes guessed at in the dark is exactly how the first
+        implementation was built. scry's own history is a better adversary than
+        any fixture we would write: it holds real deletions, real same-kind
+        insertions and real renames at 6,191-obligation scale. Four vacuous
+        oracles were written in this project during August 2026 and every one
+        passed a fixture chosen by whoever wrote the code. Real history is not
+        chosen.
+        ALTERNATIVE REJECTED for (2) — run it as a gate with a generous
+        threshold. An adjudicator that can wrongly report `discharged` is worse
+        than no adjudicator: an agent optimising against the verdict finds the
+        cheapest exploit (delete the code) before it finds a fix, and a
+        threshold only makes that exploit quieter. A comment is a convention; a
+        function that cannot fail is a property.
+        ALTERNATIVE REJECTED for (3) — publish discharges with a caveat
+        paragraph. The dashboard is public and the standing bar is that every
+        claim survives Conrad Watt. A caveat does not travel: the number gets
+        quoted, the paragraph does not. The uncertain fraction is both the one
+        figure the refutation did not undermine and the more useful one, since
+        it states how far the matcher can be trusted. When REQ-021 closes the
+        discharge count is UN-SUPPRESSED rather than re-implemented, so the
+        constraint carries no rework cost.
+      limitations: >
+        Scale does not substitute for adversarial reading, and this decision
+        must not be read as claiming it does. The six findings came from
+        reading, not from volume, and a 6,191-obligation run producing
+        plausible numbers has precisely the shape of the four vacuous oracles.
+        FEAT-073 measures WHICH failures occur; REQ-021's adversarial
+        acceptance bar establishes THAT each is fixed. Both are required and
+        neither is evidence for the other.
+        The harness also samples only scry's own coding style — a Rust/LLVM
+        Wasm producer. Edit shapes common in hand-written or other-toolchain
+        Wasm may be absent from the sample, so an UNOBSERVED failure path is
+        not a refuted one, only an unmeasured one.
+    links:
+      - type: satisfies
+        target: REQ-020
+      - type: traces-to
+        target: FEAT-072
+      - type: traces-to
+        target: FEAT-073
+      - type: traces-to
+        target: DD-021

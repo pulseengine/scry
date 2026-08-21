@@ -411,6 +411,35 @@ jobs:
             -o "$GITHUB_WORKSPACE/dist/self-analysis.html" \
             --title "scry ${VERSION} — self-analysis (scry_mcdc.wasm)"
 
+      # FEAT-072: a release-over-release delta, keyed on stable obligation
+      # identity. Answers "what actually moved since the last release?" — the
+      # question the single-snapshot dashboard has never been able to answer,
+      # because (func_index, pc) shifts on every edit.
+      #
+      # It reports what CHANGED and asserts no verdict (scry#122 / DD-022); the
+      # page carries that constraint in its own copy and a unit test greps for
+      # it. `continue-on-error` because a missing or unbuildable previous tag
+      # is a fact about the history, not a reason to block a release — the
+      # landing page links this view only when it exists.
+      - name: Render release delta vs the previous tag (FEAT-072)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          PREV="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${VERSION}$" | head -1)"
+          if [[ -z "$PREV" ]]; then
+            echo "no previous tag — skipping the delta view (first release)"; exit 0
+          fi
+          echo "delta: $PREV -> $VERSION"
+          WT="$(mktemp -d)/prev"
+          git worktree add --detach -q "$WT" "$PREV" || exit 0
+          ( cd "$WT/crates/scry-mcdc" && cargo build --release --target wasm32-wasip1 -q ) || exit 0
+          cargo run --release -p scry-sai-viz -- delta \
+            "$WT/crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm" \
+            crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm \
+            -o "$GITHUB_WORKSPACE/dist/delta.html" \
+            --title "${PREV} → ${VERSION} (by stable obligation identity)"
+          git worktree remove --force "$WT" 2>/dev/null || true
+
       - name: Build landing page (scry-viz index)
         run: |
           set -euo pipefail

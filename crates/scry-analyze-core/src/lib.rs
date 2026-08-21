@@ -675,6 +675,29 @@ pub struct Advisory {
     /// Empty when no identity could be derived. Opaque by construction — the
     /// layout is not a contract; do not parse it.
     pub obligation_id: String,
+    /// FEAT-072 (DD-021): identity of the SITE, excluding the advisory code —
+    /// so it is STABLE when an obligation changes state. A `div-by-zero`
+    /// becoming `proven-safe` changes `obligation_id` but NOT this, which is
+    /// what lets a delta view report "this site changed state" instead of
+    /// "one identity vanished and an unrelated one appeared".
+    ///
+    /// Derived here as DATA. It is deliberately NOT paired with an adjudicator
+    /// in this release: matching on this key alone was refuted in review
+    /// (scry#122), because a positional ordinal can be inherited by a
+    /// surviving sibling. Consumers may group and diff by it; nothing in this
+    /// release may conclude "discharged" from it.
+    pub site_key: String,
+    /// FEAT-072 (DD-021): the ORDINAL DOMAIN this site's ordinal is counted
+    /// within (function + region path + operator kind), WITHOUT the ordinal.
+    ///
+    /// This is the aliasing signal made observable: `ObligationId.v` proves a
+    /// surviving site can inherit a deleted sibling's ordinal
+    /// (survivor_inherits_deleted_identity), and that can only happen inside
+    /// one group. Comparing a group's membership across two runs therefore
+    /// bounds where identity may have shifted. Necessary but NOT sufficient to
+    /// rule aliasing out — the pairing of a deletion with a same-kind insertion
+    /// leaves the group unchanged, which is precisely what falsified DD-021.
+    pub group_key: String,
 }
 
 /// FEAT-055 (REQ-018): a candidate counterexample for an `UnprovenObligation`
@@ -3107,6 +3130,45 @@ fn obligation_id_of(func_ident: &str, path: &str, kind: &str, ordinal: u32, code
     out
 }
 
+/// FEAT-072 (DD-021): the SITE key — everything the obligation id has EXCEPT
+/// the advisory code, so it survives an obligation changing state.
+fn site_key_of(func_ident: &str, path: &str, kind: &str, ordinal: u32) -> String {
+    let mut h = Sha256::new();
+    h.update(b"site|");
+    h.update(func_ident.as_bytes());
+    h.update(b"|");
+    h.update(path.as_bytes());
+    h.update(b"|");
+    h.update(kind.as_bytes());
+    h.update(b"|");
+    h.update(ordinal.to_le_bytes());
+    let d = h.finalize();
+    let mut out = String::with_capacity(16);
+    for b in d.iter().take(8) {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// FEAT-072 (DD-021): the ORDINAL DOMAIN key — function + region path + kind,
+/// WITHOUT the ordinal. Aliasing can only occur WITHIN one such domain, so a
+/// change in a group's membership bounds where identity may have shifted.
+fn group_key_of(func_ident: &str, path: &str, kind: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(b"group|");
+    h.update(func_ident.as_bytes());
+    h.update(b"|");
+    h.update(path.as_bytes());
+    h.update(b"|");
+    h.update(kind.as_bytes());
+    let d = h.finalize();
+    let mut out = String::with_capacity(16);
+    for b in d.iter().take(8) {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
 /// FEAT-064: does this advisory describe the MODULE rather than a code site?
 /// Such advisories carry `(func 0, pc 0)` as a SENTINEL, so giving them a site
 /// identity would collide with a genuine advisory there, drift whenever func 0's
@@ -3126,6 +3188,8 @@ fn stamp_obligation_ids(
 ) {
     for a in advisories.iter_mut().filter(|a| is_module_scoped(&a.code)) {
         a.obligation_id = obligation_id_of("<module>", "", "<module>", 0, &a.code);
+        a.site_key = site_key_of("<module>", "", "<module>", 0);
+        a.group_key = group_key_of("<module>", "", "<module>");
     }
     for f in defined_funcs {
         let ident = function_meta
@@ -3145,6 +3209,8 @@ fn stamp_obligation_ids(
                     .map(op_report_name)
                     .unwrap_or_else(|| a.code.clone());
                 a.obligation_id = obligation_id_of(&ident, path, &kind, *ordinal, &a.code);
+                a.site_key = site_key_of(&ident, path, &kind, *ordinal);
+                a.group_key = group_key_of(&ident, path, &kind);
             }
         }
     }
@@ -3188,6 +3254,8 @@ fn compute_advisories(
             verification: "re-run scry: this handle_findings entry disappears".into(),
             counterexample: None,
             obligation_id: String::new(),
+            site_key: String::new(),
+            group_key: String::new(),
         });
     }
 
@@ -3228,6 +3296,8 @@ fn compute_advisories(
                     ),
                     counterexample: Some(trap_counterexample(t.kind, &t.op, memory_size_bytes)),
                 obligation_id: String::new(),
+                site_key: String::new(),
+                group_key: String::new(),
                 });
             }
             TrapVerdict::ProvenSafe => {
@@ -3255,6 +3325,8 @@ fn compute_advisories(
                     ),
                     counterexample: None,
                 obligation_id: String::new(),
+                site_key: String::new(),
+                group_key: String::new(),
                 });
             }
         }
@@ -3296,6 +3368,8 @@ fn compute_advisories(
             ),
             counterexample: None,
                 obligation_id: String::new(),
+                site_key: String::new(),
+                group_key: String::new(),
         });
     }
 
@@ -3315,6 +3389,8 @@ fn compute_advisories(
             verification: "re-run scry: stack_usage.max_stack_bytes becomes Bytes(n)".into(),
             counterexample: None,
                 obligation_id: String::new(),
+                site_key: String::new(),
+                group_key: String::new(),
         });
     }
 

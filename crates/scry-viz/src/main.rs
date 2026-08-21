@@ -24,6 +24,7 @@ fn main() -> ExitCode {
     // bare form `scry-viz <input> ...` renders one analysis.
     let result = match args.first().map(String::as_str) {
         Some("index") => run_index(&args[1..]),
+        Some("delta") => run_delta(&args[1..]),
         _ => run(&args),
     };
     match result {
@@ -173,6 +174,106 @@ fn run(args: &[String]) -> Result<PathBuf, CliError> {
     Ok(out)
 }
 
+/// `scry-viz delta <before.wasm> <after.wasm> [-o out.html] [--title NAME]` —
+/// FEAT-072: compare two modules BY STABLE OBLIGATION IDENTITY and write a
+/// delta page plus a `<stem>.delta.json` summary.
+///
+/// Takes two MODULES rather than two guidance feeds on purpose: both are
+/// analyzed in-process, so the comparison cannot drift from the producer's
+/// key derivation and no JSON parser has to be trusted in the middle.
+///
+/// It reports what changed. It does NOT adjudicate — see `scry#122`.
+fn run_delta(args: &[String]) -> Result<PathBuf, CliError> {
+    let mut inputs: Vec<PathBuf> = Vec::new();
+    let mut output: Option<PathBuf> = None;
+    let mut title: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-h" | "--help" => {
+                return Err(err(
+                    2,
+                    "usage: scry-viz delta <before.wasm|wat> <after.wasm|wat> \
+                     [-o out.html] [--title NAME]",
+                ));
+            }
+            "-o" | "--output" => {
+                output = Some(PathBuf::from(
+                    it.next().ok_or_else(|| err(2, "-o needs a path"))?,
+                ));
+            }
+            "--title" => {
+                title = Some(
+                    it.next()
+                        .ok_or_else(|| err(2, "--title needs a value"))?
+                        .clone(),
+                );
+            }
+            other if other.starts_with('-') => {
+                return Err(err(2, format!("unknown flag: {other}")));
+            }
+            other => inputs.push(PathBuf::from(other)),
+        }
+    }
+    if inputs.len() != 2 {
+        return Err(err(
+            2,
+            format!("delta needs exactly two modules, got {}", inputs.len()),
+        ));
+    }
+
+    let mut analyzed = Vec::with_capacity(2);
+    for p in &inputs {
+        let bytes = read_module(p)?;
+        analyzed.push(
+            analyze(
+                bytes,
+                AnalysisConfig {
+                    emit_diagnostics: true,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| err(3, format!("analysis failed for {}: {e:?}", p.display())))?,
+        );
+    }
+    let delta = scry_viz::compute_delta(&analyzed[0], &analyzed[1]);
+
+    let title = title.unwrap_or_else(|| {
+        format!(
+            "{} → {}",
+            inputs[0].file_name().unwrap_or_default().to_string_lossy(),
+            inputs[1].file_name().unwrap_or_default().to_string_lossy(),
+        )
+    });
+    let out = output.unwrap_or_else(|| PathBuf::from("delta.html"));
+    std::fs::write(&out, scry_viz::render_delta_html(&delta, &title))
+        .map_err(|e| err(4, format!("writing {}: {e}", out.display())))?;
+
+    let json_out = out.with_extension("delta.json");
+    std::fs::write(&json_out, scry_viz::render_delta_json(&delta))
+        .map_err(|e| err(4, format!("writing {}: {e}", json_out.display())))?;
+    eprintln!("scry-viz: wrote {}", json_out.display());
+
+    // A one-line human summary on stderr, phrased so it cannot be mistaken for
+    // a verdict: counts of what MOVED, plus how much of it is attributable.
+    eprintln!(
+        "scry-viz delta: {} site(s) before, {} after · {} changed \
+         ({} ordinal-stable) · {} gone, {} new · \
+         {} of {} shared sites ordinal-stable · no verdict claimed; \
+         ordinal-stable excludes sibling-ordinal donation only, NOT a region-path \
+         shift (scry#122, scry#123)",
+        delta.sites_before(),
+        delta.sites_after(),
+        delta.changed(),
+        delta.ordinal_stable_changes(),
+        delta.only_before(),
+        delta.only_after(),
+        delta.ordinal_stable(),
+        delta.ordinal_stable() + delta.not_excluded(),
+    );
+    Ok(out)
+}
+
 /// `scry-viz index --site-dir DIR [--title NAME]` — write a landing
 /// `index.html` into DIR linking the known dashboard views that exist there
 /// (the scry-viz self-analysis and the MC/DC dashboard). Only views actually
@@ -221,6 +322,14 @@ fn run_index(args: &[String]) -> Result<PathBuf, CliError> {
             "mcdc/index.html",
             "MC/DC truth-table dashboard",
             "witness-viz coverage of scry's real analyzer decision corpus.",
+        ),
+        (
+            "delta.html",
+            "delta.html",
+            "Release delta (by stable obligation identity)",
+            "What changed between this release's module and the previous one, \
+             keyed on stable obligation identity rather than on (func_index, pc). \
+             Reports what moved; asserts no verdict — see scry#122.",
         ),
     ];
     let entries: Vec<scry_viz::IndexEntry> = known

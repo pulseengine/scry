@@ -22,7 +22,8 @@ artifacts:
   #         AI agent is GATED on a sound checker: stable obligation identity
   #         + `scry verify` adjudication (depth), plus the MCP/query/schema
   #         surfaces and the precision work that make 6,191 unproven
-  #         obligations actionable at all (breadth). REQ-020, FEAT-064..071.
+  #         obligations actionable at all (breadth). REQ-020, FEAT-064,
+  #         066..073. The GATE half split to v3.4.0 as REQ-021/FEAT-065.
   #   v3.4  "Precision ceiling"             — convex polyhedra, ELINA-
   #         decomposed, for exact linear inequalities above the octagon.
   #         FEAT-057. Displaced from v3.3 on 2026-08-06 (see its section).
@@ -207,14 +208,20 @@ artifacts:
 
   - id: REQ-020
     type: requirement
-    title: "An AI agent can be GATED on scry: stable obligation identity + a machine-checkable oracle"
+    title: "An AI agent can CITE a scry obligation: stable identity that survives the edit"
     status: proposed
     release: v3.3.0
     description: >
       REQ-018 shipped ranked, honesty-classed advisories each carrying a
       VERIFICATION ORACLE — but as PROSE ("re-run scry: this trap_check becomes
       ProvenSafe"). A human can follow that; an agent loop cannot be gated on it.
-      Two things block the loop, and this requirement closes both.
+      Two things block the loop. This requirement closes the FIRST; REQ-021
+      closes the second. They were ONE requirement until 2026-08-20, when
+      adversarial review falsified the adjudicator's matching rule before it
+      shipped (scry#122) — at which point holding a verifiable identity half
+      hostage to a refuted adjudication half became the wrong trade. Splitting
+      is the honest move: a conjunctive requirement cannot be half-discharged,
+      and rewording it to hide the second half would be a vacuous gate.
 
       (1) IDENTITY. scry keys every finding on `(func_index, pc)`. The moment an
       agent edits the module and recompiles, every pc shifts, so "did my fix
@@ -224,11 +231,12 @@ artifacts:
       STABLE, content-addressed obligation identity that is invariant under
       edits elsewhere in the module and elsewhere in the same function.
 
-      (2) ADJUDICATION. scry shall be able to compare a new run against a prior
-      one and classify each obligation: discharged / still-open / regressed /
-      moved / removed-with-code. That converts the v3.1 prose oracle into a
-      machine verdict, so an agent's edit is gated by a SOUND CHECKER rather
-      than by tests — the actual value of REQ-018, finally executable.
+      (2) ADJUDICATION — SPLIT OUT to REQ-021 (v3.4.0) on 2026-08-20. Comparing
+      a new run against a prior one and classifying each obligation is the other
+      half of the loop, and it remains the point of the arc; but its matching
+      rule was refuted in review (DD-021's rationale retracted in place; six
+      wrong-verdict paths in scry#122) and it must not ship on a positional
+      ordinal. Identity is verifiable on its own and ships in v3.3.0.
 
       MOTIVATION (measured, not assumed): scry's own self-analysis reports 0
       proven faults against 6,191 unproven obligations and 1,962 precision gaps.
@@ -239,8 +247,9 @@ artifacts:
 
       HONESTY: a rewritten function SHOULD lose its obligation IDs. That is
       correct behaviour (the site genuinely no longer exists), not a defect, and
-      the adjudicator must report it as `removed-with-code`, never as
-      `discharged`.
+      the adjudicator (REQ-021) must report it as `removed-with-code`, never as
+      `discharged`. This statement is the shared honesty constraint across both
+      halves and is why the split does not weaken either.
     tags: [ai-agent, fix-verify-loop, identity, oracle, precision, v3.3]
     fields:
       priority: must
@@ -254,6 +263,56 @@ artifacts:
         target: G-005
       - type: evaluates-tech
         target: TE-011
+
+  - id: REQ-021
+    type: requirement
+    title: "An AI agent can be GATED on scry: a machine-checkable verdict on its own edit"
+    status: proposed
+    release: v3.4.0
+    description: >
+      The ADJUDICATION half of the original REQ-020, split out on 2026-08-20
+      after adversarial review refuted the first implementation's matching rule.
+
+      scry shall compare a fresh analysis against a prior one and classify every
+      obligation by its stable identity (REQ-020 / FEAT-064): discharged /
+      still-open / regressed / moved / removed-with-code / uncertain. That turns
+      the v3.1 PROSE oracle ("re-run scry; this trap_check becomes ProvenSafe")
+      into a machine verdict, so an agent's edit is judged by a SOUND
+      over-approximation rather than by whether the tests still pass.
+
+      WHY IT IS ITS OWN REQUIREMENT, AND WHY IT IS NOT IN v3.3.0. The first
+      implementation (FEAT-065, PR #120, never merged) matched obligations on a
+      positional intra-region ordinal plus a population check, justified by the
+      claim that aliasing "necessarily" changes the ordinal domain's membership.
+      That claim is FALSE: a deletion paired with a same-kind insertion leaves
+      the group byte-identical, producing a false `discharged`. Five further
+      wrong-verdict paths were found in the same pass (scry#122).
+
+      THE BAR THIS REQUIREMENT MUST CLEAR. An adjudicator that can wrongly
+      report `discharged` is strictly WORSE than no adjudicator, because an
+      agent optimising against the verdict finds the cheapest exploit — deleting
+      the code — before it finds a fix. Verification of this requirement is
+      therefore adversarial by construction: a self-comparison yields only
+      `still-open`; a deletion never yields `discharged`; a cardinality-
+      preserving delete+insert yields `uncertain`; a newly introduced fault
+      always yields a verdict. Matching must be CONTENT-CORROBORATED, not
+      positional — DD-020 named this as a deferred option; the review made it
+      mandatory.
+
+      EVIDENCE BEFORE REWORK: FEAT-073 runs the refuted adjudicator over scry's
+      OWN commit history in observation mode, so which of the nine scry#122 work
+      items actually fire on real code is a measurement rather than a guess.
+    tags: [ai-agent, oracle, fix-verify-loop, gate, adversarial, v3.4]
+    fields:
+      priority: must
+      category: functional
+    links:
+      - type: traces-to
+        target: REQ-020
+      - type: traces-to
+        target: REQ-018
+      - type: traces-to
+        target: G-005
 
   # ══════════════════════════════════════════════════════════════════════
   # RELEASE v2.6.0 — "Make the analysis observable"
@@ -934,11 +993,17 @@ artifacts:
         target: TE-011
 
   # ══════════════════════════════════════════════════════════════════════
-  # RELEASE v3.3.0 — "Agent-verifiable"  (REQ-020)
+  # RELEASE v3.3.0 — "Agent-citable"  (REQ-020)
+  # RE-SCOPED 2026-08-20. Was "Agent-verifiable" and carried BOTH halves of the
+  # fix-verify loop. The adjudication half was refuted in review before it
+  # shipped (scry#122) and moved to v3.4.0 with the new REQ-021. What remains
+  # here is verifiable on its own: an obligation an agent can CITE, surfaces it
+  # can reach, and the precision that makes the citations worth having.
   # Read-out from Wasm Research Day (6 Aug 2026): the AI-consumer axis is the
   # decisive one. Two halves, deliberately paired:
-  #   DEPTH   — close the fix-verify loop (identity + adjudication), so an
-  #             agent's edit is gated by a sound checker instead of by tests.
+  #   DEPTH   — identity that survives the edit, MADE VISIBLE (anchors, delta
+  #             view) and EXERCISED ON OURSELVES (self-adjudication harness,
+  #             observation mode). The gate itself follows in v3.4.0.
   #   BREADTH — make the analysis reachable and askable by an agent at all
   #             (MCP surface, queries, versioned schema, manifest), plus the
   #             precision work that makes 6,191 obligations actionable.
@@ -972,7 +1037,9 @@ artifacts:
     fields:
       phase: phase-3
       acceptance-criteria:
-        - "Given a module and an edit that changes code in an unrelated function, When scry re-analyzes, Then every obligation ID outside the edited function is unchanged."
+        - "Given a module and an edit that changes code in an unrelated function, When scry re-analyzes, Then every obligation ID outside the edited function is unchanged. FALSIFIED IN PRACTICE on Rust-produced modules (measured 2026-08-20 by FEAT-073, scry#123) — holds only for functions whose name-section name is itself stable. It is met by the unit fixture and NOT met by real toolchain output; see the AC below, which states what was measured."
+        - "MEASURED, not assumed (FEAT-073 over scry's own history, commits 582cfb06→524b3e0b). Given two builds of the same Rust source differing by an unrelated edit, When identities are compared, Then 334 of 744 functions carrying advisories (45%) lose EVERY obligation identity and 410 keep every one — an all-or-nothing split with ZERO partial cases. Cause: Rust legacy mangling ends in `17h<16 hex>E`, a symbol disambiguator derived from crate metadata and instantiation rather than from the function body, so an unrelated edit renames the function. `func_ident` is the first component of every key, so the churn takes the whole function's obligations with it."
+        - "OPEN, deliberately not claimed: whether a genuine FIX presents as a changed obligation at a surviving site. Across 7 consecutive commit pairs of scry's own history, ZERO shared sites changed their obligation set. That is a fact about the SAMPLE — scry's commits alter analyzer logic, which recompiles into different monomorphizations — and must not be restated as a structural claim without a fixture that isolates it."
         - "Given an edit that inserts instructions EARLIER in the same function AND the inserted code contains no operator of the same kind in the same region and opens no new block/loop/if at the same-or-shallower depth, When scry re-analyzes, Then obligation IDs for later sites in that function are unchanged (pc-shift immunity). QUALIFIED after clean-room review: the unrestricted form of this AC is FALSE — see DD-020's limitation section. The original wording was met only by a fixture selected around the failing case."
         - "Given one operator that raises SEVERAL obligations (an `i32.div_s` raises both div-by-zero and signed-overflow at one pc), When scry stamps identities, Then the obligations receive DISTINCT ids — the site alone is not a discriminator."
         - "Given a module-scoped advisory (unbounded-stack, which uses a `(func 0, pc 0)` sentinel rather than a real site), When scry stamps identities, Then it receives a module-scoped identity that neither collides with a genuine advisory at func 0 pc 0 nor drifts when func 0's first instruction changes."
@@ -986,9 +1053,9 @@ artifacts:
 
   - id: FEAT-065
     type: feature
-    title: "v3.3 — `scry verify --against`: scry adjudicates its own oracle"
+    title: "v3.4 — `scry verify --against`: scry adjudicates its own oracle"
     status: proposed
-    release: v3.3.0
+    release: v3.4.0
     description: >
       Turn the v3.1 prose verification oracle into a machine verdict. `scry verify
       --against <previous.json>` compares a fresh analysis with a prior one and
@@ -1024,9 +1091,14 @@ artifacts:
         - "Given a POTENTIAL-TRAP obligation and an edit that adds a correct guard, When `scry verify --against` runs, Then that obligation is reported `discharged` and the exit code signals success."
         - "Given an edit that DELETES the function containing an open obligation, When verify runs, Then it is reported `removed-with-code`, never `discharged`."
         - "Given an edit that invalidates a previously PROVEN-SAFE site, When verify runs, Then it is reported `regressed` and the exit code signals failure."
+        - "ADVERSARIAL BAR (added 2026-08-20 after review refuted the first implementation; each case must be shown RED against the pre-rework adjudicator before it is fixed). Given a module compared with ITSELF, When verify runs, Then EVERY verdict is `still-open` — no `regressed`, no `moved`, no `discharged`. The original test for this passed vacuously."
+        - "Given a cardinality-preserving edit — one same-kind operator deleted and another inserted in the same region, leaving the group multiset byte-identical — When verify runs, Then the affected obligations are `uncertain`, never `discharged`. This is the case that falsified DD-021's rationale."
+        - "Given a function whose identity was derived from `body_shape_hash` (no name-section name, no export name), When verify runs, Then no obligation in it is ever reported `discharged` — the fallback identity cannot corroborate a discharge."
+        - "Given an edit that INTRODUCES a new obligation at a site that had no prior advisory, When verify runs, Then a verdict is emitted for it. Pre-rework this produced ZERO verdicts, so an agent that fixed A while breaking B passed clean."
+        - "Given the harness of FEAT-073 over scry's own history, When the reworked adjudicator replaces the refuted one, Then the verdict distribution is re-measured and any newly-silent verdict class is explained rather than assumed to be an improvement."
     links:
       - type: traces-to
-        target: REQ-020
+        target: REQ-021
       - type: traces-to
         target: REQ-018
       - type: traces-to
@@ -1046,11 +1118,16 @@ artifacts:
       `verify` (FEAT-065 adjudication). Returns structured results, never HTML.
       Single biggest adoption lever for the AI-consumer axis (TE-011:
       structured-primary — agents under-read rendered output).
+      SCOPE SPLIT (2026-08-20): the v3.3.0 slice is `analyze` + `query` only.
+      The `verify` tool follows FEAT-065 into v3.4.0 with REQ-021 — exposing a
+      refuted adjudicator over MCP would put a wrong verdict directly into an
+      agent's tool loop, which is the single worst place for it to land.
     tags: [ai-agent, mcp, interop, v3.3]
     fields:
       phase: phase-3
       acceptance-criteria:
         - "Given an MCP client, When it calls `analyze` on a Wasm module, Then it receives a structured summary (counts by advisory class, trap verdicts, gaps) without parsing HTML or reading a multi-MB dump."
+        - "Given the v3.3.0 server, When a client enumerates its tools, Then `verify` is ABSENT rather than present-and-unreliable — the deferral is enforced by the tool list, not by documentation."
     links:
       - type: traces-to
         target: REQ-020
@@ -1182,3 +1259,117 @@ artifacts:
         target: REQ-017
       - type: traces-to
         target: G-005
+
+  # ── DOGFOOD + VISUALIZATION: the two surfaces that make identity real ──
+  # Added 2026-08-20. Identity (FEAT-064) is landed and correct within its
+  # qualified scope, but it is INVISIBLE: nothing publishes it, nothing cites
+  # it, and nothing exercises it at scale. These two features fix that without
+  # depending on the refuted adjudicator.
+
+  - id: FEAT-072
+    type: feature
+    title: "v3.3 — Obligation anchors + the delta view (identity, made visible)"
+    status: proposed
+    release: v3.3.0
+    description: >
+      The dashboard renders ONE snapshot. The entire value of a stable obligation
+      identity is across TIME, so today FEAT-064 ships a key that nothing
+      displays, nothing links to, and no consumer can cite. Two pieces:
+
+      (a) ANCHORS. Every obligation in the rendered page carries
+      `id="ob-<obligation_id>"` plus a copyable deep link, so a verdict, a
+      GitHub issue, a commit message, or an agent's citation resolves to a URL
+      that SURVIVES the next release. Today a consumer can only cite
+      `(func_index, pc)`, which is exactly the key that shifts on every edit —
+      the dashboard has been handing out references it knows will break. This
+      piece is independent of adjudication and ships in v3.3.0 unconditionally.
+
+      (b) DELTA VIEW. `scry-viz diff <before.guidance.json> <after.guidance.json>`
+      renders a page keyed on obligation ID rather than pc: what is new, what is
+      gone, what is unchanged, what cannot be matched. The 6,191-obligation dump
+      is untriageable; a delta is naturally small, which is the point.
+
+      HONESTY CONSTRAINT (non-negotiable while scry#122 is open): the delta view
+      MUST NOT publish a `discharged` count. Its headline is the
+      ORDINAL-STABLE fraction: sites whose ordinal domain is a singleton in both
+      runs, so no same-kind SIBLING could have donated an ordinal
+      (`survivor_inherits_deleted_identity` needs one).
+      NAMED FOR ITS SCOPE after a pre-publication counterexample: this excludes
+      sibling-ordinal donation and NOTHING ELSE. A whole-region deletion
+      renumbers later sibling regions, so a survivor can occupy the deleted
+      region's path and inherit its key with both domains still singletons. The
+      page must disclose that, and the grep test asserts the disclosure is
+      present as well as asserting the over-claim is absent. The
+      dashboard is public and every public claim must survive Conrad Watt; a
+      discharge count from a matcher with six known wrong-verdict paths does not.
+      When REQ-021 lands, the discharge count is UNSUPPRESSED — it is not
+      re-implemented, only un-hidden, so the constraint costs nothing later.
+    tags: [ai-agent, visualization, identity, honesty, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the published self-analysis page, When a consumer deep-links to one obligation, Then the URL fragment is that obligation's stable ID — not its pc — and the same fragment still resolves after an UNRELATED function is edited and the page re-rendered."
+        - "Given two modules from different commits, When `scry-viz delta` renders them, Then every row is keyed on stable identity (not pc) and the summary reports the ORDINAL-STABLE / NOT-EXCLUDED split. Renamed twice during implementation, and the history is the point: 'adjudicable' over-claimed, then 'alias-free' over-claimed in exactly DD-021's way — reasoning from the one proven theorem rather than from what aliasing is."
+        - "Given a module where a whole region carrying an unproven obligation is DELETED and a later sibling region moves into its path, When `scry-viz delta` renders it, Then the page DISCLOSES that ordinal-stability does not cover a region-path shift. The survivor is still counted ordinal-stable — the check cannot see it — so the acceptance is on the disclosure, and the limitation is pinned by feat072_region_shift_is_not_certified_as_identity_held so a later fix must update the disclosure in the same commit."
+        - "Given `scry-viz diff` while scry#122 is open, When it renders any pair, Then NO discharge count appears anywhere in the output — enforced by a test that greps the rendered page, not by reviewer discipline."
+        - "Given a feed compared with ITSELF, When `scry-viz diff` renders it, Then it reports zero changes and every obligation unchanged — the page's own vacuity check, so a plausible-looking delta cannot come from an empty comparison."
+        - "Given a pair known to differ, When `scry-viz diff` renders it, Then the change set is NON-EMPTY — the dual check, so 'no changes' can never be the silent result of a broken match."
+    links:
+      - type: traces-to
+        target: REQ-020
+      - type: traces-to
+        target: REQ-017
+      - type: traces-to
+        target: FEAT-064
+      - type: traces-to
+        target: FEAT-063
+
+  - id: FEAT-073
+    type: feature
+    title: "v3.3 — Self-adjudication harness: scry adjudicates scry, in observation mode"
+    status: proposed
+    release: v3.3.0
+    description: >
+      Roll the fix-verify loop out ON OURSELVES. FEAT-025 already dogfoods scry
+      on its own compiled module (`scry_mcdc.wasm`) at a single commit; this
+      extends the same instrument across TIME — run the adjudicator over N
+      consecutive commits of scry's own history and publish the verdict
+      distribution.
+
+      PURPOSE IS EVIDENCE, NOT GATING. scry#122 lists nine work items and there
+      is no data on which of them fire on real code. scry's own history contains
+      real deletions, real same-kind insertions, and real function renames at
+      6,191-obligation scale — a far stronger sample than a hand-built fixture,
+      and the four vacuous oracles written in this project during August 2026
+      are the standing argument for preferring measured behaviour to designed
+      behaviour. The measurement ORDERS the rework instead of guessing at it.
+
+      OBSERVATION MODE IS ENFORCED BY CONSTRUCTION (DD-022): the harness exits 0
+      unconditionally, gates nothing, and every artifact it writes carries a
+      header naming scry#122 so that no reader — human or agent — mistakes a
+      `discharged` count for truth. It graduates to a gate only when REQ-021 has
+      closed and the distribution is understood. A gate on an unvalidated
+      adjudicator is precisely the failure mode the adjudicator exists to
+      prevent, one layer up.
+    tags: [ai-agent, dogfood, ci, evidence, honesty, v3.3]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given N consecutive commits of scry, When the harness runs, Then it emits a per-pair verdict distribution, and every artifact it writes names scry#122 as the reason no verdict in it is authoritative."
+        - "Given a pair of commits KNOWN to differ, When the harness runs, Then its verdict set is NON-EMPTY — the harness's own vacuity check, so a clean run can never be an empty run silently reported as agreement."
+        - "Given a commit compared with ITSELF, When the harness runs, Then it reports only `still-open` — the same self-comparison invariant REQ-021 is held to, measured on the real module rather than a fixture."
+        - "Given the harness in CI, When any pair yields `regressed` or `discharged`, Then the job still exits 0 — observation mode is a property of the code, not a convention a future edit can quietly drop."
+        - "Given the measured distribution, When scry#122 is prioritized, Then each of its nine work items is annotated with whether the path was OBSERVED on real history or remains theoretical — the ordering is evidence-led."
+        - "FIRST RUN, 2026-08-20 (8 commits, 7 pairs). The harness paid for itself before scry#122 was touched: it surfaced a defect that is on NEITHER the issue's nine items nor DD-020's limitations — 43-45% of function identities churn per build via the Rust symbol disambiguator (scry#123). Recorded as the harness's own acceptance evidence: a fixture-only test suite could not have found this, because the defect lives in the toolchain's output rather than in scry's logic."
+        - "The same run REFUTED a hypothesis of the author's before it was published — that ordinal shifts inside surviving functions would masquerade as gone+new. The discriminating probe found ZERO partial-overlap functions, so ordinal shift contributed nothing to the observed churn. Recorded because the harness's value is symmetric: it must be able to kill our explanations, not only confirm them."
+    links:
+      - type: traces-to
+        target: REQ-020
+      - type: traces-to
+        target: REQ-021
+      - type: traces-to
+        target: FEAT-025
+      - type: traces-to
+        target: FEAT-064
+      - type: traces-to
+        target: DD-022
