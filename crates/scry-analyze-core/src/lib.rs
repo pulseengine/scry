@@ -7023,9 +7023,13 @@ fn run_taint_analysis(
                         func_index: func.abs_index,
                         pc,
                         message: format!(
+                            // scry#126: `op_report_name`, NOT `op_name` — this
+                            // diagnostic's TRIGGER is an unmodelled operator, so
+                            // `op_name`'s `<unsupported>` fallback fired for
+                            // exactly the population it exists to describe.
                             "taint: operator {} not modelled — taint state conservatively \
                              raised to High (sound, FEAT-009)",
-                            op_name(op)
+                            op_report_name(op)
                         ),
                     });
                 }
@@ -8916,6 +8920,49 @@ mod tests {
             d.message,
             g.op
         );
+    }
+
+    /// scry#126, second site. The taint pass has its OWN "operator not
+    /// modelled" diagnostic, and it formatted `op_name` too — so it printed
+    /// `<unsupported>` for exactly the population it exists to describe.
+    ///
+    /// Found by grepping every `op_name` call site after fixing the first one,
+    /// rather than assuming the first was the only one. A third site (the
+    /// write-set-havoc Info at the `block`/`loop`/`if` opener) is safe, because
+    /// `op_name` does cover those three.
+    #[test]
+    fn issue126_taint_fallback_diagnostic_also_names_the_operator() {
+        let r = analyze(
+            wat::parse_str(
+                "(module (func (param f64) (result f64) local.get 0 local.get 0 f64.add))",
+            )
+            .expect("assemble"),
+            AnalysisConfig {
+                emit_diagnostics: true,
+                taint_policy: Some(TaintPolicy {
+                    high_params: alloc::vec![0],
+                    low_results: alloc::vec![0],
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("analyze");
+        let taint: Vec<&Diagnostic> = r
+            .diagnostics
+            .iter()
+            .filter(|d| d.message.starts_with("taint: operator"))
+            .collect();
+        assert!(
+            !taint.is_empty(),
+            "the taint pass must report the unmodelled f64.add"
+        );
+        for d in &taint {
+            assert!(
+                !d.message.contains("<unsupported>"),
+                "the taint fallback must name its operator: {:?}",
+                d.message
+            );
+        }
     }
 
     fn analyze_default(src: &str) -> AnalysisResult {
