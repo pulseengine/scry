@@ -902,7 +902,7 @@ fn render_advisory_row(s: &mut String, a: &scry_analyze_core::Advisory) {
              name and structure are (see scry#123)\">¶</a>",
             esc(&a.obligation_id),
         );
-        // FEAT-076 (scry#123): a build-local identity must be visibly marked —
+        // FEAT-077 (scry#123): a build-local identity must be visibly marked —
         // the id above is unique within THIS build only, so citing it across
         // builds is meaningless and a consumer must be able to tell without
         // parsing the id.
@@ -1454,7 +1454,7 @@ fn esc(raw: &str) -> String {
 /// v2 added `guidance_schema` itself plus `obligation_id`, `site_key` and
 /// `group_key` on every advisory.
 ///
-/// v3 (FEAT-076, scry#123) adds `id_build_local` on every advisory: `true`
+/// v3 (FEAT-077, scry#123) adds `id_build_local` on every advisory: `true`
 /// means the three identity keys are unique within THIS analysis but NOT
 /// comparable across builds (the function's stripped name is shared by
 /// another function, so the raw, disambiguated — and churning — name is
@@ -1472,7 +1472,7 @@ pub const GUIDANCE_SCHEMA_VERSION: u32 = 3;
 /// FEAT-068: `guidance_schema` is an explicit integer version. v1 (the v3.2.2
 /// feed) had none, so a consumer could not tell a field's ABSENCE from an old
 /// producer. v2 adds the version and the three FEAT-064/DD-021 identity keys;
-/// v3 (FEAT-076) adds `id_build_local`. Absence of `guidance_schema` means
+/// v3 (FEAT-077) adds `id_build_local`. Absence of `guidance_schema` means
 /// v1; a consumer requiring identity must check for it rather than assume.
 ///
 /// Each advisory is
@@ -2585,7 +2585,7 @@ mod tests {
         assert!(!json.to_lowercase().contains("discharg"));
     }
 
-    // ── FEAT-076 (scry#123): surfacing build-local identity ─────────────────
+    // ── FEAT-077 (scry#123): surfacing build-local identity ─────────────────
 
     /// A module reaching BOTH identity tiers: two monomorphizations sharing a
     /// stripped name (→ build-local) and one unique stripped name (→ stable).
@@ -2618,7 +2618,7 @@ mod tests {
         r
     }
 
-    /// FEAT-076: the guidance feed must let a consumer tell a stable id from a
+    /// FEAT-077: the guidance feed must let a consumer tell a stable id from a
     /// build-local one WITHOUT parsing the id — and the schema version must
     /// say the field exists (FEAT-068: absence of a field from an old producer
     /// must be distinguishable).
@@ -2640,7 +2640,7 @@ mod tests {
         );
     }
 
-    /// FEAT-076: the HTML guidance row must disclose a build-local id visibly,
+    /// FEAT-077: the HTML guidance row must disclose a build-local id visibly,
     /// and must NOT stamp the disclosure on stable ids.
     #[test]
     fn guidance_html_marks_build_local_ids_only() {
@@ -2667,7 +2667,7 @@ mod tests {
         );
     }
 
-    /// FEAT-076: the delta view compares runs BY identity, so it is exactly
+    /// FEAT-077: the delta view compares runs BY identity, so it is exactly
     /// where a build-local id would be misread — a churned raw name shows up
     /// as one site vanishing and an unrelated one appearing. The row and the
     /// summaries must carry the flag, and the page must disclose it.
@@ -2761,7 +2761,7 @@ pub struct DeltaRow {
     pub pc_before: Option<u32>,
     pub pc_after: Option<u32>,
     pub alias: AliasStatus,
-    /// FEAT-076 (scry#123): TRUE when any advisory at this site, in either
+    /// FEAT-077 (scry#123): TRUE when any advisory at this site, in either
     /// run, carries a BUILD-LOCAL identity (`Advisory::id_build_local`) — the
     /// site's keys are unique within one analysis but NOT comparable across
     /// builds, so its appearance/disappearance here is NOT evidence a site
@@ -2840,7 +2840,7 @@ impl Delta {
             .filter(|r| r.in_both() && r.alias == AliasStatus::NotExcluded)
             .count()
     }
-    /// FEAT-076 (scry#123): sites whose identity is BUILD-LOCAL in at least
+    /// FEAT-077 (scry#123): sites whose identity is BUILD-LOCAL in at least
     /// one run — rows on which cross-build comparison is not meaningful.
     pub fn build_local_sites(&self) -> usize {
         self.rows.iter().filter(|r| r.build_local).count()
@@ -2874,7 +2874,7 @@ pub fn compute_delta(before: &AnalysisResult, after: &AnalysisResult) -> Delta {
         m
     }
     // site_key -> (group_key, func_index, pc, sorted distinct codes,
-    //              any advisory here build-local (FEAT-076))
+    //              any advisory here build-local (FEAT-077))
     #[allow(clippy::type_complexity)]
     fn sites(r: &AnalysisResult) -> BTreeMap<&str, (&str, u32, u32, BTreeSet<&str>, bool)> {
         let mut m: BTreeMap<&str, (&str, u32, u32, BTreeSet<&str>, bool)> = BTreeMap::new();
@@ -2929,7 +2929,7 @@ pub fn compute_delta(before: &AnalysisResult, after: &AnalysisResult) -> Delta {
             pc_before: b.map(|x| x.2),
             pc_after: a.map(|x| x.2),
             alias,
-            // FEAT-076: build-local in EITHER run poisons cross-run
+            // FEAT-077: build-local in EITHER run poisons cross-run
             // comparability of the row, so either flag marks it.
             build_local: b.map(|x| x.4).unwrap_or(false) || a.map(|x| x.4).unwrap_or(false),
         });
@@ -3040,7 +3040,7 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
          fix: the code that carried the obligation may simply be gone, which \
          proves nothing.</p>",
     );
-    // FEAT-076 (scry#123): rows whose identity is build-local are hashed from
+    // FEAT-077 (scry#123): rows whose identity is build-local are hashed from
     // a raw disambiguated name that churns across builds — their appearance
     // or disappearance between two builds is expected noise, not evidence.
     s.push_str(

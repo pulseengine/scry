@@ -590,7 +590,7 @@ artifacts:
         An obligation ID is a content address over four components, in this
         order: (1) FUNCTION IDENTITY — the name-section name if present, else the
         export name, else a hash of the function body's structural shape (opcode
-        sequence with immediates elided). AMENDED 2026-08-25 (FEAT-076,
+        sequence with immediates elided). AMENDED 2026-08-25 (FEAT-077,
         scry#123): a name-section name carrying Rust's `17h<16 hex>E`
         disambiguator is used STRIPPED when the stripped form is unique within
         the module; when it is not unique the raw name is kept and the advisory
@@ -650,12 +650,12 @@ artifacts:
             opened and the paths below are wrong for exception-handling modules.
             Tracked; no panic and no intra-function collision.
         (6) DISAMBIGUATOR CHURN (scry#123, measured by FEAT-073's first run;
-            REPAIRED in part by FEAT-076). The name-section name inherits Rust
+            REPAIRED in part by FEAT-077). The name-section name inherits Rust
             legacy mangling's `17h<16 hex>E` symbol disambiguator, derived from
             crate metadata rather than the body — raw-name survival across an
             unrelated one-commit edit measured 54.8%, and 54.9% across an edit
             to the function's OWN body, so the raw name is destroyed by the
-            very edit the identity exists to survive. FEAT-076 makes function
+            very edit the identity exists to survive. FEAT-077 makes function
             identity two-tier: the stripped name when unique within the module
             (measured 100% stable), else the raw name with the advisory marked
             `id_build_local: true`. RESIDUAL: 37.8% of functions (all

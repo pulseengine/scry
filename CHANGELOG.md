@@ -9,7 +9,7 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ### Added — scry-sai-core
 
-- **FEAT-076 (scry#123): two-tier function identity.** `func_ident` — the
+- **FEAT-077 (scry#123): two-tier function identity.** `func_ident` — the
   first component of `obligation_id` / `site_key` / `group_key` — no longer
   hashes Rust's legacy-mangling symbol disambiguator (`17h<16 hex>E`), which
   derives from crate metadata and re-rolls on any upstream edit (measured:
@@ -25,7 +25,7 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ### Changed — scry-sai-viz
 
-- **Guidance feed schema v3** (FEAT-076): every advisory now carries
+- **Guidance feed schema v3** (FEAT-077): every advisory now carries
   `id_build_local`; the HTML guidance row shows a `build-local id` badge; the
   FEAT-072 delta view carries a per-row `build_local` flag, a
   `build_local_sites` summary count (JSON + page), and discloses that a

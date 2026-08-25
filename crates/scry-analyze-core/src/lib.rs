@@ -698,7 +698,7 @@ pub struct Advisory {
     /// rule aliasing out — the pairing of a deletion with a same-kind insertion
     /// leaves the group unchanged, which is precisely what falsified DD-021.
     pub group_key: String,
-    /// FEAT-076 (scry#123, DD-020): TRUE when this advisory's identity keys
+    /// FEAT-077 (scry#123, DD-020): TRUE when this advisory's identity keys
     /// (`obligation_id` / `site_key` / `group_key`) are BUILD-LOCAL — unique
     /// within THIS analysis but NOT comparable across builds of the same
     /// source. Set when the function's name-section name carries a Rust legacy
@@ -3128,7 +3128,7 @@ fn body_shape_hash(ops: &[Operator<'_>]) -> String {
     out
 }
 
-/// FEAT-076 (scry#123): strip Rust's LEGACY-mangling symbol disambiguator — a
+/// FEAT-077 (scry#123): strip Rust's LEGACY-mangling symbol disambiguator — a
 /// trailing `17h` + exactly 16 LOWERCASE hex digits + `E` — from a
 /// name-section name. Returns `None` for any other shape; nothing broader is
 /// attempted (an over-matching heuristic would rename functions that were
@@ -3224,7 +3224,7 @@ fn is_module_scoped(code: &str) -> bool {
     code == "unbounded-stack"
 }
 
-/// FEAT-064 + FEAT-076: stamp every advisory with its obligation identity.
+/// FEAT-064 + FEAT-077: stamp every advisory with its obligation identity.
 ///
 /// Function identity is TWO-TIER (scry#123, DD-020). The raw name-section name
 /// inherits Rust's legacy symbol disambiguator (`17h<16 hex>E`), which is
@@ -3252,7 +3252,7 @@ fn stamp_obligation_ids(
         a.site_key = site_key_of("<module>", "", "<module>", 0);
         a.group_key = group_key_of("<module>", "", "<module>");
     }
-    // FEAT-076: a stripped name may serve as the identity ONLY when unique in
+    // FEAT-077: a stripped name may serve as the identity ONLY when unique in
     // the module. Count every named function's CANDIDATE — stripped when the
     // exact disambiguator shape is present, else the raw name — so a stripped
     // name that lands on another function's candidate (a sibling
@@ -10051,7 +10051,7 @@ mod tests {
         assert_eq!(res.stack_usage.max_stack_bytes, StackBound::Unknown);
     }
 
-    // ── FEAT-076 (scry#123): two-tier function identity ─────────────────────
+    // ── FEAT-077 (scry#123): two-tier function identity ─────────────────────
 
     /// All identity-stamped advisories for `func`, asserted non-empty —
     /// anti-vacuity: a fixture that never produces a stamped advisory would
@@ -10070,14 +10070,14 @@ mod tests {
         v
     }
 
-    /// FEAT-076 tier 1 — a UNIQUE stripped name survives the disambiguator
+    /// FEAT-077 tier 1 — a UNIQUE stripped name survives the disambiguator
     /// re-rolling. Rust legacy mangling ends in `17h<16 hex>E`, a symbol
     /// disambiguator derived from crate metadata and instantiation, NOT the
     /// body — so an unrelated edit renames the function and (before this fix)
     /// destroyed every obligation identity in it (measured: 45% of identified
     /// functions churn per commit, scry#123).
     #[test]
-    fn feat076_unique_stripped_ident_survives_disambiguator_churn() {
+    fn feat077_unique_stripped_ident_survives_disambiguator_churn() {
         let base = analyze_default(
             "(module \
                (func $\"_ZN4demo3foo17h0123456789abcdefE\" (param i32) (result i32) \
@@ -10109,13 +10109,13 @@ mod tests {
         }
     }
 
-    /// FEAT-076 tier 2 — two functions sharing a stripped name (two
+    /// FEAT-077 tier 2 — two functions sharing a stripped name (two
     /// monomorphizations of one dependency generic; measured 37.8% of
     /// functions, max multiplicity 39) must NOT collapse onto one identity.
     /// The raw name keeps them apart WITHIN the build, and the advisory is
     /// marked build-local because that raw name churns ACROSS builds.
     #[test]
-    fn feat076_shared_stripped_name_does_not_collide_and_is_marked_build_local() {
+    fn feat077_shared_stripped_name_does_not_collide_and_is_marked_build_local() {
         let r = analyze_default(
             "(module \
                (func $\"_ZN3dep7generic17haaaaaaaaaaaaaaaaE\" (param i32) (result i32) \
@@ -10143,11 +10143,11 @@ mod tests {
         }
     }
 
-    /// FEAT-076 — the uniqueness check must count PLAIN names too: `foo17h…E`
+    /// FEAT-077 — the uniqueness check must count PLAIN names too: `foo17h…E`
     /// strips to `foo`, which another function already IS. Using the stripped
     /// form would collide with a name that never had a disambiguator.
     #[test]
-    fn feat076_stripped_name_colliding_with_plain_name_falls_back() {
+    fn feat077_stripped_name_colliding_with_plain_name_falls_back() {
         let r = analyze_default(
             "(module \
                (func $foo (param i32) (result i32) \
@@ -10171,11 +10171,11 @@ mod tests {
         }
     }
 
-    /// FEAT-076 — only the EXACT shape `17h` + 16 LOWERCASE hex + `E` is a
+    /// FEAT-077 — only the EXACT shape `17h` + 16 LOWERCASE hex + `E` is a
     /// Rust disambiguator. Near misses (uppercase hex, 15 digits) are ordinary
     /// names: the id tracks the raw name exactly as today, unmarked.
     #[test]
-    fn feat076_only_the_exact_disambiguator_shape_is_stripped() {
+    fn feat077_only_the_exact_disambiguator_shape_is_stripped() {
         let base = analyze_default(
             "(module \
                (func $\"upper17h0123456789ABCDEFE\" (param i32) (result i32) \
@@ -10203,11 +10203,11 @@ mod tests {
         }
     }
 
-    /// FEAT-076 regression pin — for a name with NO disambiguator the identity
+    /// FEAT-077 regression pin — for a name with NO disambiguator the identity
     /// derivation is byte-identical to v3.2.5. The constant was captured from
     /// the UNMODIFIED code (main, 5cd2a89) on this exact fixture.
     #[test]
-    fn feat076_plain_name_id_is_byte_identical_to_v325() {
+    fn feat077_plain_name_id_is_byte_identical_to_v325() {
         let r = analyze_default(
             "(module (func $compute (param i32) (result i32) \
                i32.const 10 local.get 0 i32.div_s))",
@@ -10219,16 +10219,16 @@ mod tests {
             .expect("fixture must raise an identity-stamped div-by-zero advisory");
         assert_eq!(
             a.obligation_id, "dd7c4231ce161f87",
-            "a plain name's obligation id must not change across FEAT-076"
+            "a plain name's obligation id must not change across FEAT-077"
         );
         assert!(!a.id_build_local, "a plain name is not build-local");
     }
 
-    /// FEAT-076 regression pin — the body-shape-hash fallback (no name section,
+    /// FEAT-077 regression pin — the body-shape-hash fallback (no name section,
     /// no export) is byte-identical to v3.2.5 and unmarked. Constant captured
     /// from the UNMODIFIED code (main, 5cd2a89) on this exact fixture.
     #[test]
-    fn feat076_shape_hash_fallback_id_is_byte_identical_to_v325() {
+    fn feat077_shape_hash_fallback_id_is_byte_identical_to_v325() {
         let r = analyze_default(
             "(module (func (param i32) (result i32) \
                i32.const 10 local.get 0 i32.div_s))",
@@ -10240,7 +10240,7 @@ mod tests {
             .expect("fixture must raise an identity-stamped div-by-zero advisory");
         assert_eq!(
             a.obligation_id, "4f61c85b63648dc7",
-            "the shape-hash fallback id must not change across FEAT-076"
+            "the shape-hash fallback id must not change across FEAT-077"
         );
         assert!(
             !a.id_build_local,
