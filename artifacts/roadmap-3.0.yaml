@@ -1716,4 +1716,58 @@ artifacts:
         - "Given the explicit package list, Then it is deliberately not `--workspace`: the workspace holds wasm32 cdylib members a host `cargo test` cannot build. The guard is what makes the explicit list safe."
     links:
       - type: traces-to
+
+  - id: FEAT-079
+    type: feature
+    title: "v3.2.6 — Every havoc'd region records a gap: close the laundering hole (scry#121)"
+    status: proposed
+    release: v3.2.6
+    description: >
+      `havoc_region` never interprets the region body, yet it recorded a gap ONLY
+      when the write set was non-empty or the region contained a call. A typed
+      region that writes no local and calls nothing therefore vanished with NO
+      record of any kind — no trap check, no gap, no advisory.
+
+      Reproduced exactly as filed: `(block (result i32) i32.const 10 local.get 0
+      i32.div_s)` yields an empty report, while the same expression unwrapped
+      reports a div-by-zero POTENTIAL-TRAP. A typed `if` behaves identically.
+
+      THREE CONSEQUENCES, and only the first is about precision.
+      (1) The gap report was not complete: an assessor reading `gaps` as the
+      scope boundary got a region that was never analysed and never disclosed.
+      (2) It was a ONE-LINE LAUNDERING VECTOR — wrapping a flagged expression in
+      a typed block removed it from the report entirely, requiring no
+      understanding of any internal scheme.
+      (3) It promoted to a WRONG VERDICT downstream: the adjudicator reads
+      "absent from the after-run" as `removed-with-code` — literally "the site no
+      longer exists" — while the code is still there and the obligation live
+      (DD-021 finding 3).
+
+      This is a hole in REQ-017's invariant, not merely a missing record. Here
+      the analyzer is MAXIMALLY conservative — it interprets nothing — and says
+      nothing at all, which is the one thing that invariant forbids.
+
+      FIX: emit the gap unconditionally. The old gate's call half was added
+      correctly (FEAT-043: a void call inside an `if` must still record, or
+      `resolved_stack_callees` silently under-counts), but the lesson
+      generalises — the reason to record is that the region WAS NOT ANALYSED,
+      not that it happened to write a local. An empty write set makes a region
+      cheaper to havoc, not more analysed.
+
+      MEASURED IMPACT on scry's own compiled module: gaps 2046 -> 2100. Those 54
+      regions were always being havoc'd; they were simply not disclosed. The
+      dashboard number rising is VISIBILITY, not a regression, and the release
+      note should say so before someone reads it as one.
+    tags: [soundness-honesty, gap-reporting, laundering, issue-driven, v3.2.6]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a typed region with an EMPTY write set and no call, When scry havocs it, Then a Gap{kind: UnmodeledControlFlow} is recorded — for `block` and for `if` alike."
+        - "CONTROL, asserted first in the same test: the unwrapped expression raises a trap check. Without it the laundering test proves nothing, since an empty report would satisfy it either way."
+        - "Given scry's own module, When gaps are counted before and after, Then the count rises 2046 -> 2100 — measured on the same module with both binaries, so the change is attributable to this fix rather than to module drift."
+        - "Given claims.yaml, Then no claim predicate is bound to a gap count, so the increase breaks no gated claim — checked rather than assumed."
+    links:
+      - type: traces-to
+        target: REQ-017
+      - type: traces-to
         target: REQ-001
