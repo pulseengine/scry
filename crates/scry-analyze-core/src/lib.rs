@@ -3257,7 +3257,12 @@ fn stamp_obligation_ids(
     // exact disambiguator shape is present, else the raw name — so a stripped
     // name that lands on another function's candidate (a sibling
     // monomorphization OR a plain name that never had a disambiguator) is
-    // rejected.
+    // rejected. Known residual (clean-room, accepted): the count does NOT
+    // cover UNNAMED functions' body-shape hashes, so a stripped name that is
+    // itself exactly 16 lowercase hex characters could in principle collide
+    // with a shape hash. A real Rust legacy symbol starts `_ZN…`, so its
+    // stripped form is never pure hex; reaching this needs a hand-crafted
+    // name plus a SHA-256-prefix coincidence.
     let mut candidates: alloc::collections::BTreeMap<&str, u32> =
         alloc::collections::BTreeMap::new();
     for m in function_meta {

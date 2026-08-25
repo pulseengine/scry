@@ -663,7 +663,12 @@ artifacts:
             therefore keep only a build-local identity — honest and visible,
             but not comparable across builds; a stable identity there needs
             stable-name PLUS instantiation disambiguation, a synthesis that
-            needs its own design decision.
+            needs its own design decision. A second, theoretical residual
+            (clean-room): the uniqueness count covers named functions only, so
+            a stripped name that is itself exactly 16 lowercase hex characters
+            could collide with an UNNAMED function's body-shape hash — real
+            Rust legacy symbols start `_ZN…` and are never pure hex, so this
+            needs a hand-crafted name plus a SHA-256-prefix coincidence.
       alternatives: >
         (a) Source-line identity via DWARF — rejected as the primary: scry
             analyses Wasm binaries that frequently carry no DWARF, and it would
