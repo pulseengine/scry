@@ -9,53 +9,21 @@
 # Vulnerabilities are denied by default in cargo-deny >=0.16.
 # Yanked crates produce warnings by default.
 ignore = [
-    # RUSTSEC-2026-0182 — memory LEAK (not RCE) in wasmtime's WASIp1
-    # `fd_renumber`. Reached only through `wasmtime-wasi`, a DEV-dependency of
-    # the `scry-host-tests` harness (which runs the composed component in a
-    # short-lived wasmtime embedding); it is NOT in the shipped `scry.wasm`
-    # analyzer component (which imports only WASI as a guest, and embeds no
-    # wasmtime). A per-run leak in the test harness has no security impact on
-    # the released artifact. Re-evaluate when wasmtime is bumped past the
-    # patched release.
-    "RUSTSEC-2026-0182",
-    # RUSTSEC-2026-0188 — WASI hard links / renames bypass `wasmtime-wasi`'s
-    # `FilePerms` for the destination path. Same reachability as 0182: only via
-    # `wasmtime-wasi`, a DEV-dependency of the `scry-host-tests` harness, and
-    # NOT in the shipped `scry.wasm` (which embeds no wasmtime and grants the
-    # harness no host filesystem the test inputs could abuse). No security
-    # impact on the released artifact. Re-evaluate when wasmtime is bumped.
-    "RUSTSEC-2026-0188",
-    # RUSTSEC-2026-0190 — unsoundness in `anyhow`'s `Error::downcast_mut()`
-    # after `Error::context` (a borrow-rule / UB violation). `anyhow` enters the
-    # graph ONLY through `scry-host-tests` (directly + via wasmtime/jsonschema)
-    # and is in ZERO published `scry-sai-*` libraries; the harness uses it for
-    # terse test-error plumbing and does not exercise the affected
-    # context-then-downcast_mut pattern. No impact on shipped crates or the
-    # analyzer component. Re-evaluate when a patched `anyhow` is pulled in.
-    "RUSTSEC-2026-0190",
     # RUSTSEC-2026-0204 — invalid pointer deref in `crossbeam-epoch`'s
     # `fmt::Pointer` impl for `Atomic`/`Shared` (only when printing an already-
     # invalid pointer). Enters the graph ONLY through `scry-host-tests` →
     # wasmtime → rayon → crossbeam-deque → crossbeam-epoch; it is in ZERO
     # published `scry-sai-*` libraries and not in the shipped `scry.wasm`. The
     # harness does not format crossbeam pointers. No impact on shipped crates or
-    # the analyzer component. Re-evaluate when wasmtime/rayon are bumped.
+    # the analyzer component.
+    # RE-EVALUATED 2026-08-26 at the wasmtime 45 -> 47 bump (FEAT-078): this one
+    # SURVIVED. wasmtime 47.0.4 still resolves crossbeam-epoch 0.9.18, so
+    # cargo-deny continues to match the advisory. The other four ignores that
+    # stood alongside it went stale at the same bump and were deleted. Do not
+    # re-word this to "re-evaluate when wasmtime is bumped" — that has now been
+    # done and did not clear it; it needs a rayon/crossbeam-deque bump, which
+    # wasmtime 47 does not pull.
     "RUSTSEC-2026-0204",
-    # RUSTSEC-2026-0222 — wasmtime: "Stores can mix up type indices between
-    # engines" (a type-confusion / sandbox-integrity bug in the embedding API).
-    # Reachability, verified rather than assumed: wasmtime is a dependency of
-    # `scry-host-tests` ONLY, which is `publish = false`; `cargo metadata`
-    # confirms NO published `scry-sai-*` crate has wasmtime as a normal
-    # dependency, and it is not in the shipped `scry.wasm` (which embeds no
-    # engine). The harness is a test process running OUR OWN fixtures and OUR
-    # OWN composed component — it is not a multi-tenant sandbox host, so the
-    # crafted cross-engine usage this advisory requires has no attack surface
-    # here. NOTE: this is deliberately NOT a permanent exemption — there is no
-    # patched 45.x line (fixes landed in 46.0.2 / 47.0.3), so the durable fix is
-    # a wasmtime major bump, tracked as its own change rather than smuggled into
-    # a feature PR. Re-evaluate when that bump lands; this entry should then be
-    # DELETED, not carried forward.
-    "RUSTSEC-2026-0222",
 ]
 
 [licenses]
