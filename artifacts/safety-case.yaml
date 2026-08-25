@@ -332,6 +332,64 @@ artifacts:
 
   # ── Justifications ───────────────────────────────────────────────────
 
+  - id: J-004
+    type: safety-justification
+    title: "Why G-003 / G-004 / G-005 are deliberately undeveloped — and why the 40% coverage figure is not drift"
+    status: draft
+    fields:
+      rationale: >
+        `rivet coverage` reports goal-has-support and goal-has-context at 40%
+        (2 of 5). Investigated 2026-08-25: this is NOT drift, and closing it by
+        adding links would be cosmetic.
+
+        All three uncovered goals carry `undeveloped: true` — GSN's explicit
+        notation (the diamond) for a goal deliberately not yet decomposed into
+        supporting evidence. A declared incompleteness is the honest state for
+        each of them:
+
+        G-003 (Component-Model properties sound at link time) — scry ships
+        scry-sai-handle (FEAT-049) for use-after-drop on owned handles, which is
+        (a) of the claim. Parts (b) host-import reachability and (c) WIT
+        refinement-contract violations have no analyzer behind them, so the goal
+        cannot honestly be supported yet. Developing it means solutions for (b)
+        and (c), or narrowing the claim to (a).
+
+        G-004 (deductive proof + model checking cover the other two DO-333
+        classes) — this is a claim about the WIDER PulseEngine toolchain, not
+        about scry: Verus/Rocq for functional correctness, Kani plus loom's Z3
+        translation validation for finite-depth UB and per-pass equivalence.
+        scry cannot supply that evidence from inside its own repo. Developing it
+        means either cross-repo evidence artifacts or moving the goal to a
+        repository that owns those layers.
+
+        G-005 (scry itself qualifiable to the commercial sound-analyzer bar) —
+        the qualification dossier (docs/qualification-dossier-v1.md, FEAT-050)
+        is the intended capstone. It is `status: draft`, states that it MAPS
+        objectives to artifacts rather than asserting the objectives are met,
+        and carries an audited honesty stance. Checked 2026-08-25 for the drift
+        that would matter most — a shipped document claiming more than the
+        safety case supports — and it does not. The goal stays undeveloped
+        until an assessor-facing review, not until the document exists.
+
+        TOOLING NOTE, and the reason this justification is worth writing down.
+        `rivet coverage` cannot distinguish a goal DECLARED undeveloped from one
+        someone FORGOT — both render as uncovered, at the same 40%. So the
+        figure is misleading in both directions, and a genuinely forgotten goal
+        would hide among the declared ones. That is the same defect class as
+        scry#117 (an MC/DC gate measuring the wrong population): the number is
+        real, and it is not measuring what a reader assumes. Reported upstream
+        to rivet. Until the tool can express it, this justification is the
+        record that the 40% has been investigated and is intentional — so it is
+        not re-litigated on every sweep.
+    tags: [gsn, undeveloped, coverage, tooling, honesty]
+    links:
+      - type: justifies
+        target: G-003
+      - type: justifies
+        target: G-004
+      - type: justifies
+        target: G-005
+
   - id: J-001
     type: safety-justification
     title: Why abstract interpretation rather than more model checking
