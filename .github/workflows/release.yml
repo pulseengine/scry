@@ -354,6 +354,11 @@ jobs:
       WITNESS_REV: 6ff96e75a1b495aa165f1ee91abda3049fffe628
     steps:
       - uses: actions/checkout@v6
+        with:
+          # scry#132: the delta view resolves the PREVIOUS tag, so this job
+          # needs tags and history. Without it `git tag --list` is empty and the
+          # step silently rendered nothing (delta.html 404 on v3.2.5).
+          fetch-depth: 0
 
       - name: Resolve version from tag
         env:
@@ -424,21 +429,39 @@ jobs:
       - name: Render release delta vs the previous tag (FEAT-072)
         continue-on-error: true
         run: |
+          # scry#132: every exit path MUST print why. The first version of this
+          # step produced ZERO output and a 404: GitHub's default shell is
+          # `bash -e`, `set -uo pipefail` does not turn that off, and `grep -v`
+          # exits 1 on empty input — so it aborted on the PREV= line, before the
+          # "no previous tag" message it was supposed to print. A
+          # continue-on-error step that says nothing is indistinguishable from
+          # one that never ran, which is how this shipped broken in v3.2.5.
           set -uo pipefail
-          PREV="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${VERSION}$" | head -1)"
+          status() { echo "DELTA-STEP: $1"; }
+          PREV="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${VERSION}$" | head -1 || true)"
           if [[ -z "$PREV" ]]; then
-            echo "no previous tag — skipping the delta view (first release)"; exit 0
+            status "SKIPPED — no previous tag found (tags fetched: $(git tag --list 'v*' | wc -l | tr -d ' '))"
+            exit 0
           fi
-          echo "delta: $PREV -> $VERSION"
+          status "rendering $PREV -> $VERSION"
           WT="$(mktemp -d)/prev"
-          git worktree add --detach -q "$WT" "$PREV" || exit 0
-          ( cd "$WT/crates/scry-mcdc" && cargo build --release --target wasm32-wasip1 -q ) || exit 0
+          if ! git worktree add --detach -q "$WT" "$PREV"; then
+            status "SKIPPED — cannot check out $PREV"; exit 0
+          fi
+          if ! ( cd "$WT/crates/scry-mcdc" && cargo build --release --target wasm32-wasip1 -q ); then
+            status "SKIPPED — $PREV does not build"; exit 0
+          fi
           cargo run --release -p scry-sai-viz -- delta \
             "$WT/crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm" \
             crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm \
             -o "$GITHUB_WORKSPACE/dist/delta.html" \
             --title "${PREV} → ${VERSION} (by stable obligation identity)"
           git worktree remove --force "$WT" 2>/dev/null || true
+          if [[ -s "$GITHUB_WORKSPACE/dist/delta.html" ]]; then
+            status "OK — wrote dist/delta.html ($(wc -c <"$GITHUB_WORKSPACE/dist/delta.html" | tr -d ' ') bytes)"
+          else
+            status "FAILED — the renderer produced no dist/delta.html"
+          fi
 
       - name: Build landing page (scry-viz index)
         run: |

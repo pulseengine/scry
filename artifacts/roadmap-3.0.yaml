@@ -1489,3 +1489,68 @@ artifacts:
         target: REQ-017
       - type: traces-to
         target: REQ-001
+
+  # ══════════════════════════════════════════════════════════════════════
+  # RELEASE v3.2.6 — "The release machinery holds itself to the standard"
+  # Accumulating. Both items are defects in OUR OWN tooling found while
+  # shipping v3.2.5, and both are the failure mode this project spends its
+  # time arguing against: a thing that reports success while doing nothing.
+  # ══════════════════════════════════════════════════════════════════════
+
+  - id: FEAT-076
+    type: feature
+    title: "v3.2.6 — The release machinery stops failing silently (scry#132, #133)"
+    status: proposed
+    release: v3.2.6
+    description: >
+      Two defects found by inspecting what v3.2.5 ACTUALLY shipped rather than
+      what CI said about it. Neither was caught by a gate, because both live in
+      places no gate looks.
+
+      scry#133 — SCRY_VERSION WAS A HAND-MAINTAINED LITERAL. The v3.2.5 bump
+      moved the workspace version and all 11 inter-crate pins; a `const
+      SCRY_VERSION: &str = "3.2.4"` was invisible to that sweep, so the shipped
+      3.2.5 component emitted `"scry 3.2.4 — ..."` in its own diagnostics.
+      Consumers identify the producing analyzer from that string, and BOTH
+      issues fixed in v3.2.5 were reported against a specific released version —
+      a component that misidentifies itself sends the next report to the wrong
+      build. Now `env!("CARGO_PKG_VERSION")`: derived, not maintained.
+      This is the drift class claims.yaml gates (#97) — but that gate reads
+      DOCS, and cannot see a Rust string literal. Deriving the value is what
+      closes it; the test only keeps it derived.
+
+      scry#132 — THE DELTA VIEW NEVER RENDERED, AND SAID NOTHING. FEAT-072's
+      release-over-release page 404'd on v3.2.5. Two compounding causes: the
+      publish-pages job checks out WITHOUT `fetch-depth: 0`, so no tags exist;
+      and `grep -v` exits 1 on empty input under GitHub's default `bash -e`
+      shell, which `set -uo pipefail` does NOT disable — so the step aborted on
+      the `PREV=` line, BEFORE the "no previous tag" message it was written to
+      print. Reproduced mechanically rather than assumed: `bash -e -c 'set -uo
+      pipefail; X="$(echo -n "" | grep -v "^v9$")"; echo reached'` exits 1 with
+      no output; adding `|| true` reaches the echo.
+
+      THE SHARED LESSON, and why these ship together. I wrote
+      `continue-on-error` and `|| exit 0` guards specifically so a missing
+      previous tag would degrade gracefully instead of blocking a release. What
+      they produced was a SILENT failure: green job, shipped release, missing
+      page, nothing anywhere saying the feature had not run. That is the same
+      defect class as scry#126's `<unsupported>` fallback — announcing a
+      degradation without identifying it — and it violates DD-022's own rule
+      that observation modes be properties of the code rather than conventions.
+      The rule was applied to the analyzer and broken in the release machinery
+      in the same session.
+    tags: [release-machinery, honesty, observability, issue-driven, v3.2.6]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given any build of scry-sai-core, When it reports its version in a diagnostic, Then the string equals the crate's package version — asserted by issue133_scry_version_is_derived_from_the_package_version, which was RED before the fix (left \"3.2.4\", right \"3.2.5\")."
+        - "Given the publish-pages job, When it runs, Then it has the git history the delta view needs (`fetch-depth: 0`), and EVERY exit path of the delta step prints a `DELTA-STEP:` line stating OK / SKIPPED-with-reason / FAILED. A continue-on-error step that produces no output must be treated as a defect, not as a skip."
+        - "Given the next release, When it completes, Then delta.html returns 200 on the live site OR the job log states explicitly why it was skipped. NOT YET VERIFIABLE — this AC can only be discharged by an actual release, and must not be marked met before one."
+      residual: >
+        scry#130 — main has NO required_status_checks, so the CI gate is
+        advisory rather than enforced. That is the root reason a silently broken
+        step could ship: nothing structural stops a red or vacuous check. It
+        needs repo-admin rights and is deliberately NOT bundled here.
+    links:
+      - type: traces-to
+        target: REQ-017
