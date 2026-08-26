@@ -1,0 +1,58 @@
+# v3.6.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-085
+    type: feature
+    title: "v3.6 — Lattice laws, checked up to gamma, for the bits domain (scry#113 first slice)"
+    status: proposed
+    release: v3.6.0
+    description: >
+      scry#113 says the sound analyzer's frontend is unguarded. Measured: 18
+      join/meet functions across 8 domains, exactly ONE domain (octagon) has any
+      lattice-law test at all, and that one checks commutativity and
+      top-absorption on hand-picked values. No proptest/quickcheck/arbitrary/
+      cargo-fuzz anywhere in the workspace.
+
+      This is the first slice, on scry-sai-bits — 6 of the 18 functions, the
+      most intricate arithmetic (CRT, mod_inverse), and the domain scry#105
+      already flags for machine-checked transfer soundness.
+
+      CHECKED UP TO GAMMA, NEVER STRUCTURALLY, and that choice is the whole
+      point. Two distinct encodings can denote the same set, so `==` on
+      representations is too strong — and this project has already been bitten
+      by exactly that: the Verus join proof (FEAT-012) was FALSE and unverified
+      for months because it asserted `join(a,b) == join(b,a)` structurally,
+      which does not hold for distinct bottom encodings. These tests assert the
+      semantic version over the exhaustive [0,256) concrete domain the crate
+      already sweeps.
+
+      THE SOUNDNESS-CRITICAL LAW is `join_is_an_upper_bound_up_to_gamma`. If a
+      join drops an element, every fixpoint built on it under-approximates and
+      the analyzer can report PROVEN-SAFE for something reachable. Commutativity,
+      associativity and idempotence are hygiene; that one is the product. Its
+      dual, `meet_is_a_lower_bound_up_to_gamma`, catches a meet that INVENTS an
+      element, which would let a refinement claim more than it proved.
+
+      CREDIT: prompted by the Wasm Research Day Q&A, where a Binaryen engineer
+      reported having good luck fuzzing their own abstract domains for exactly
+      this — independent corroboration from a second group doing Wasm abstract
+      interpretation, which is better evidence than an in-house opinion that
+      fuzzing "would be good".
+
+      NO NEW DEPENDENCY. The crate already has an `alpha`/`contains`/`sweep`
+      idiom; these reuse it rather than adding proptest to a published crate.
+
+      HONEST SCOPE: this covers ONE domain. interval, pentagon, float, handle,
+      segment, poly and viz remain unguarded — 12 of the 18 functions. The
+      pattern is now established and mechanical to repeat, but repeating it is
+      not done.
+    tags: [robustness, lattice-laws, gamma, scry113, v3.6]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the bits domain, When the law suite runs, Then join is an upper bound and meet a lower bound of the concretizations, over the exhaustive [0,256) domain — the two laws whose failure would be an UNSOUNDNESS rather than an imprecision."
+        - "Given join, Then commutativity, associativity and idempotence hold UP TO gamma, not structurally. Stated this way because the structural version is known-false here (FEAT-012's Verus proof)."
+        - "MUTATION-CHECKED surgically: forcing `meet` to return TOP kills exactly `meet_is_a_lower_bound_up_to_gamma` plus one pre-existing test, and nothing else. A broad mutation (join returns self) also fires, but is uninformative because `alpha` is built from join."
+        - "NOT COVERED, stated rather than implied: 12 of the 18 join/meet functions, across interval / pentagon / float / handle / segment / poly / viz. This slice does not make scry#113 done."
+    links:
+      - type: traces-to
+        target: REQ-001

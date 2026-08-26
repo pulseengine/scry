@@ -1052,6 +1052,125 @@ mod tests {
         }
     }
 
+    // ── lattice laws, checked UP TO γ (scry#113) ──────────────────────────
+    //
+    // The laws are asserted on CONCRETIZATIONS, never on representations. Two
+    // distinct encodings can denote the same set, so structural `==` is too
+    // strong — and this project has already been bitten by exactly that: the
+    // Verus join proof (FEAT-012) was FALSE and unverified for months because
+    // it stated `join(a,b) == join(b,a)` structurally, which does not hold for
+    // distinct bottom encodings. These tests state the semantic version.
+    //
+    // Prompted by the Wasm Research Day Q&A, where a Binaryen engineer reported
+    // having good luck fuzzing their own abstract domains for exactly this.
+
+    /// γ(a) over the exhaustive concrete domain, as a comparable set.
+    fn gamma(a: &BitsCong) -> Vec<u64> {
+        (0u64..256).filter(|&x| a.contains(x, W)).collect()
+    }
+
+    fn law_samples() -> Vec<BitsCong> {
+        vec![
+            BitsCong::bottom(),
+            BitsCong::top(),
+            alpha(&[0]),
+            alpha(&[255]),
+            alpha(&[8, 16, 24]),
+            alpha(&[8, 16, 24, 40]),
+            alpha(&[3, 7]),
+            alpha(&[1, 2, 4, 8, 16, 32, 64, 128]),
+            alpha(&[0, 255]),
+        ]
+    }
+
+    /// THE soundness-critical law. If a join drops an element, every fixpoint
+    /// built on it under-approximates and the analyzer can report PROVEN-SAFE
+    /// for something reachable. Commutativity and associativity are hygiene;
+    /// this one is the product.
+    #[test]
+    fn join_is_an_upper_bound_up_to_gamma() {
+        for a in &law_samples() {
+            for b in &law_samples() {
+                let j = a.join(b, W);
+                for x in 0u64..256 {
+                    if a.contains(x, W) || b.contains(x, W) {
+                        assert!(
+                            j.contains(x, W),
+                            "join DROPPED {x}: it is in γ(a)∪γ(b) but not γ(a⊔b) — \
+                             a={a:?} b={b:?} join={j:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn join_is_commutative_up_to_gamma() {
+        for a in &law_samples() {
+            for b in &law_samples() {
+                assert_eq!(
+                    gamma(&a.join(b, W)),
+                    gamma(&b.join(a, W)),
+                    "γ(a⊔b) ≠ γ(b⊔a) — a={a:?} b={b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn join_is_associative_up_to_gamma() {
+        let s = law_samples();
+        for a in &s {
+            for b in &s {
+                for c in &s {
+                    assert_eq!(
+                        gamma(&a.join(b, W).join(c, W)),
+                        gamma(&a.join(&b.join(c, W), W)),
+                        "γ((a⊔b)⊔c) ≠ γ(a⊔(b⊔c)) — a={a:?} b={b:?} c={c:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn join_is_idempotent_up_to_gamma() {
+        for a in &law_samples() {
+            assert_eq!(gamma(&a.join(a, W)), gamma(a), "γ(a⊔a) ≠ γ(a) — a={a:?}");
+        }
+    }
+
+    /// Dual direction: meet must not INVENT an element. A meet that grows the
+    /// concretization would let a refinement claim more than it proved.
+    #[test]
+    fn meet_is_a_lower_bound_up_to_gamma() {
+        for a in &law_samples() {
+            for b in &law_samples() {
+                let m = a.meet(b, W);
+                for x in 0u64..256 {
+                    if m.contains(x, W) {
+                        assert!(
+                            a.contains(x, W) && b.contains(x, W),
+                            "meet INVENTED {x}: in γ(a⊓b) but not γ(a)∩γ(b) — \
+                             a={a:?} b={b:?} meet={m:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn top_and_bottom_are_join_identities_up_to_gamma() {
+        let top = BitsCong::top();
+        let bot = BitsCong::bottom();
+        for a in &law_samples() {
+            assert_eq!(gamma(&a.join(&bot, W)), gamma(a), "a⊔⊥ ≠ a — a={a:?}");
+            assert_eq!(gamma(&a.join(&top, W)), gamma(&top), "a⊔⊤ ≠ ⊤ — a={a:?}");
+        }
+    }
+
     // ── transfer soundness: exhaustive γ-sweep over [0,256)² ──
 
     /// For a binary op, assert: for all concrete x∈γ(α(xs)), y∈γ(α(ys)), the
@@ -1415,8 +1534,8 @@ mod tests {
         }
     }
 
-    /// Clean-room regression (u64 overflow): a CRT combine with a modulus
-    /// > 2^63 must not overflow the intermediate `(r2 % m2) + m2` / `r1 + m1·t`
+    /// Clean-room regression (u64 overflow): a CRT combine with a modulus above
+    /// 2^63 must not overflow the intermediate `(r2 % m2) + m2` / `r1 + m1·t`
     /// (done in u128). `Cong::new` can produce such moduli, and the crate is a
     /// published library. Trigger: ≡1 (mod 3) ⊓ ≡1 (mod u64::MAX) — lcm fits
     /// (u64::MAX is divisible by 3), so it enters the CRT arm.
