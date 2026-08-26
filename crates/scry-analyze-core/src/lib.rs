@@ -888,7 +888,13 @@ mod domain {
         scry_taint::join(a, b)
     }
 }
-const SCRY_VERSION: &str = "3.2.4";
+/// scry#133: DERIVED, never hand-maintained. This was a literal, the v3.2.5
+/// bump missed it, and the shipped 3.2.5 component reported itself as 3.2.4 in
+/// its own diagnostics. Consumers identify the producing analyzer from this
+/// string, so a stale value misattributes bug reports to the wrong build.
+/// `env!` resolves at compile time from the crate's version, which the
+/// workspace sets — so it cannot drift from the published version again.
+const SCRY_VERSION: &str = env!("CARGO_PKG_VERSION");
 const INVARIANT_SCHEMA_URL: &str = "https://pulseengine.eu/scry-invariants/v1";
 
 /// Default Wasm linear-memory page size (64 KiB).
@@ -8963,6 +8969,33 @@ mod tests {
                 d.message
             );
         }
+    }
+
+    /// scry#133: `SCRY_VERSION` was a hand-maintained literal and the v3.2.5
+    /// bump missed it, so the SHIPPED 3.2.5 component emitted
+    /// `"scry 3.2.4 — wasm-lattice cross-component import alive"`. Consumers
+    /// use that string to identify which analyzer produced a result, and both
+    /// #125 and #126 were reported against a specific released version — a
+    /// component that misreports itself sends a bug report to the wrong build.
+    ///
+    /// This is the same drift class `claims.yaml` gates in the docs (#97), but
+    /// the claim-check gate cannot see a Rust string literal. Deriving the
+    /// value is what actually closes it; this test only proves it stays derived.
+    #[test]
+    fn issue133_scry_version_is_derived_from_the_package_version() {
+        assert_eq!(
+            SCRY_VERSION,
+            env!("CARGO_PKG_VERSION"),
+            "SCRY_VERSION must be derived, not hand-maintained — a literal drifts \
+             silently and ships a component that misidentifies itself"
+        );
+        // Non-vacuity: a bare `assert_eq!(X, X)` would pass on any value, so
+        // pin the shape too — the released artifact showed this string verbatim.
+        assert!(
+            SCRY_VERSION.split('.').count() == 3
+                && SCRY_VERSION.split('.').all(|p| p.parse::<u32>().is_ok()),
+            "expected a three-part numeric version, got {SCRY_VERSION:?}"
+        );
     }
 
     fn analyze_default(src: &str) -> AnalysisResult {
