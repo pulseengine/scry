@@ -1,0 +1,87 @@
+# ══════════════════════════════════════════════════════════════════════
+# RELEASE v3.5.0 — inbound consumer requirements
+#
+# Deliberately a SEPARATE FILE from roadmap-3.0.yaml, as the first step of
+# scry#143's fix (1). Every feature branch appends to the end of a single
+# roadmap file, so each merge conflicts every other open branch — five PRs in
+# one session produced four hand-resolved conflicts whose entire content was
+# "both sides appended a different valid block to the same position". Splitting
+# by release means branches targeting different releases stop touching the same
+# file at all. rivet already globs artifacts/*.yaml, so this costs nothing.
+# ══════════════════════════════════════════════════════════════════════
+artifacts:
+  - id: FEAT-081
+    type: feature
+    title: "v3.5 — Export static loop trip-count bounds for a WCET consumer (scry#144, gale REQ-OS-WCET-001)"
+    status: proposed
+    release: v3.5.0
+    description: >
+      Routed from gale/fathom (scry#144). Their T4 track needs sound per-function
+      static WCET bounds on a DISSOLVED OS object — no engine on device. synth
+      `--emit-wcet` produces them and declines what it cannot bound. Measured
+      over three weeks on the E2 `gust:os` composite (31 functions):
+
+        BOUNDED    3 of 31
+        loop              13   backward branch, no proven trip count   <- scry
+        callee-unbounded  11   cascade, resolves when the leaves do
+        call               2   direct call to an import — correct by design
+        unmodeled-op       2   synth-side, essentially closed
+
+      The cause is unambiguous because it was RE-measured: at synth 0.52.0 the
+      counts were unmodeled-op 9 / loop 8, and the cycle model looked like the
+      critical path. After synth#936 fixed those opcodes, loop ROSE 8 -> 13 —
+      functions that used to decline on an opcode now get far enough to decline
+      on a loop. The gap moved rather than vanished, which is what isolates it.
+
+      WHAT SCRY ALREADY DOES, measured on three loop shapes rather than assumed.
+      For a constant-trip counted loop the induction variable is bounded EXACTLY
+      — `L0 = i32 [0,10]` in-loop, `[10,11]` after — so the trip count follows
+      from the interval and the stride. A loop guarded on a free parameter is
+      unbounded (correct), and a poll loop on an external condition stays
+      unbounded (which is the behaviour gale explicitly wants — they are not
+      asking for 31/31).
+
+      So the inference half largely EXISTS. What is missing is an export.
+
+      WHY NOT JUST POINT THEM AT `invariants.points`. Two reasons, both about
+      where the soundness argument lives.
+      (1) Going from `[0,10]` to "trips <= 11" needs reasoning about stride,
+      guard polarity and 32-bit wrap. That is exactly the step where an unsound
+      bound would enter, and gale's whole track exists to stop partition budgets
+      being sized from measured DWT high-water-marks. It belongs on scry's side
+      of the seam, with the proof.
+      (2) The join key. They need something stable across
+      `meld fuse -> loom optimize -> synth compile`. Our own key was measured at
+      43-45% churn per build (scry#123) before FEAT-077 landed. Any export must
+      carry the `id_build_local` marker so a consumer can tell a stable key from
+      a build-local one WITHOUT parsing it.
+
+      PROPOSED SHAPE, modelled on FEAT-021's StackBound — which already ships
+      this exact posture: a per-function worst-case bound with `Unbounded` for
+      recursion and `Unknown` for dynamic dispatch, never a guess. A LoopBound
+      would be `Trips(n) | Unbounded(reason) | Unknown(reason)` per loop header,
+      carrying the stable identity and its build-local flag, with the reason
+      named on every decline so their sidecar keeps reporting causes as it does
+      now. That maps 1:1 onto their decline taxonomy, which is why it is a good
+      seam rather than a new abstraction.
+
+      DELIBERATELY BLOCKED ON THE FIXTURE. gale offered the composite's
+      loom.wasm, the .o, and the full 28-decline sidecar with function names.
+      Scoping before that arrives would be guessing which of the 13 are counted
+      loops, which need interprocedural argument ranges (FEAT-036 param_ranges
+      under closed-world — which a dissolved OS object plausibly satisfies), and
+      which are genuinely unbounded. The measurement is cheap and the guess is
+      not.
+    tags: [wcet, loop-bounds, interop, gale, consumer-driven, v3.5]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a constant-trip counted loop, When scry analyses it, Then a per-loop-header bound is exported as Trips(n) with n sound — verified against the induction-variable interval scry already computes."
+        - "Given a loop with no static bound (a poll on an external condition), Then it is exported as Unbounded with a NAMED reason and never as a guessed number. Soundness over coverage: 6 of 13 bounded and the rest declined is the stated success bar, and an unsound bound is worse than a decline."
+        - "Given any exported bound, Then it carries the stable obligation identity AND its `id_build_local` flag, so a consumer joining across meld/loom/synth can distinguish a key stable across builds from one that is not."
+        - "GATE ON EVIDENCE: before implementation, the gale fixture is analysed and each of the 13 `reason=loop` declines is classified as counted / needs-param-ranges / genuinely-unbounded. The scope follows that measurement rather than preceding it."
+    links:
+      - type: traces-to
+        target: REQ-004
+      - type: traces-to
+        target: REQ-001
