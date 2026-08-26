@@ -9112,6 +9112,8 @@ mod tests {
             SCRY_VERSION.split('.').count() == 3
                 && SCRY_VERSION.split('.').all(|p| p.parse::<u32>().is_ok()),
             "expected a three-part numeric version, got {SCRY_VERSION:?}"
+        );
+    }
 
     /// scry#121: `havoc_region` never interprets the region body, but recorded a
     /// gap ONLY when the write set was non-empty or the region held a call. So a
