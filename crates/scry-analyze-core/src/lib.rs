@@ -4668,31 +4668,29 @@ impl Interp<'_, '_> {
             let _ = ctx.operand_stack.pop();
         }
         let written = region_write_set(self.ops, opener + 1, end);
-        // FEAT-040 / FEAT-043: an unmodelled control-flow region is a give-up
-        // worth a gap when it either widens a local to ⊤ (write-set non-empty)
-        // OR contains a CALL — havoc does not interpret the region body, so any
-        // call inside it is NEVER recorded in `call_graph`. Recording the gap
-        // keeps the invariant "a gap-free function's call_graph is COMPLETE",
-        // which `resolved_stack_callees` (FEAT-043) and the gap report rely on;
-        // without it, a void call (empty write-set) inside an `if` would be
-        // silently dropped from the stack weighting (clean-room finding).
-        let region_has_call = self.ops[opener + 1..end].iter().any(|op| {
-            matches!(
-                op,
-                Operator::Call { .. }
-                    | Operator::CallIndirect { .. }
-                    | Operator::ReturnCall { .. }
-                    | Operator::ReturnCallIndirect { .. }
-            )
+        // FEAT-040 / FEAT-043 / scry#121: an unmodelled control-flow region is
+        // ALWAYS worth a gap. `havoc_region` does not interpret the body at all,
+        // so the reason to record is that the region WAS NOT ANALYSED — not that
+        // it happened to write a local.
+        //
+        // This used to be gated on `!written.is_empty() || region_has_call`. The
+        // call half was added correctly (FEAT-043: a void call inside an `if`
+        // must still record, or `resolved_stack_callees` silently under-counts),
+        // but the gate as a whole let a typed region with an empty write set and
+        // no call vanish with NO record of any kind. That is:
+        //   * a hole in REQ-017's invariant — maximally conservative, and silent;
+        //   * a one-line laundering vector, since wrapping a flagged expression
+        //     in a typed block removed it from the report entirely;
+        //   * a source of WRONG adjudicator verdicts, which read the resulting
+        //     absence as `removed-with-code` while the code was still there.
+        //
+        // An empty write set makes a region CHEAPER TO HAVOC, not more analysed.
+        ctx.gaps.push(Gap {
+            func_index: self.func_index,
+            pc: opener as u32,
+            op: op_report_name(&self.ops[opener]),
+            kind: GapKind::UnmodeledControlFlow,
         });
-        if !written.is_empty() || region_has_call {
-            ctx.gaps.push(Gap {
-                func_index: self.func_index,
-                pc: opener as u32,
-                op: op_report_name(&self.ops[opener]),
-                kind: GapKind::UnmodeledControlFlow,
-            });
-        }
         for idx in &written {
             if let Some(slot) = ctx.locals.get_mut(*idx as usize) {
                 *slot = AbstractValue::I32Interval(domain::top());
@@ -9114,6 +9112,67 @@ mod tests {
             SCRY_VERSION.split('.').count() == 3
                 && SCRY_VERSION.split('.').all(|p| p.parse::<u32>().is_ok()),
             "expected a three-part numeric version, got {SCRY_VERSION:?}"
+        );
+    }
+
+    /// scry#121: `havoc_region` never interprets the region body, but recorded a
+    /// gap ONLY when the write set was non-empty or the region held a call. So a
+    /// typed region that writes no local and calls nothing vanished with no
+    /// record of any kind — no trap check, no gap, no advisory.
+    ///
+    /// That breaks the invariant REQ-017 exists for: every place the analysis is
+    /// conservative is recorded as DATA, never as silence. Here scry is
+    /// maximally conservative — it interprets nothing — and says nothing.
+    ///
+    /// It is also a one-line laundering vector: wrapping a flagged expression in
+    /// a typed block removed it from the report entirely, no understanding of
+    /// any internal scheme required. And it promotes to a WRONG VERDICT in the
+    /// adjudicator, which reads "absent from the after-run" as
+    /// `removed-with-code` — "the site no longer exists" — while the code is
+    /// still there and the obligation still live (DD-021 finding 3).
+    #[test]
+    fn issue121_havocked_region_always_records_a_gap() {
+        // CONTROL FIRST: unwrapped, the obligation is reported. If this ever
+        // stops holding, the test below proves nothing about laundering.
+        let bare = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) \
+             i32.const 10 local.get 0 i32.div_s))",
+        );
+        assert!(
+            !bare.trap_checks.is_empty(),
+            "control: the unwrapped div must raise a trap check"
+        );
+
+        // The laundering case: same expression inside a typed block. The block
+        // writes NO local and contains NO call, so it took the silent path.
+        let wrapped = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) \
+             (block (result i32) i32.const 10 local.get 0 i32.div_s)))",
+        );
+        assert!(
+            !wrapped.gaps.is_empty(),
+            "a region that was NEVER INTERPRETED must record a gap — it is \
+             maximally conservative, so silence is the one thing it must not be"
+        );
+        let g = wrapped
+            .gaps
+            .iter()
+            .find(|g| g.kind == GapKind::UnmodeledControlFlow)
+            .expect("the havoc must be recorded as unmodelled control flow");
+        assert_eq!(g.func_index, 0);
+
+        // Same for a typed `if`, which took the identical path.
+        let iffed = analyze_default(
+            "(module (func (export \"b\") (param i32) (result i32) \
+             local.get 0 (if (result i32) (then i32.const 10 local.get 0 i32.div_s) \
+             (else i32.const 1))))",
+        );
+        assert!(
+            iffed
+                .gaps
+                .iter()
+                .any(|g| g.kind == GapKind::UnmodeledControlFlow),
+            "a typed `if` havoc must record a gap too"
         );
     }
 
