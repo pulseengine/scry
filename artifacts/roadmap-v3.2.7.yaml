@@ -3,7 +3,7 @@ artifacts:
   - id: FEAT-083
     type: feature
     title: "v3.2.7 — The shipped component reports its real version (scry#152)"
-    status: proposed
+    status: accepted
     release: v3.2.7
     description: >
       Found by running the SHIPPED v3.2.6 artifact minutes after cutting it.
@@ -59,3 +59,60 @@ artifacts:
     links:
       - type: traces-to
         target: REQ-017
+
+  - id: FEAT-086
+    type: feature
+    title: "v3.2.7 — Clippy covers every crate, and the coverage guard covers BOTH gates (scry#157)"
+    status: accepted
+    release: v3.2.7
+    description: >
+      FILED AFTER THE FACT, and that is itself the first thing to record: the
+      implementation merged as PR #159 with a commit and PR titled
+      "FEAT-086 (scry#157)" while NO SUCH ARTIFACT EXISTED. Untracked work — the
+      anti-pattern the issue-hunt skill names explicitly, because it is invisible
+      to the release plan and resurfaces as a gate surprise. `rivet validate`
+      cannot catch it: it validates artifacts that exist, not references to ones
+      that do not.
+
+      THE DEFECT. CI's Clippy job ran FOUR packages — the same four the Test job
+      ran before scry#141 widened it. Nine publishable crates were never linted,
+      and TWO had live errors on main that CI could not see: scry-sai-bits (a doc
+      line beginning `> 2^63`, read as an unterminated Markdown blockquote) and
+      scry-sai-pentagon (two needless borrows, in its own meet/leq soundness
+      tests). Both fixed.
+
+      THE REAL DELIVERABLE IS THE GUARD, and it took four attempts. The version
+      merged with scry#141 asserted coverage for `cargo test` ONLY, so when the
+      clippy list stayed narrow it said nothing. Widening one gate did not fix
+      the pattern — the two per-package lists sit three lines apart and drifted
+      independently.
+
+      Three text-scraping attempts were VACUOUS in ways that looked like they
+      worked: a per-crate dynamic regex (survived BSD grep, failed GNU grep, then
+      failed CLOSED naming all twelve); an `awk` line-range that CHAINED across
+      the whole file so the two lists came out IDENTICAL — a guard that could not
+      detect the drift it exists for, and which printed "FIRES" under mutation
+      with the WRONG attribution; and, earlier and elsewhere, a predicate that
+      counted a comment as a gate (scry#147).
+
+      Replaced with tools/check-gate-coverage.py, which parses the workflow as
+      YAML and attributes packages per step. It carries `--self-test` asserting
+      it distinguishes a good workflow from a bad one — including the property
+      the awk version failed, that the two gates are not identical — and CI runs
+      that self-test BEFORE the real check, so a checker that stops
+      discriminating fails the build rather than passing quietly.
+    tags: [ci, gate-potency, honesty, issue-driven, v3.2.7]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the CI Clippy job, When it runs, Then every publishable crate is linted. VERIFIED IN CI, not merely locally: the step `cargo clippy — analyzer core, viz, and the domain crates` reports success on the run for PR #159, alongside the four original per-package steps."
+        - "Given a crate missing from EITHER gate, When the guard runs, Then it fails naming the crate AND which gate. MUTATION-CHECKED against the real workflow in both directions: dropping scry-sai-float from clippy alone yields `scry-sai-float(clippy)`; dropping scry-sai-poly from test alone yields `scry-sai-poly(test)`. Correct attribution — which the previous awk version got wrong."
+        - "Given the checker itself, When CI runs it, Then `--self-test` executes FIRST and asserts the checker can distinguish a good workflow from a bad one. A gate that cannot fail is the defect this feature exists to fix, so the gate on the gate is not optional."
+        - "Given main after the merge, Then scry-sai-bits and scry-sai-pentagon both lint clean — the two crates that carried live errors CI could not see."
+      residual: >
+        A commit or PR referencing a rivet id that does not exist is undetectable
+        today; this artifact exists because I noticed by hand. Worth a
+        `rivet`-side check that ids named in commit trailers resolve.
+    links:
+      - type: traces-to
+        target: REQ-001
