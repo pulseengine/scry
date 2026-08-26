@@ -698,6 +698,22 @@ pub struct Advisory {
     /// rule aliasing out — the pairing of a deletion with a same-kind insertion
     /// leaves the group unchanged, which is precisely what falsified DD-021.
     pub group_key: String,
+    /// FEAT-077 (scry#123, DD-020): TRUE when this advisory's identity keys
+    /// (`obligation_id` / `site_key` / `group_key`) are BUILD-LOCAL — unique
+    /// within THIS analysis but NOT comparable across builds of the same
+    /// source. Set when the function's name-section name carries a Rust legacy
+    /// symbol disambiguator (`17h<16 hex>E`) whose stripped form is shared by
+    /// another function in the module (dependency generics, measured at 37.8%
+    /// of functions on scry's own binary): the disambiguator cannot be dropped
+    /// without merging distinct monomorphizations onto one identity, so the
+    /// raw name — which churns with crate metadata — is kept, and this flag
+    /// says so INSTEAD of letting a consumer diff the id across builds and
+    /// read the churn as discharged/new obligations.
+    ///
+    /// FALSE for every other identity tier (unique stripped name, a name with
+    /// no disambiguator, export names, the body-shape hash, module-scoped
+    /// advisories): those behave exactly as before this flag existed.
+    pub id_build_local: bool,
 }
 
 /// FEAT-055 (REQ-018): a candidate counterexample for an `UnprovenObligation`
@@ -3112,6 +3128,30 @@ fn body_shape_hash(ops: &[Operator<'_>]) -> String {
     out
 }
 
+/// FEAT-077 (scry#123): strip Rust's LEGACY-mangling symbol disambiguator — a
+/// trailing `17h` + exactly 16 LOWERCASE hex digits + `E` — from a
+/// name-section name. Returns `None` for any other shape; nothing broader is
+/// attempted (an over-matching heuristic would rename functions that were
+/// never Rust symbols). The disambiguator is derived from crate metadata and
+/// the instantiation, NOT the function body — measured on real builds
+/// (scry#123) it re-rolls on ANY upstream edit, destroying every obligation
+/// identity in 45% of identified functions per commit, while the stripped
+/// prefix was 100% stable across both an unrelated edit and an edit to the
+/// function's own body.
+fn strip_rust_disambiguator(name: &str) -> Option<&str> {
+    let no_e = name.strip_suffix('E')?;
+    if no_e.len() < 16 {
+        return None;
+    }
+    let (head, hex) = no_e.split_at(no_e.len() - 16);
+    if !hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return None;
+    }
+    let base = head.strip_suffix("17h")?;
+    // A name that IS only the disambiguator would strip to nothing; keep it raw.
+    if base.is_empty() { None } else { Some(base) }
+}
+
 /// FEAT-064: the content address itself. Opaque, fixed-width; consumers must not
 /// parse it (DD-020).
 fn obligation_id_of(func_ident: &str, path: &str, kind: &str, ordinal: u32, code: &str) -> String {
@@ -3184,9 +3224,24 @@ fn is_module_scoped(code: &str) -> bool {
     code == "unbounded-stack"
 }
 
-/// FEAT-064: stamp every advisory with its stable obligation identity.
-/// Function identity is the name-section / export name when the module carries
-/// one, else the body-shape hash (DD-020's precedence).
+/// FEAT-064 + FEAT-077: stamp every advisory with its obligation identity.
+///
+/// Function identity is TWO-TIER (scry#123, DD-020). The raw name-section name
+/// inherits Rust's legacy symbol disambiguator (`17h<16 hex>E`), which is
+/// derived from crate metadata rather than the body — measured, it re-rolls on
+/// any upstream edit and destroyed every obligation identity in 45% of
+/// identified functions per commit, including the very function a fix edits.
+/// So:
+///   1. named, disambiguated, and the STRIPPED name is unique in the module →
+///      the stripped name (stable: measured 100% survival across both an
+///      unrelated edit and an own-body edit);
+///   2. named, disambiguated, stripped name SHARED (dependency generics —
+///      measured 37.8% of functions, all of them dependencies, none scry's
+///      own) → the raw name, and the advisory is MARKED
+///      [`Advisory::id_build_local`]: unique within this build, not comparable
+///      across builds;
+///   3. named, no disambiguator → the raw name (unchanged from v3.2.5);
+///   4. unnamed → the body-shape hash (unchanged from v3.2.5).
 fn stamp_obligation_ids(
     advisories: &mut [Advisory],
     defined_funcs: &[DefinedFunc<'_>],
@@ -3197,12 +3252,41 @@ fn stamp_obligation_ids(
         a.site_key = site_key_of("<module>", "", "<module>", 0);
         a.group_key = group_key_of("<module>", "", "<module>");
     }
+    // FEAT-077: a stripped name may serve as the identity ONLY when unique in
+    // the module. Count every named function's CANDIDATE — stripped when the
+    // exact disambiguator shape is present, else the raw name — so a stripped
+    // name that lands on another function's candidate (a sibling
+    // monomorphization OR a plain name that never had a disambiguator) is
+    // rejected. Known residual (clean-room, accepted): the count does NOT
+    // cover UNNAMED functions' body-shape hashes, so a stripped name that is
+    // itself exactly 16 lowercase hex characters could in principle collide
+    // with a shape hash. A real Rust legacy symbol starts `_ZN…`, so its
+    // stripped form is never pure hex; reaching this needs a hand-crafted
+    // name plus a SHA-256-prefix coincidence.
+    let mut candidates: alloc::collections::BTreeMap<&str, u32> =
+        alloc::collections::BTreeMap::new();
+    for m in function_meta {
+        if let Some(n) = m.name.as_deref() {
+            *candidates
+                .entry(strip_rust_disambiguator(n).unwrap_or(n))
+                .or_insert(0) += 1;
+        }
+    }
     for f in defined_funcs {
-        let ident = function_meta
+        let name = function_meta
             .iter()
             .find(|m| m.func_index == f.abs_index)
-            .and_then(|m| m.name.clone())
-            .unwrap_or_else(|| body_shape_hash(&f.ops));
+            .and_then(|m| m.name.as_deref());
+        let (ident, build_local) = match name {
+            None => (body_shape_hash(&f.ops), false),
+            Some(raw) => match strip_rust_disambiguator(raw) {
+                Some(stripped) if candidates.get(stripped) == Some(&1) => {
+                    (String::from(stripped), false)
+                }
+                Some(_) => (String::from(raw), true),
+                None => (String::from(raw), false),
+            },
+        };
         let keys = structural_keys(&f.ops);
         for a in advisories
             .iter_mut()
@@ -3217,6 +3301,7 @@ fn stamp_obligation_ids(
                 a.obligation_id = obligation_id_of(&ident, path, &kind, *ordinal, &a.code);
                 a.site_key = site_key_of(&ident, path, &kind, *ordinal);
                 a.group_key = group_key_of(&ident, path, &kind);
+                a.id_build_local = build_local;
             }
         }
     }
@@ -3262,6 +3347,7 @@ fn compute_advisories(
             obligation_id: String::new(),
             site_key: String::new(),
             group_key: String::new(),
+            id_build_local: false,
         });
     }
 
@@ -3304,6 +3390,7 @@ fn compute_advisories(
                 obligation_id: String::new(),
                 site_key: String::new(),
                 group_key: String::new(),
+            id_build_local: false,
                 });
             }
             TrapVerdict::ProvenSafe => {
@@ -3333,6 +3420,7 @@ fn compute_advisories(
                 obligation_id: String::new(),
                 site_key: String::new(),
                 group_key: String::new(),
+            id_build_local: false,
                 });
             }
         }
@@ -3376,6 +3464,7 @@ fn compute_advisories(
                 obligation_id: String::new(),
                 site_key: String::new(),
                 group_key: String::new(),
+            id_build_local: false,
         });
     }
 
@@ -3397,6 +3486,7 @@ fn compute_advisories(
                 obligation_id: String::new(),
                 site_key: String::new(),
                 group_key: String::new(),
+            id_build_local: false,
         });
     }
 
@@ -9959,5 +10049,202 @@ mod tests {
             "const frame + dynamic alloca must be Unknown, never the under-counted constant"
         );
         assert_eq!(res.stack_usage.max_stack_bytes, StackBound::Unknown);
+    }
+
+    // ── FEAT-077 (scry#123): two-tier function identity ─────────────────────
+
+    /// All identity-stamped advisories for `func`, asserted non-empty —
+    /// anti-vacuity: a fixture that never produces a stamped advisory would
+    /// let every assertion below pass without touching the code path.
+    fn stamped(r: &AnalysisResult, func: u32) -> Vec<&Advisory> {
+        let v: Vec<&Advisory> = r
+            .advisories
+            .iter()
+            .filter(|a| a.func_index == func && !a.obligation_id.is_empty())
+            .collect();
+        assert!(
+            !v.is_empty(),
+            "fixture must produce an identity-stamped advisory for func {func}; got {:?}",
+            r.advisories
+        );
+        v
+    }
+
+    /// FEAT-077 tier 1 — a UNIQUE stripped name survives the disambiguator
+    /// re-rolling. Rust legacy mangling ends in `17h<16 hex>E`, a symbol
+    /// disambiguator derived from crate metadata and instantiation, NOT the
+    /// body — so an unrelated edit renames the function and (before this fix)
+    /// destroyed every obligation identity in it (measured: 45% of identified
+    /// functions churn per commit, scry#123).
+    #[test]
+    fn feat077_unique_stripped_ident_survives_disambiguator_churn() {
+        let base = analyze_default(
+            "(module \
+               (func $\"_ZN4demo3foo17h0123456789abcdefE\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $\"_ZN4demo3bar17h00aabbccddeeff11E\" (param i32) (result i32) \
+                 i32.const 20 local.get 0 i32.div_s))",
+        );
+        // The SAME source rebuilt after an unrelated edit: both disambiguators
+        // re-rolled, both bodies identical.
+        let rebuilt = analyze_default(
+            "(module \
+               (func $\"_ZN4demo3foo17hfedcba9876543210E\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $\"_ZN4demo3bar17h22aabbccddeeff33E\" (param i32) (result i32) \
+                 i32.const 20 local.get 0 i32.div_s))",
+        );
+        for f in [0, 1] {
+            assert_eq!(
+                adv_id(&base, f),
+                adv_id(&rebuilt, f),
+                "a unique stripped name must survive a disambiguator change (func {f})"
+            );
+            for a in stamped(&base, f) {
+                assert!(
+                    !a.id_build_local,
+                    "a unique stripped name is stable — it must NOT be marked build-local"
+                );
+            }
+        }
+    }
+
+    /// FEAT-077 tier 2 — two functions sharing a stripped name (two
+    /// monomorphizations of one dependency generic; measured 37.8% of
+    /// functions, max multiplicity 39) must NOT collapse onto one identity.
+    /// The raw name keeps them apart WITHIN the build, and the advisory is
+    /// marked build-local because that raw name churns ACROSS builds.
+    #[test]
+    fn feat077_shared_stripped_name_does_not_collide_and_is_marked_build_local() {
+        let r = analyze_default(
+            "(module \
+               (func $\"_ZN3dep7generic17haaaaaaaaaaaaaaaaE\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $\"_ZN3dep7generic17hbbbbbbbbbbbbbbbbE\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s))",
+        );
+        // Identical bodies + identical stripped names: naive stripping would
+        // merge these onto ONE identity (wrong attribution, the scry#122
+        // class). They must stay distinct …
+        assert_ne!(
+            adv_id(&r, 0),
+            adv_id(&r, 1),
+            "two functions sharing a stripped name must NOT collapse onto one identity"
+        );
+        // … and be HONEST about the price: the id is unique only in this build.
+        for f in [0, 1] {
+            for a in stamped(&r, f) {
+                assert!(
+                    a.id_build_local,
+                    "an ambiguous stripped name means the id is not comparable \
+                     across builds — it must be marked build-local (func {f})"
+                );
+            }
+        }
+    }
+
+    /// FEAT-077 — the uniqueness check must count PLAIN names too: `foo17h…E`
+    /// strips to `foo`, which another function already IS. Using the stripped
+    /// form would collide with a name that never had a disambiguator.
+    #[test]
+    fn feat077_stripped_name_colliding_with_plain_name_falls_back() {
+        let r = analyze_default(
+            "(module \
+               (func $foo (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $\"foo17h0123456789abcdefE\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s))",
+        );
+        assert_ne!(
+            adv_id(&r, 0),
+            adv_id(&r, 1),
+            "a stripped name must not collide with an existing plain name"
+        );
+        for a in stamped(&r, 0) {
+            assert!(
+                !a.id_build_local,
+                "the plain name keeps today's stable identity"
+            );
+        }
+        for a in stamped(&r, 1) {
+            assert!(a.id_build_local, "ambiguous after stripping → build-local");
+        }
+    }
+
+    /// FEAT-077 — only the EXACT shape `17h` + 16 LOWERCASE hex + `E` is a
+    /// Rust disambiguator. Near misses (uppercase hex, 15 digits) are ordinary
+    /// names: the id tracks the raw name exactly as today, unmarked.
+    #[test]
+    fn feat077_only_the_exact_disambiguator_shape_is_stripped() {
+        let base = analyze_default(
+            "(module \
+               (func $\"upper17h0123456789ABCDEFE\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $\"short17h012345678abcdefE\" (param i32) (result i32) \
+                 i32.const 20 local.get 0 i32.div_s))",
+        );
+        let renamed = analyze_default(
+            "(module \
+               (func $\"upper17h0123456799ABCDEFE\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $\"short17h012345679abcdefE\" (param i32) (result i32) \
+                 i32.const 20 local.get 0 i32.div_s))",
+        );
+        for f in [0, 1] {
+            assert_ne!(
+                adv_id(&base, f),
+                adv_id(&renamed, f),
+                "a near-miss suffix is part of the name; renaming it changes the \
+                 id — today's behaviour must not be widened (func {f})"
+            );
+            for a in stamped(&base, f) {
+                assert!(!a.id_build_local, "a near-miss name is not build-local");
+            }
+        }
+    }
+
+    /// FEAT-077 regression pin — for a name with NO disambiguator the identity
+    /// derivation is byte-identical to v3.2.5. The constant was captured from
+    /// the UNMODIFIED code (main, 5cd2a89) on this exact fixture.
+    #[test]
+    fn feat077_plain_name_id_is_byte_identical_to_v325() {
+        let r = analyze_default(
+            "(module (func $compute (param i32) (result i32) \
+               i32.const 10 local.get 0 i32.div_s))",
+        );
+        let a = r
+            .advisories
+            .iter()
+            .find(|a| a.code == "div-by-zero" && !a.obligation_id.is_empty())
+            .expect("fixture must raise an identity-stamped div-by-zero advisory");
+        assert_eq!(
+            a.obligation_id, "dd7c4231ce161f87",
+            "a plain name's obligation id must not change across FEAT-077"
+        );
+        assert!(!a.id_build_local, "a plain name is not build-local");
+    }
+
+    /// FEAT-077 regression pin — the body-shape-hash fallback (no name section,
+    /// no export) is byte-identical to v3.2.5 and unmarked. Constant captured
+    /// from the UNMODIFIED code (main, 5cd2a89) on this exact fixture.
+    #[test]
+    fn feat077_shape_hash_fallback_id_is_byte_identical_to_v325() {
+        let r = analyze_default(
+            "(module (func (param i32) (result i32) \
+               i32.const 10 local.get 0 i32.div_s))",
+        );
+        let a = r
+            .advisories
+            .iter()
+            .find(|a| a.code == "div-by-zero" && !a.obligation_id.is_empty())
+            .expect("fixture must raise an identity-stamped div-by-zero advisory");
+        assert_eq!(
+            a.obligation_id, "4f61c85b63648dc7",
+            "the shape-hash fallback id must not change across FEAT-077"
+        );
+        assert!(
+            !a.id_build_local,
+            "the shape-hash fallback is not build-local"
+        );
     }
 }

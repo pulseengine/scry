@@ -1037,7 +1037,7 @@ artifacts:
     fields:
       phase: phase-3
       acceptance-criteria:
-        - "Given a module and an edit that changes code in an unrelated function, When scry re-analyzes, Then every obligation ID outside the edited function is unchanged. FALSIFIED IN PRACTICE on Rust-produced modules (measured 2026-08-20 by FEAT-073, scry#123) — holds only for functions whose name-section name is itself stable. It is met by the unit fixture and NOT met by real toolchain output; see the AC below, which states what was measured."
+        - "Given a module and an edit that changes code in an unrelated function, When scry re-analyzes, Then every obligation ID outside the edited function is unchanged. FALSIFIED IN PRACTICE on Rust-produced modules (measured 2026-08-20 by FEAT-073, scry#123) — holds only for functions whose name-section name is itself stable. It is met by the unit fixture and NOT met by real toolchain output; see the AC below, which states what was measured. REPAIR: FEAT-077 (v3.4.0) makes the identity two-tier — the disambiguator-stripped name when unique in the module (measured 100% stable across both edit kinds), else the raw name explicitly marked `id_build_local` — so this AC holds for uniquely-named functions (every scry-own function in the measurement) and degrades HONESTLY, not silently, for the rest."
         - "MEASURED, not assumed (FEAT-073 over scry's own history, commits 582cfb06→524b3e0b). Given two builds of the same Rust source differing by an unrelated edit, When identities are compared, Then 334 of 744 functions carrying advisories (45%) lose EVERY obligation identity and 410 keep every one — an all-or-nothing split with ZERO partial cases. Cause: Rust legacy mangling ends in `17h<16 hex>E`, a symbol disambiguator derived from crate metadata and instantiation rather than from the function body, so an unrelated edit renames the function. `func_ident` is the first component of every key, so the churn takes the whole function's obligations with it."
         - "OPEN, deliberately not claimed: whether a genuine FIX presents as a changed obligation at a surviving site. Across 7 consecutive commit pairs of scry's own history, ZERO shared sites changed their obligation set. That is a fact about the SAMPLE — scry's commits alter analyzer logic, which recompiles into different monomorphizations — and must not be restated as a structural claim without a fixture that isolates it."
         - "Given an edit that inserts instructions EARLIER in the same function AND the inserted code contains no operator of the same kind in the same region and opens no new block/loop/if at the same-or-shallower depth, When scry re-analyzes, Then obligation IDs for later sites in that function are unchanged (pc-shift immunity). QUALIFIED after clean-room review: the unrestricted form of this AC is FALSE — see DD-020's limitation section. The original wording was met only by a fixture selected around the failing case."
@@ -1554,3 +1554,67 @@ artifacts:
     links:
       - type: traces-to
         target: REQ-017
+
+  - id: FEAT-077
+    type: feature
+    title: "v3.4 — Two-tier function identity: unique stripped name, else raw name marked build-local (scry#123)"
+    status: implemented
+    release: v3.4.0
+    description: >
+      The repair for the MEASURED identity-churn defect (scry#123, FEAT-073's
+      first run): `func_ident` — the FIRST component hashed into
+      `obligation_id` / `site_key` / `group_key` — inherited Rust legacy
+      mangling's trailing `17h<16 hex>E` symbol disambiguator, which derives
+      from crate metadata and instantiation, NOT the function body. Measured on
+      real builds of scry_mcdc.wasm: raw-name survival across an UNRELATED
+      one-commit edit was 54.8%, and across an edit to a function's OWN body
+      54.9% — the identity was destroyed by the very edit it exists to survive.
+      Stripping the suffix is 100% stable on ground-truth-paired functions but
+      makes 37.8% of functions share a stripped name (max multiplicity 39) —
+      ALL of them dependency generics; ZERO of scry's own functions collide.
+      Neither tier alone is acceptable, so the identity is TWO-TIER and honest
+      about which tier it used:
+        1. the stripped name, IF unique within the module (stable across
+           builds — the common case, and every scry-own function);
+        2. otherwise today's raw name (unique within one build), with the
+           advisory MARKED `id_build_local: true` — its identity keys are NOT
+           comparable across builds, and a consumer can tell WITHOUT parsing
+           the id.
+      Only the exact shape `17h` + 16 lowercase hex + `E` is stripped; the
+      uniqueness check counts stripped AND plain candidates, so a stripped name
+      landing on an existing plain name is also rejected. Names with no
+      disambiguator, export-derived names, and the body-shape-hash fallback are
+      byte-identical to v3.2.5 (regression-pinned against ids captured from the
+      unmodified code). Surfaced end-to-end: `Advisory.id_build_local`,
+      guidance feed v3 (`id_build_local` on every advisory), an HTML
+      "build-local id" badge, and the FEAT-072 delta view (per-row
+      `build_local`, a summary count, and a disclosure that such rows are
+      expected churn, not evidence a site came or went).
+    tags: [ai-agent, identity, fix-verify-loop, issue-driven, honesty, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given two builds whose function names differ ONLY in the `17h<16 hex>E` disambiguator (the measured churn), When the stripped name is unique within the module, Then every obligation id in that function is unchanged and NOT marked build-local. RED-FIRST: on the unmodified code this failed with ids 848ca91acb777c5d != 542c78e69e6c2622."
+        - "Given two functions whose names differ only in the disambiguator (two monomorphizations of one generic, identical bodies), When identities are stamped, Then they do NOT collapse onto one identity — the raw name keeps them apart within the build — and BOTH are marked `id_build_local: true`."
+        - "Given a stripped name that collides with another function's PLAIN name (`foo17h…E` vs `foo`), When identities are stamped, Then the disambiguated function falls back to its raw name marked build-local and the plain-named function keeps its stable identity — uniqueness is counted over stripped AND plain candidates."
+        - "Given a name whose suffix is a NEAR MISS (uppercase hex, or 15 digits), When identities are stamped, Then nothing is stripped: the id tracks the raw name exactly as in v3.2.5 and is not marked. MUTATION-CHECKED: widening the shape to accept uppercase hex turns exactly this test red."
+        - "Given a plain name (`compute`) or an unnamed function (body-shape-hash fallback), When identities are stamped, Then the obligation id is BYTE-IDENTICAL to v3.2.5 — pinned against constants (dd7c4231ce161f87 / 4f61c85b63648dc7) captured from the unmodified code on main (5cd2a89) before the change."
+        - "Given the guidance feed, When rendered, Then `guidance_schema` is 3 and every advisory carries `id_build_local` — a consumer can tell a stable id from a build-local one without parsing the id (FEAT-068 versioning discipline). The delta view carries the flag per row plus a summary count, and its page discloses that a build-local site vanishing/appearing between builds is expected churn."
+        - "MUTATION-CHECKED, five mutants all killed by exactly the intended tests and nothing else: (M1) stripping disabled -> 3 core tests red; (M2) uniqueness check dropped -> the two collision tests red; (M3) uppercase hex accepted -> the exact-shape test red; (M4) marking suppressed -> 2 core + all 3 viz tests red; (M5) everything marked -> 5 core + 3 viz tests red."
+      residual: >
+        Build-local identities remain build-local: for the ~37.8% of functions
+        (all dependency generics) sharing a stripped name there is still no
+        cross-build identity — a stable identity there needs the stable name
+        PLUS instantiation disambiguation, which is its own design decision
+        (noted in scry#123). The marking makes the limitation visible instead
+        of letting a consumer diff churn. The delta view treats such rows as
+        non-evidence; the FEAT-065 adjudicator (REQ-021) must treat a
+        build-local identity as at most `uncertain`. Measured collision figures
+        are from scry's own binary; other corpora may differ in degree, not in
+        the all-collisions-are-dependency-generics mechanism (unverified
+        elsewhere).
+    links:
+      - type: traces-to
+        target: REQ-020
+      - type: traces-to
+        target: REQ-021

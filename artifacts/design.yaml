@@ -590,7 +590,11 @@ artifacts:
         An obligation ID is a content address over four components, in this
         order: (1) FUNCTION IDENTITY — the name-section name if present, else the
         export name, else a hash of the function body's structural shape (opcode
-        sequence with immediates elided); (2) STRUCTURAL PATH — the chain of
+        sequence with immediates elided). AMENDED 2026-08-25 (FEAT-077,
+        scry#123): a name-section name carrying Rust's `17h<16 hex>E`
+        disambiguator is used STRIPPED when the stripped form is unique within
+        the module; when it is not unique the raw name is kept and the advisory
+        is marked `id_build_local` — see limitation (6); (2) STRUCTURAL PATH — the chain of
         enclosing block/loop/if indices from the function root, NOT raw pcs;
         (3) OPERATOR KIND — e.g. `i32.load`, `i32.div_s`; (4) ORDINAL — the
         operator's index among same-kind operators within its own basic block.
@@ -645,6 +649,26 @@ artifacts:
             not treated as path markers, so their `End` pops a region they never
             opened and the paths below are wrong for exception-handling modules.
             Tracked; no panic and no intra-function collision.
+        (6) DISAMBIGUATOR CHURN (scry#123, measured by FEAT-073's first run;
+            REPAIRED in part by FEAT-077). The name-section name inherits Rust
+            legacy mangling's `17h<16 hex>E` symbol disambiguator, derived from
+            crate metadata rather than the body — raw-name survival across an
+            unrelated one-commit edit measured 54.8%, and 54.9% across an edit
+            to the function's OWN body, so the raw name is destroyed by the
+            very edit the identity exists to survive. FEAT-077 makes function
+            identity two-tier: the stripped name when unique within the module
+            (measured 100% stable), else the raw name with the advisory marked
+            `id_build_local: true`. RESIDUAL: 37.8% of functions (all
+            dependency generics, none of scry's own) share a stripped name and
+            therefore keep only a build-local identity — honest and visible,
+            but not comparable across builds; a stable identity there needs
+            stable-name PLUS instantiation disambiguation, a synthesis that
+            needs its own design decision. A second, theoretical residual
+            (clean-room): the uniqueness count covers named functions only, so
+            a stripped name that is itself exactly 16 lowercase hex characters
+            could collide with an UNNAMED function's body-shape hash — real
+            Rust legacy symbols start `_ZN…` and are never pure hex, so this
+            needs a hand-crafted name plus a SHA-256-prefix coincidence.
       alternatives: >
         (a) Source-line identity via DWARF — rejected as the primary: scry
             analyses Wasm binaries that frequently carry no DWARF, and it would

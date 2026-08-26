@@ -7,6 +7,32 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — scry-sai-core
+
+- **FEAT-077 (scry#123): two-tier function identity.** `func_ident` — the
+  first component of `obligation_id` / `site_key` / `group_key` — no longer
+  hashes Rust's legacy-mangling symbol disambiguator (`17h<16 hex>E`), which
+  derives from crate metadata and re-rolls on any upstream edit (measured:
+  raw-name survival 54.8% across an unrelated one-commit edit, 54.9% across an
+  own-body edit — the identity was destroyed by the very edit it exists to
+  survive). A name whose disambiguator-stripped form is UNIQUE within the
+  module uses the stripped name (measured 100% stable across both edit kinds);
+  a shared stripped form (dependency generics — 37.8% of functions, none of
+  scry's own) falls back to the raw name and the advisory is marked with the
+  new `Advisory::id_build_local` flag: unique within this build, not
+  comparable across builds. Names with no disambiguator, export names, and the
+  body-shape-hash fallback are byte-identical to v3.2.5 (regression-pinned).
+
+### Changed — scry-sai-viz
+
+- **Guidance feed schema v3** (FEAT-077): every advisory now carries
+  `id_build_local`; the HTML guidance row shows a `build-local id` badge; the
+  FEAT-072 delta view carries a per-row `build_local` flag, a
+  `build_local_sites` summary count (JSON + page), and discloses that a
+  build-local site vanishing/appearing between builds is expected identity
+  churn, not evidence a site came or went.
+
+
 ## [3.2.5] — 2026-08-21
 
 Issue-driven patch, cut ahead of v3.3.0. Both defects were reported by a user
