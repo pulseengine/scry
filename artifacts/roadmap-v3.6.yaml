@@ -1,0 +1,66 @@
+# v3.6.0 — precision, driven by a measured consumer ranking.
+# Own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-084
+    type: feature
+    title: "v3.6 — Reduce known-bits into the interval domain so a masked address is provable (scry#126)"
+    status: proposed
+    release: v3.6.0
+    description: >
+      avrabe measured scry over 468 real-world modules: 97% hit
+      unsoundness-fallback and only 18% of memory-touching modules have ALL
+      accesses provable. The top NAMED operator behind that is `i32.and` at 433
+      fallbacks.
+
+      MEASURED HERE, not inferred. `interpret_op` has ZERO `I32And` arms, so
+      `i32.and` takes the unsupported-operator path and scrubs the function's
+      locals to top. On the address-bounding idiom:
+
+        (func (export "masked") (param i32) (result i32)
+          local.get 0  i32.const 0xFFF  i32.and  i32.load)   -> POTENTIAL-TRAP
+        (func (export "constant") (result i32)
+          i32.const 16  i32.load)                            -> PROVEN-SAFE
+
+      `x & 0xFFF` is at most 4095, an order of magnitude inside a single 64 KiB
+      page. scry refuses it while proving the constant-address load beside it.
+
+      THE FACT IS ALREADY COMPUTED AND THROWN AWAY. `compute_bit_facts` models
+      `I32And` via scry-sai-bits — the known-bits x interval-guarded congruence
+      domain (FEAT-037) whose soundness is mechanized admit-free in
+      BitsCongruence.v. It runs as a SEPARATE straight-line pass producing
+      `bit_facts`; the interpreter's fixpoint never consults it.
+
+      SCOPE, stated so this is not undersold. This is neither "implement a
+      domain" (it exists, and is proven) nor "call the existing function": the
+      bits pass is straight-line and the interpreter is a fixpoint, so making a
+      mask visible to the in-bounds decision requires a REDUCTION between
+      known-bits and the interval domain inside `interpret_op`, riding the
+      fixpoint in lockstep — the shape FEAT-058's memory domain and the octagon
+      integration both took. A real slice, not a one-liner.
+
+      WHY THIS SLICE FIRST, ahead of the cheaper cluster. nop/drop/unreachable
+      (215 combined) are cheaper per operator but poison functions incidentally.
+      `i32.and` blocks the PRODUCT: a masked address is the idiom bounds-checked
+      code is written in, and it is the direct input to the proven-safe export
+      synth's `--proven-safe` consumes (scry#114 / FEAT-069). It should also
+      release downstream facts within a function, since the locals stop being
+      scrubbed at the first mask.
+
+      THE NUMBER THAT MEASURES SUCCESS is not the `i32.and` fallback count going
+      to zero. It is avrabe's 18% — modules with a memory access where ALL
+      accesses are provable — because that is the figure that says whether the
+      precision reached the product. He has offered to re-run the corpus against
+      a branch.
+    tags: [precision, bits, reduced-product, consumer-driven, v3.6]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given `local.get p; i32.const M; i32.and; i32.load` with M+width < the memory size, When scry analyses it, Then the load is PROVEN-SAFE. RED-FIRST BASELINE captured before implementation: today it is POTENTIAL-TRAP with an accompanying `unsupported-op` advisory, while the constant-address load in the same module is PROVEN-SAFE."
+        - "Given a mask that does NOT bound the address below the memory size, Then the load stays POTENTIAL-TRAP — the reduction must not become a source of unsound proofs, which is the only way this feature could be worse than the fallback it replaces."
+        - "Given a function containing `i32.and`, When it is analysed, Then no `unsupported-op` gap is recorded for that operator and the locals downstream of it retain their facts."
+        - "MEASURED OUTCOME, reported honestly whichever way it goes: the corpus figure to move is `modules where ALL memory accesses are provable` (18% at the time of scry#126), not the `i32.and` fallback count. A large drop in fallbacks with no movement in that figure would mean the precision did not reach the product."
+    links:
+      - type: traces-to
+        target: REQ-014
+      - type: traces-to
+        target: REQ-004
