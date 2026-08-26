@@ -102,8 +102,8 @@ sha2 = { version = "0.10", default-features = false }
 # anyhow keeps the test-side error plumbing terse — every test path
 # bubbles errors up to the `#[test]` panic, so we don't need a
 # bespoke error enum.
-wasmtime = "45"
-wasmtime-wasi = "45"
+wasmtime = "47"
+wasmtime-wasi = "47"
 wat = "1"
 anyhow = "1"
 

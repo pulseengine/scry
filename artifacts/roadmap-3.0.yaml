@@ -1618,3 +1618,52 @@ artifacts:
         target: REQ-020
       - type: traces-to
         target: REQ-021
+
+  - id: FEAT-078
+    type: feature
+    title: "v3.2.6 — wasmtime 45 -> 47: four of five standing advisory ignores go stale (scry#116)"
+    status: proposed
+    release: v3.2.6
+    description: >
+      PR #115 added a time-boxed `deny.toml` ignore for RUSTSEC-2026-0222
+      (wasmtime "stores can mix up type indices between engines") whose own
+      comment said it should be DELETED at the next wasmtime bump, not carried
+      forward. This is that bump.
+
+      MEASURED, WITH A CONTROL — the result is better than scry#116 anticipated.
+      On main at wasmtime 45.0.0, `cargo deny check advisories` reports ZERO
+      stale ignores: all five are live, each suppressing a real advisory. At
+      wasmtime 47.0.4, FOUR report `advisory-not-detected`:
+      RUSTSEC-2026-0182 (wasmtime WASIp1 fd_renumber leak), -0188 (wasmtime-wasi
+      FilePerms bypass), -0190 (anyhow downcast_mut unsoundness), and -0222 (the
+      target). All four deleted with their rationale comments.
+
+      The control is the load-bearing part: it distinguishes "the bump cleared
+      these" from "these were already stale and nobody noticed", and only the
+      first is a claim this feature can make.
+
+      RUSTSEC-2026-0204 (crossbeam-epoch `fmt::Pointer` invalid deref) SURVIVED —
+      wasmtime 47.0.4 still resolves crossbeam-epoch 0.9.18. Its comment said
+      "re-evaluate when wasmtime/rayon are bumped"; that has now been done for
+      wasmtime and did NOT clear it, so the comment is corrected in place to say
+      what would: a rayon / crossbeam-deque bump, which wasmtime 47 does not pull.
+
+      NO API CHURN. scry#116 anticipated "fix harness API churn across two
+      majors"; there was none — `scry-host-tests` compiles unmodified.
+
+      TOOLING NOTE. The installed cargo-deny 0.16.4 could not parse the current
+      advisory database at all (`unsupported CVSS version: 4.0`), so the
+      stale-ignore question was unanswerable until it was updated to 0.20.2. A
+      verifier that cannot load its own database fails OPEN if its output is
+      skimmed rather than read.
+    tags: [dependencies, security, hygiene, issue-driven, v3.2.6]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the workspace at wasmtime 47, When `cargo deny check advisories` runs, Then it reports `advisories ok` with NO `advisory-not-detected` warning — every remaining ignore suppresses a live advisory."
+        - "Given the same check on main at wasmtime 45 (the control), Then zero ignores are stale — establishing that the bump cleared the four, rather than their having been stale already."
+        - "Given `cargo test -p scry-host-tests` on wasmtime 47, Then the harness passes unmodified: 32 pass; the single failure is `feat013_live_analyze_gate`, which names its own precondition (composed component missing at bazel-bin/scry.wasm) and is environmental, not an API regression."
+        - "Given deny.toml after this change, Then exactly one ignore remains and its comment states what was re-evaluated and what would actually clear it — not a re-worded version of the check already performed."
+    links:
+      - type: traces-to
+        target: REQ-001
