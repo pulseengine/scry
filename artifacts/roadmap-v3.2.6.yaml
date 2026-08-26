@@ -1,0 +1,47 @@
+# v3.2.6 addendum — filed in its own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-082
+    type: feature
+    title: "v3.2.6 — Function identity survives v0 Rust mangling too (scry#144)"
+    status: proposed
+    release: v3.2.6
+    description: >
+      FEAT-077 (scry#123) made function identity survive an unrelated edit by
+      stripping Rust's LEGACY symbol disambiguator, a trailing `17h<16 hex>E`.
+      It shipped on main hours ago. gale then reported, from a real target,
+      that their dissolved OS object is mangled with **v0**, where the
+      disambiguator is a crate-level `Cs<base62>_` near the FRONT:
+
+        _RNvCs942N1ctoMYm_18gust_exec_provider5admit
+
+      MEASURED, not inferred: identity churned across a crate-disambiguator
+      change — `217a5de8eb443492` vs `d32b864664215709`. So on the module that
+      most needs a stable join key, FEAT-077 provided NONE. Every function fell
+      back to the raw name and was marked `id_build_local`.
+
+      That degradation is the design working — it reported "not stable" rather
+      than pretending — but the consumer who asked for the key got nothing
+      usable, and they had already measured that 7 of their 13 target functions
+      carry no usable name at all.
+
+      This adds the v0 path. Conservative by construction, matching the house
+      posture: it strips ONLY the exact shape `C` `s` <base62+> `_`, and only on
+      a `_R` name; anything else returns None and falls back to the raw name
+      plus the build-local marker. The legacy path is untouched, pinned by the
+      two existing byte-identity tests against v3.2.5 ids.
+
+      SCOPE, stated because the original measurement said so explicitly: the
+      scry#123 study measured legacy mangling only and recorded "v0 mangling,
+      other toolchains, and cross-rustc-version stability unmeasured". This
+      closes the v0 half of that named gap. Other toolchains remain unmeasured.
+    tags: [identity, mangling, consumer-driven, gale, v3.2.6]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given two builds of a v0-mangled module differing only in the crate disambiguator, When scry stamps identity, Then the ids are equal and NOT marked build-local. Written RED FIRST: it failed with 217a5de8eb443492 vs d32b864664215709."
+        - "Given a legacy-mangled module, Then ids are byte-identical to v3.2.5 — pinned by feat077_plain_name_id_is_byte_identical_to_v325 and the shape-hash equivalent, both still green."
+        - "MUTATION-CHECKED: disabling only the v0 branch fails only the v0 test (111 passed, 2 failed); the legacy and fallback tests stay green."
+        - "Given any name not matching the exact v0 disambiguator shape, Then it falls back to the raw name and the build-local marker rather than being partially stripped."
+    links:
+      - type: traces-to
+        target: REQ-020
