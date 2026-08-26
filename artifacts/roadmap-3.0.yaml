@@ -1716,7 +1716,7 @@ artifacts:
         - "Given the explicit package list, Then it is deliberately not `--workspace`: the workspace holds wasm32 cdylib members a host `cargo test` cannot build. The guard is what makes the explicit list safe."
     links:
       - type: traces-to
-
+        target: REQ-001
   - id: FEAT-079
     type: feature
     title: "v3.2.6 — Every havoc'd region records a gap: close the laundering hole (scry#121)"
