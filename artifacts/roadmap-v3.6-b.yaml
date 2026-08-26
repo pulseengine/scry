@@ -6,11 +6,43 @@ artifacts:
     status: proposed
     release: v3.6.0
     description: >
-      scry#113 says the sound analyzer's frontend is unguarded. Measured: 18
-      join/meet functions across 8 domains, exactly ONE domain (octagon) has any
-      lattice-law test at all, and that one checks commutativity and
-      top-absorption on hand-picked values. No proptest/quickcheck/arbitrary/
-      cargo-fuzz anywhere in the workspace.
+      CORRECTED AFTER MERGE — the measurement this feature was justified by was
+      WRONG, and the correction is recorded here rather than quietly dropped.
+
+      I originally wrote: "18 join/meet functions across 8 domains, exactly ONE
+      domain (octagon) has any lattice-law test." That is false. I grepped for
+      `associat|commutat|idempot|absorb|lattice_law` — one house vocabulary —
+      and this repo mostly uses another. Re-measured on actual test names, the
+      soundness-critical law is ALREADY tested in every domain checked:
+      interval `join_is_upper_bound`, float `gamma_sweep_join_is_upper_bound`,
+      handle `join_is_upper_bound`, pentagon `adv_join_upper_bound_dim3`,
+      segment/poly `join_over_approximates_union_and_is_upper_bound`, octagon
+      `join_lattice_laws` — and bits itself already had
+      `join_over_approximates_union`, a few hundred lines above what I added.
+      Several are already gamma-checked, not structural.
+
+      So `join_is_an_upper_bound_up_to_gamma`, which this feature framed as THE
+      missing soundness law, DUPLICATES an existing test in the same file.
+
+      WHAT SURVIVES: commutativity, associativity, idempotence and top/bottom
+      identity for bits, stated up to gamma, were genuinely absent —
+      associativity least likely to be covered incidentally. The mutation-check
+      stands: forcing `meet` to return TOP kills
+      meet_is_a_lower_bound_up_to_gamma and one pre-existing test, so the added
+      tests are live.
+
+      WHAT DOES NOT SURVIVE is the justification. This was not "the frontend is
+      unguarded for the law that matters"; it was "four algebraic laws were
+      missing from one domain that already had the important one". scry#113's
+      premise still holds — no property-based generation anywhere, samples are
+      hand-picked, and `provenance` has ZERO law tests — but the gap is much
+      smaller than reported, and the honest headline for a next slice is
+      "provenance has none", not "eight domains are unguarded".
+
+      THE TRANSFERABLE ERROR: I measured with one vocabulary and reported the
+      absence of the concept. A grep for a NAME is not a measurement of a
+      PROPERTY — the same mistake as counting a comment as a gate (scry#147) and
+      reading a binary without `grep -a` (scry#155).
 
       This is the first slice, on scry-sai-bits — 6 of the 18 functions, the
       most intricate arithmetic (CRT, mod_inverse), and the domain scry#105
@@ -49,7 +81,7 @@ artifacts:
     fields:
       phase: phase-3
       acceptance-criteria:
-        - "Given the bits domain, When the law suite runs, Then join is an upper bound and meet a lower bound of the concretizations, over the exhaustive [0,256) domain — the two laws whose failure would be an UNSOUNDNESS rather than an imprecision."
+        - "Given the bits domain, When the law suite runs, Then join is an upper bound and meet a lower bound of the concretizations over the exhaustive [0,256) domain. NOTE, corrected after merge: the upper-bound half DUPLICATES the pre-existing `join_over_approximates_union` in the same file. It is retained because it states the law explicitly and gamma-checked, but it did not close a gap and this AC should not be read as evidence that one existed."
         - "Given join, Then commutativity, associativity and idempotence hold UP TO gamma, not structurally. Stated this way because the structural version is known-false here (FEAT-012's Verus proof)."
         - "MUTATION-CHECKED surgically: forcing `meet` to return TOP kills exactly `meet_is_a_lower_bound_up_to_gamma` plus one pre-existing test, and nothing else. A broad mutation (join returns self) also fires, but is uninformative because `alpha` is built from join."
         - "NOT COVERED, stated rather than implied: 12 of the 18 join/meet functions, across interval / pentagon / float / handle / segment / poly / viz. This slice does not make scry#113 done."
