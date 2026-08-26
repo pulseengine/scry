@@ -3138,18 +3138,50 @@ fn body_shape_hash(ops: &[Operator<'_>]) -> String {
 /// identity in 45% of identified functions per commit, while the stripped
 /// prefix was 100% stable across both an unrelated edit and an edit to the
 /// function's own body.
-fn strip_rust_disambiguator(name: &str) -> Option<&str> {
-    let no_e = name.strip_suffix('E')?;
-    if no_e.len() < 16 {
+fn strip_rust_disambiguator(name: &str) -> Option<alloc::string::String> {
+    // ── LEGACY mangling: a trailing `17h<16 lowercase hex>E`. ──────────────
+    if let Some(no_e) = name.strip_suffix('E')
+        && no_e.len() >= 16
+    {
+        let (head, hex) = no_e.split_at(no_e.len() - 16);
+        if hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            && let Some(base) = head.strip_suffix("17h")
+            && !base.is_empty()
+        {
+            return Some(base.into());
+        }
+    }
+    // ── v0 mangling (scry#144): the disambiguator is a CRATE-level ─────────
+    // `Cs<base62>_` near the FRONT, not a trailing hash. gale's dissolved OS
+    // object is mangled this way, so the legacy path above gave it no
+    // stability at all — every function fell back to the raw name and was
+    // marked build-local. Measured: identity churned across a crate-
+    // disambiguator change (`217a5de8…` vs `d32b8646…`).
+    //
+    // `_RNvCs942N1ctoMYm_18gust_exec_provider5admit`
+    //      ^^ ^----------^ the segment removed
+    //
+    // Conservative by construction, matching the house posture: this strips
+    // ONLY the exact shape `C` `s` <base62+> `_`, and only on a `_R` name.
+    // Anything else returns None and falls back to the raw name plus the
+    // build-local marker, which is honest rather than clever.
+    let rest = name.strip_prefix("_R")?;
+    let at = rest.find("Cs")?;
+    let after = &rest[at + 2..];
+    let run: &str = after.split('_').next()?;
+    if run.is_empty() || !run.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return None;
     }
-    let (head, hex) = no_e.split_at(no_e.len() - 16);
-    if !hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+    // The `_` terminator must actually be present, not merely implied by the
+    // end of the string.
+    if after.len() <= run.len() {
         return None;
     }
-    let base = head.strip_suffix("17h")?;
-    // A name that IS only the disambiguator would strip to nothing; keep it raw.
-    if base.is_empty() { None } else { Some(base) }
+    let mut out = alloc::string::String::with_capacity(name.len());
+    out.push_str("_R");
+    out.push_str(&rest[..at + 1]); // through the `C`
+    out.push_str(&after[run.len() + 1..]); // past the `_`
+    if out == "_RC" { None } else { Some(out) }
 }
 
 /// FEAT-064: the content address itself. Opaque, fixed-width; consumers must not
@@ -3263,13 +3295,12 @@ fn stamp_obligation_ids(
     // with a shape hash. A real Rust legacy symbol starts `_ZN…`, so its
     // stripped form is never pure hex; reaching this needs a hand-crafted
     // name plus a SHA-256-prefix coincidence.
-    let mut candidates: alloc::collections::BTreeMap<&str, u32> =
+    let mut candidates: alloc::collections::BTreeMap<alloc::string::String, u32> =
         alloc::collections::BTreeMap::new();
     for m in function_meta {
         if let Some(n) = m.name.as_deref() {
-            *candidates
-                .entry(strip_rust_disambiguator(n).unwrap_or(n))
-                .or_insert(0) += 1;
+            let key = strip_rust_disambiguator(n).unwrap_or_else(|| n.into());
+            *candidates.entry(key).or_insert(0) += 1;
         }
     }
     for f in defined_funcs {
@@ -3280,9 +3311,7 @@ fn stamp_obligation_ids(
         let (ident, build_local) = match name {
             None => (body_shape_hash(&f.ops), false),
             Some(raw) => match strip_rust_disambiguator(raw) {
-                Some(stripped) if candidates.get(stripped) == Some(&1) => {
-                    (String::from(stripped), false)
-                }
+                Some(stripped) if candidates.get(&stripped) == Some(&1) => (stripped, false),
                 Some(_) => (String::from(raw), true),
                 None => (String::from(raw), false),
             },
@@ -10068,6 +10097,57 @@ mod tests {
             r.advisories
         );
         v
+    }
+
+    /// scry#144 (gale): FEAT-077 strips only LEGACY Rust mangling
+    /// (`…17h<16 hex>E`). gale's dissolved OS object uses **v0** mangling —
+    /// `_RNvCs942N1ctoMYm_18gust_exec_provider5admit` — whose disambiguator is
+    /// a crate-level `Cs<base62>_` near the FRONT, not a trailing hash.
+    ///
+    /// So on the module that most needs stable identity, FEAT-077 provides
+    /// none: every function falls back to the raw name and is marked
+    /// `id_build_local`. That degrades honestly, which is the design working —
+    /// but it means the consumer who asked for a stable join key gets nothing
+    /// usable, and they measured that 7 of their 13 target functions have no
+    /// usable name at all.
+    #[test]
+    fn issue144_v0_mangled_identity_survives_crate_disambiguator_churn() {
+        let base = analyze_default(
+            "(module \
+               (func $\"_RNvCs942N1ctoMYm_18gust_exec_provider5admit\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $\"_RNvCs942N1ctoMYm_18gust_time_provider8deadline\" (param i32) (result i32) \
+                 i32.const 20 local.get 0 i32.div_s))",
+        );
+        // Same source, rebuilt: the CRATE disambiguator re-rolls, bodies identical.
+        let rebuilt = analyze_default(
+            "(module \
+               (func $\"_RNvCs4dFUS4ljfv3_18gust_exec_provider5admit\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $\"_RNvCs4dFUS4ljfv3_18gust_time_provider8deadline\" (param i32) (result i32) \
+                 i32.const 20 local.get 0 i32.div_s))",
+        );
+        // Non-vacuity: both fixtures must actually raise identified advisories,
+        // or the equality below would compare two empty sets.
+        for (tag, r) in [("base", &base), ("rebuilt", &rebuilt)] {
+            assert!(
+                !stamped(r, 0).is_empty(),
+                "{tag}: fixture must raise an identified advisory in func 0"
+            );
+        }
+        for f in [0, 1] {
+            assert_eq!(
+                adv_id(&base, f),
+                adv_id(&rebuilt, f),
+                "a v0-mangled name must survive a crate-disambiguator change (func {f})"
+            );
+            for a in stamped(&base, f) {
+                assert!(
+                    !a.id_build_local,
+                    "a v0 name unique after stripping is stable — not build-local"
+                );
+            }
+        }
     }
 
     /// FEAT-077 tier 1 — a UNIQUE stripped name survives the disambiguator
