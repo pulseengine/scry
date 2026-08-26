@@ -3,7 +3,7 @@ artifacts:
   - id: FEAT-082
     type: feature
     title: "v3.2.6 — Function identity survives v0 Rust mangling too (scry#144)"
-    status: proposed
+    status: accepted
     release: v3.2.6
     description: >
       FEAT-077 (scry#123) made function identity survive an unrelated edit by
