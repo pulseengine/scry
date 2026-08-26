@@ -1664,6 +1664,56 @@ artifacts:
         - "Given the same check on main at wasmtime 45 (the control), Then zero ignores are stale — establishing that the bump cleared the four, rather than their having been stale already."
         - "Given `cargo test -p scry-host-tests` on wasmtime 47, Then the harness passes unmodified: 32 pass; the single failure is `feat013_live_analyze_gate`, which names its own precondition (composed component missing at bazel-bin/scry.wasm) and is environmental, not an API regression."
         - "Given deny.toml after this change, Then exactly one ignore remains and its comment states what was re-evaluated and what would actually clear it — not a re-worded version of the check already performed."
+
+  - id: FEAT-080
+    type: feature
+    title: "v3.2.6 — CI actually runs the analyzer's tests, and a guard keeps it that way (scry#141)"
+    status: proposed
+    release: v3.2.6
+    description: >
+      The CI Test job ran `cargo test` on FOUR packages. `scry-sai-core` — the
+      analyzer itself — was not one of them. Measured across the workspace:
+      222 of 273 tests (81%) never executed in CI.
+
+      Nine of twelve published crates were uncovered, and with them the entire
+      interpreter, the fixpoint, guard refinement, obligation identity, advisory
+      classification, eight of ten abstract domains, all of scry-viz — and every
+      regression oracle recently added for scry#121, #123, #125 and #126. Those
+      were written red-first and mutation-checked, and not one of them could
+      have failed a build.
+
+      The Bazel `rust_test(name = "scry_analyze_core_test")` target existed but
+      no workflow invoked it; the only `bazel test` calls are //proofs/rocq/...
+      and //proofs/verus/....
+
+      WHAT A GREEN CHECK ACTUALLY MEANT: "host-tests, provenance, taint and
+      octagon pass." Not "the analyzer works." Combined with scry#130 (main has
+      no required_status_checks, so the gate is advisory anyway), a change could
+      break every analyzer test and merge on a green board. Claims made elsewhere
+      on the strength of "CI is green" — including the qualification dossier's
+      CI-gate citations — need re-reading against what CI actually ran.
+
+      TWO PARTS, because fixing it once is not enough. (1) Add the nine missing
+      packages. (2) GATE THE GATE: a step that fails, naming the crate, if any
+      publishable crate in crates/ is absent from a `cargo test` invocation.
+      Listed explicitly rather than `--workspace` because the workspace holds
+      wasm32 cdylib members a host-target `cargo test` cannot build (the reason
+      PR #41 set default-members); the guard is what makes "explicit" safe, by
+      making omission loud instead of silent.
+
+      HOW IT WAS FOUND, because the method transfers: incidentally, while wiring
+      `verification` artifacts for the dev V-model and needing to cite a CI job
+      as evidence for each requirement. No job could be found that ran the tests
+      the citation wanted. Asking "what gate proves this?" per requirement is
+      what surfaced the missing gate — the traceability exercise doing its job
+      rather than a coverage number being chased.
+    tags: [ci, gate-potency, honesty, issue-driven, v3.2.6]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the CI Test job, When it runs, Then every publishable crate in crates/ is exercised by a `cargo test` invocation — verified locally at 222 tests, exit 0, across the nine previously-missing packages."
+        - "Given a publishable crate absent from every `cargo test` step, When the guard runs, Then the job FAILS and names that crate. MUTATION-CHECKED: removing `-p scry-sai-bits` makes it fire with `missing: scry-sai-bits`; restoring it clears. A guard that cannot fail would be the same defect one level up."
+        - "Given the explicit package list, Then it is deliberately not `--workspace`: the workspace holds wasm32 cdylib members a host `cargo test` cannot build. The guard is what makes the explicit list safe."
     links:
       - type: traces-to
         target: REQ-001

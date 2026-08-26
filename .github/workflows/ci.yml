@@ -148,6 +148,57 @@ jobs:
       # host harness (tests/octagon.rs) re-exercises it on the cargo
       # path. The Rocq interval-soundness proof
       # (proofs/rocq/Soundness.v) is gated by the dedicated Rocq job.
+      # scry#141: for most of this project's life the Test job ran FOUR
+      # packages, and `scry-sai-core` — the analyzer itself — was not one of
+      # them. 222 of 273 workspace tests (81%) never executed in CI, including
+      # every domain crate except octagon, all of scry-viz, and every regression
+      # oracle written for scry#121/#125/#126/#123.
+      #
+      # The Bazel `rust_test(name = "scry_analyze_core_test")` target exists but
+      # no workflow invokes it: the only `bazel test` calls are for
+      # //proofs/rocq/... and //proofs/verus/....
+      #
+      # Listed explicitly rather than `--workspace` on purpose: the workspace
+      # contains wasm32 cdylib members that a host-target `cargo test` cannot
+      # build (the reason PR #41 set default-members in the first place). Adding
+      # a crate here is a deliberate act; a new crate is NOT covered until its
+      # name appears below.
+      # scry#141: gate the gate. Adding the crates above fixes the hole ONCE;
+      # this stops it reopening. Every publishable crate in crates/ must appear
+      # in a `cargo test` invocation in this workflow, or the job fails with the
+      # crate named. Without it the next new domain crate silently joins the 81%
+      # that were never tested — which is exactly how this happened.
+      - name: Guard — every publishable crate is actually tested
+        run: |
+          set -uo pipefail
+          # Extract the tested package names ONCE, then do fixed-string
+          # membership. The first version built a regex per crate name and
+          # failed in CI with `grep: Unmatched ( or \(` — the alternation
+          # survived YAML and BSD grep locally but not GNU grep. It failed
+          # CLOSED (red, naming all 12 crates) rather than open, which is the
+          # right direction, but a guard whose own matching is fragile is not
+          # a guard. No dynamic regex now.
+          tested=$(grep -oE -- '(-p|--package) [A-Za-z0-9_-]+' .github/workflows/ci.yml \
+                   | awk '{print $2}' | sort -u)
+          missing=""
+          for d in crates/*/; do
+            [ -f "$d/Cargo.toml" ] || continue
+            name=$(grep -m1 '^name = ' "$d/Cargo.toml" | cut -d'"' -f2)
+            [ -z "$name" ] && continue
+            grep -q '^publish = false' "$d/Cargo.toml" && continue
+            printf '%s\n' "$tested" | grep -qxF "$name" || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::publishable crate(s) never run by any cargo test step:$missing"
+            exit 1
+          fi
+          echo "OK — every publishable crate appears in a cargo test invocation"
+      - name: cargo test — analyzer core, viz, and the domain crates
+        run: |
+          cargo test -p scry-sai-core -p scry-sai-viz -p scry-sai-interval \
+                     -p scry-sai-bits -p scry-sai-float -p scry-sai-handle \
+                     -p scry-sai-pentagon -p scry-sai-segment -p scry-sai-poly \
+                     -- --nocapture
       - name: cargo test --package scry-sai-octagon
         run: cargo test --package scry-sai-octagon -- --nocapture
       # FEAT-011: the full-stack Rocq soundness proofs (Soundness /
