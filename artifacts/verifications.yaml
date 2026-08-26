@@ -1,0 +1,383 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Dev-axis requirement verification (right side of the dev V-model).
+#
+# Each `verification` artifact backs exactly the REQ-* it links with evidence
+# that EXISTS and was checked to resolve (test function names grepped, proof
+# files present in proofs/rocq/BUILD.bazel, CI jobs present in
+# .github/workflows/) at the time of writing. The ASPICE spine
+# (aspice-vmodel.yaml, SWV-*/SYSV-*) remains the process-standard mapping;
+# this file closes the same evidence onto the dev REQ-* axis so the
+# `requirement-verification` rule is satisfied by real links, not silence.
+#
+# DELIBERATELY UNCOVERED (no verification artifact — the honest gap, same
+# posture as safety-case J-004):
+#   REQ-003  Component-Model lift — only the resource-lifetime slice
+#            (scry-sai-handle, Handle.v) and provenance attribution exist;
+#            capability flow, host-call effect tracking, and async/WasmFX
+#            reasoning are unbuilt. Would verify: tests + proofs for those
+#            three sub-capabilities.
+#   REQ-004  loom consumption of AI invariants — the schema side is real
+#            (contracts/scry-invariants-v1.schema.json, contract.rs) but no
+#            loom integration exists that USES the invariants. Would verify:
+#            a loom-side test folding a constant / eliding a bounds check
+#            from a scry invariant.
+#   REQ-005  per-run signed attestation (sigil DSSE/in-toto with module hash,
+#            domain set, versions, fallbacks) — release ASSETS are cosign-
+#            signed with SLSA provenance (release.yml), but no per-analysis-
+#            run attestation is produced or linkable from rivet. Would
+#            verify: a test that runs analyze(), verifies the emitted DSSE
+#            envelope fields, and a rivet artifact citing one.
+#   REQ-007  sub-linear scaling via compositional summaries — summaries exist
+#            (fixture_05_interproc_summary) and the dogfood analyzes a real
+#            548-function module, but analysis-time scaling in fused module
+#            size has never been MEASURED, and summary reuse across matching
+#            component interfaces is unbuilt. Would verify: a scaling
+#            benchmark over fused modules of increasing component count.
+#   REQ-020  stable obligation identity — ObligationId.v proves only the
+#            QUALIFIED (ordinal-aliasing) theorem, and FEAT-073's measurement
+#            (scry#123) shows 43-45% of function identities churn per build
+#            via the Rust symbol disambiguator: the invariant the requirement
+#            demands is falsified in practice. Would verify: a
+#            disambiguator-free func_ident plus a re-run of the self-history
+#            harness showing near-zero churn under unrelated edits.
+#   REQ-021  adjudication verdict — FEAT-065 (PR #120) was refuted in
+#            adversarial review (scry#122) and never merged; nothing
+#            implements the requirement. Would verify: the adversarial suite
+#            the requirement itself names (self-comparison → still-open;
+#            deletion never → discharged; delete+insert → uncertain).
+# ─────────────────────────────────────────────────────────────────────────
+artifacts:
+
+  - id: VER-001
+    type: verification
+    title: "REQ-001: host soundness oracle (concrete ⊆ abstract) + mechanized interval soundness"
+    status: implemented
+    description: >
+      The host soundness oracle (crates/scry-host-tests/tests/soundness.rs:
+      fixture_01_constant_fold, fixture_02_param_plus_const,
+      fixture_05_interproc_summary, fixture_07_bounded_local,
+      fixture_08_loop_invariant_survives) runs each fixture abstractly through
+      the composed //:scry component and concretely in wasmtime, asserting
+      every concrete result lies inside the reported abstract interval — the
+      no-under-approximation property REQ-001 defines. Gated in CI by the
+      Test job (cargo test --package scry-host-tests, ci.yml). The interval
+      transfer functions carry the admit-free Rocq soundness proof
+      proofs/rocq/Soundness.v, gated by rocq-proofs.yml
+      (bazel test //proofs/rocq/...).
+    tags: [dev-v, soundness]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-001
+
+  - id: VER-002
+    type: verification
+    title: "REQ-002: soundness theorems stated and mechanized in Rocq (scoped)"
+    status: implemented
+    description: >
+      Soundness theorems are stated and mechanized admit-free in Rocq:
+      proofs/rocq/Soundness.v (interval transfer soundness over the ℤ model)
+      and proofs/rocq/WrapAdd.v (i32.add proven sound against the OFFICIAL
+      wrapping mod-2^32 semantics, including the wrap case), plus per-domain
+      proofs (Region.v, OctagonProject.v, OctagonStrongClose.v, Pentagon.v,
+      Float.v, Segment.v, BitsCongruence.v). All are built and tested by the
+      CI Rocq Formal Proofs job (.github/workflows/rocq-proofs.yml). Scope is
+      exactly what the requirement's v0 bar allows: the WasmCert-Coq import
+      remains a named open obligation, and doc claims about proof scope are
+      themselves gated by tools/claim-check.py over claims.yaml (CI "Doc
+      claims" job).
+    tags: [dev-v, mechanization]
+    fields:
+      method: analysis
+    links:
+      - type: verifies
+        target: REQ-002
+
+  - id: VER-003
+    type: verification
+    title: "REQ-006: analysis core builds, tests, and publishes independently of the front-end"
+    status: implemented
+    description: >
+      The lattice/analysis core is the standalone crate scry-sai-core
+      (crates/scry-analyze-core), separate from the Wasm component front-end:
+      `cargo test -p scry-sai-core` builds and passes natively with no
+      wasm/component dependency (105 unit tests; verified locally 2026-08-26),
+      and the domain crates (scry-sai-interval/-octagon/-taint/-provenance/
+      -pentagon/-float/-handle/-segment/-bits/-poly/-core) are published
+      independently to crates.io via scripts/publish.rs +
+      .github/workflows/publish-to-crates-io.yml, with synth already
+      consuming scry-sai-core as a library (collab issue #51).
+    tags: [dev-v, reusability]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-006
+
+  - id: VER-004
+    type: verification
+    title: "REQ-008: sound call_indirect resolution — Rocq proof + honest-unknown tests"
+    status: implemented
+    description: >
+      proofs/rocq/CallGraph.v mechanizes the resolution soundness of the
+      call-graph construction (gated by rocq-proofs.yml). Unit tests in
+      crates/scry-analyze-core/src/lib.rs pin the over-approximation
+      discipline at the edges where enumeration fails:
+      feat043_imported_table_indirect_is_unknown,
+      feat043_exported_table_indirect_is_unknown,
+      feat043_unenumerable_indirect_is_unknown (host-writable / growable
+      tables degrade to honest Unknown, never a too-small target set) and
+      feat036_indirect_call_forces_top. fixture-04-call-indirect exercises
+      the resolved path in the MC/DC corpus (crates/scry-mcdc/fixtures/).
+      Local run: cargo test -p scry-sai-core, all passing.
+    tags: [dev-v, call-graph]
+    fields:
+      method: analysis
+    links:
+      - type: verifies
+        target: REQ-008
+
+  - id: VER-005
+    type: verification
+    title: "REQ-009: live no-skip execution gate on the composed artifact"
+    status: implemented
+    description: >
+      feat013_live_analyze_gate (crates/scry-host-tests/tests/soundness.rs)
+      loads the bazel-composed //:scry component and invokes analyze() live,
+      with NO skip path — absence of the artifact fails the test. Gated in CI
+      by the Test job, which runs `bazel build //:scry` before
+      `cargo test --package scry-host-tests` (ci.yml). This is exactly the
+      analyzer↔composed-artifact coupling REQ-009 demands.
+    tags: [dev-v, composition]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-009
+
+  - id: VER-006
+    type: verification
+    title: "REQ-010: witness MC/DC gate over the executable analyzer"
+    status: implemented
+    description: >
+      crates/scry-mcdc/mcdc-gate.sh runs the witness MC/DC pipeline over the
+      REAL analyzer compiled to scry_mcdc.wasm, asserts the proved-condition
+      baseline (a dropped proved condition turns the build red), and publishes
+      the truth-table visualisation; gated in CI by the "MC/DC (witness)" job
+      (ci.yml). Known honest scope (recorded, not hidden): the measured
+      population is the whole executable module, ~49% of whose decisions are
+      inlined Rust stdlib, and only a minority of full-MC/DC decisions are
+      scry's own logic — the gate is live structural-coverage evidence on the
+      executable artifact, not a claim of full MC/DC of the analyzer alone.
+    tags: [dev-v, mcdc, structural-coverage]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-010
+
+  - id: VER-007
+    type: verification
+    title: "REQ-011: SCRY-001 sound-superset reachability — Rocq proof + fixture"
+    status: implemented
+    description: >
+      proofs/rocq/Reachable.v mechanizes concrete-reach ⊆ abstract-reach for
+      reachable_from_exports (gated by rocq-proofs.yml). The unit test
+      feat022_reachable_from_exports (crates/scry-analyze-core/src/lib.rs)
+      checks the include/exclude behaviour on
+      crates/scry-analyzer/test-fixtures/fixture-17-reachability.wat, and the
+      feat043_* honest-unknown tests protect contract fact (1)'s
+      superset property at the table edges; recursion flagging (contract fact
+      (2)) is exercised by fixture_13_stack_recursion_via_component
+      (crates/scry-host-tests/tests/soundness.rs). Local run:
+      cargo test -p scry-sai-core, all passing.
+    tags: [dev-v, reachability, scry-001]
+    fields:
+      method: analysis
+    links:
+      - type: verifies
+        target: REQ-011
+
+  - id: VER-008
+    type: verification
+    title: "REQ-012: abstract operand-stack surfaced soundly per program point"
+    status: implemented
+    description: >
+      feat023_operand_stack_constants (crates/scry-analyze-core/src/lib.rs)
+      checks on fixture-18-operand-stack.wat that a known constant appears as
+      a singleton on the abstract stack top, that depth/order (bottom → top)
+      are preserved, and that a havocked point yields an EMPTY operand stack
+      (honest silence) rather than a stale claim — the exact soundness
+      contract REQ-012 states. The viz-side rendering of the same honesty is
+      pinned by renders_operand_stack_constants and
+      renders_empty_operand_stack_honestly (crates/scry-viz/src/lib.rs).
+      Local run: cargo test -p scry-sai-core -p scry-sai-viz, all passing.
+    tags: [dev-v, operand-stack]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-012
+
+  - id: VER-009
+    type: verification
+    title: "REQ-013: faithful, self-contained static visualization"
+    status: implemented
+    description: >
+      scry-sai-viz library tests (crates/scry-viz/src/lib.rs) pin the
+      requirement's soundness posture: faithful projection of analyzer fields
+      (renders_operand_stack_constants, renders_callgraph_diagram_svg_and_mermaid,
+      renders_function_names_kinds_and_grouped_points), honest "(empty)"
+      rendering (renders_empty_operand_stack_honestly), and HTML-escaping of
+      attacker-influenced strings (escapes_untrusted_text,
+      function_names_html_escaped, demangled_generic_name_is_escaped). The CI
+      dogfood gate runs `scry-viz check` + a full render on scry's own module
+      every build (MC/DC job, ci.yml; check_wellformed_passes_on_real_module).
+      Local run: cargo test -p scry-sai-viz, 34 passing.
+    tags: [dev-v, visualization]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-013
+
+  - id: VER-010
+    type: verification
+    title: "REQ-014: trap-site classification PROVEN-SAFE vs POTENTIAL-TRAP"
+    status: implemented
+    description: >
+      Unit tests in crates/scry-analyze-core/src/lib.rs pin both directions of
+      the classification and its soundness bias: div/rem —
+      feat045_const_divisor_proven_safe, feat045_zero_divisor_potential_trap,
+      feat045_unknown_divisor_potential_trap (unknown ⇒ POTENTIAL-TRAP, the
+      over-approximating default); OOB memory —
+      feat046_const_in_bounds_proven_safe,
+      feat046_const_out_of_bounds_potential_trap,
+      feat046_unknown_address_potential_trap,
+      feat046_store_in_bounds_proven_safe. The pentagon domain backing the
+      strict-bound reasoning carries proofs/rocq/Pentagon.v (rocq-proofs.yml)
+      and 17 native unit tests (cargo test -p scry-sai-pentagon). Local run:
+      all passing.
+    tags: [dev-v, trap-classification]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-014
+
+  - id: VER-011
+    type: verification
+    title: "REQ-015: sound IEEE-754 float domain (f32/f64)"
+    status: implemented
+    description: >
+      The scry-sai-float crate (crates/scry-float) implements the
+      interval-with-rounding domain with 9 native unit tests incl. NaN/inf
+      handling (cargo test -p scry-sai-float), backed by the admit-free Rocq
+      proof proofs/rocq/Float.v (rocq-proofs.yml). Integration into the
+      analyzer is pinned by feat047_float_add_yields_interval,
+      feat047_float_mul_finite_no_nan, and
+      feat047_unknown_float_param_not_emitted
+      (crates/scry-analyze-core/src/lib.rs) — float ops no longer scrub to
+      top, and unknown floats are honestly not emitted. Local run: all
+      passing.
+    tags: [dev-v, floating-point]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-015
+
+  - id: VER-012
+    type: verification
+    title: "REQ-016: relational invariants surfaced in the AnalysisResult"
+    status: implemented
+    description: >
+      feat041_relational_invariants_surfaced
+      (crates/scry-analyze-core/src/lib.rs) asserts fixture-11-var-bound
+      surfaces an octagon constraint between locals i and n in
+      ProgramPoint.relational — the v1.9 non-observability finding closed —
+      and feat041_no_relations_when_non_relational asserts a non-relational
+      function surfaces none (no noise). The underlying octagon algebra
+      carries proofs/rocq/OctagonProject.v + OctagonStrongClose.v
+      (rocq-proofs.yml) and 26 native unit tests
+      (cargo test -p scry-sai-octagon, also in the CI Test job). Local run:
+      all passing.
+    tags: [dev-v, relational]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-016
+
+  - id: VER-013
+    type: verification
+    title: "REQ-017: machine-readable gap records instead of silent top"
+    status: implemented
+    description: >
+      feat040_unsupported_op_recorded_as_gap,
+      feat040_br_table_recorded_as_gap,
+      feat040_control_flow_havoc_recorded_as_gap,
+      feat040_modelled_function_has_no_gaps, and
+      feat040_gaps_independent_of_emit_diagnostics
+      (crates/scry-analyze-core/src/lib.rs) pin that every degradation to top
+      / unsupported op / havoc emits a positive Gap record in
+      AnalysisResult.gaps (and none fire spuriously). The aggregated,
+      consumer-facing surfacing of the same records is rendered by
+      scry-sai-viz (render_gaps) and the structured guidance.json feed,
+      whose well-formedness and escaping are pinned by
+      guidance_json_is_well_formed_and_carries_advisories +
+      guidance_json_escapes_control_and_quote_chars
+      (crates/scry-viz/src/lib.rs). Local run: all passing.
+    tags: [dev-v, gap-report]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-017
+
+  - id: VER-014
+    type: verification
+    title: "REQ-018: honesty-classed, ranked remediation advisories with oracles"
+    status: implemented
+    description: >
+      feat059_synthesizes_ranked_classes
+      (crates/scry-analyze-core/src/lib.rs) checks advisories carry location,
+      class, rationale, suggested action, and verification oracle, ranked by
+      class; feat059_potential_trap_is_never_a_definite_fault pins the
+      honesty split the requirement mandates (an unproven obligation is never
+      reported as a bug); feat059_clean_module_no_fault_advisories pins no
+      overclaim on clean input. Counterexample honesty (repro seeds, not
+      reachability proofs): feat055_div_by_zero_counterexample_is_divisor_0,
+      feat055_oob_counterexample_is_memory_size,
+      feat055_non_obligations_have_no_counterexample. The structured-primary
+      agent feed is covered by the gap-record verification above. Local run:
+      all passing.
+    tags: [dev-v, remediation]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-018
+
+  - id: VER-015
+    type: verification
+    title: "REQ-019: content-sensitive linear memory (segmentation)"
+    status: implemented
+    description: >
+      feat058_store_then_load_round_trips (strong update: singleton-offset
+      store then load returns the stored value, not top),
+      feat058_overlapping_wider_store_invalidates (the type-punning soundness
+      trap: an overlapping store invalidates covered content), and
+      feat058_call_forgets_memory (a call havocs tracked content — honest
+      forgetting) in crates/scry-analyze-core/src/lib.rs pin the segmented
+      memory domain's behaviour; the scry-sai-segment crate adds 10 native
+      unit tests (cargo test -p scry-sai-segment) and the admit-free Rocq
+      soundness proof proofs/rocq/Segment.v (rocq-proofs.yml). Local run: all
+      passing.
+    tags: [dev-v, memory-segmentation]
+    fields:
+      method: automated-test
+    links:
+      - type: verifies
+        target: REQ-019
