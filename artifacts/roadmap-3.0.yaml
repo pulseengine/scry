@@ -1671,7 +1671,7 @@ artifacts:
   - id: FEAT-080
     type: feature
     title: "v3.2.6 — CI actually runs the analyzer's tests, and a guard keeps it that way (scry#141)"
-    status: proposed
+    status: accepted
     release: v3.2.6
     description: >
       The CI Test job ran `cargo test` on FOUR packages. `scry-sai-core` — the
@@ -1714,7 +1714,7 @@ artifacts:
     fields:
       phase: phase-3
       acceptance-criteria:
-        - "Given the CI Test job, When it runs, Then every publishable crate in crates/ is exercised by a `cargo test` invocation — verified locally at 222 tests, exit 0, across the nine previously-missing packages."
+        - "Given the CI Test job, When it runs, Then every publishable crate in crates/ is exercised by a `cargo test` invocation. DISCHARGED IN CI on main d295fd8, not merely locally: the guard step printed `OK — every publishable crate appears in a cargo test invocation`, the new step ran `cargo test -p scry-sai-core -p scry-sai-viz -p scry-sai-interval ...`, and the job executed 322 tests against the 51 it ran before."
         - "Given a publishable crate absent from every `cargo test` step, When the guard runs, Then the job FAILS and names that crate. MUTATION-CHECKED: removing `-p scry-sai-bits` makes it fire with `missing: scry-sai-bits`; restoring it clears. A guard that cannot fail would be the same defect one level up."
         - "Given the explicit package list, Then it is deliberately not `--workspace`: the workspace holds wasm32 cdylib members a host `cargo test` cannot build. The guard is what makes the explicit list safe."
     links:
@@ -1723,7 +1723,7 @@ artifacts:
   - id: FEAT-079
     type: feature
     title: "v3.2.6 — Every havoc'd region records a gap: close the laundering hole (scry#121)"
-    status: proposed
+    status: accepted
     release: v3.2.6
     description: >
       `havoc_region` never interprets the region body, yet it recorded a gap ONLY
