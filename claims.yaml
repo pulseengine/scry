@@ -28,6 +28,32 @@ claims:
         glob: ['Cargo.toml']
         min: 1
 
+  # ── Dossier CI-gate scope (scry#141) ──────────────────────────────────────
+  # The qualification dossier cited `bazel test //...` as a DO-330 T-1(4) gate.
+  # CI never ran that — only the two proof trees. An assessor-facing document
+  # claiming a broader gate than exists is the drift this ledger is for, so the
+  # corrected text is now bound to the workflow that has to contain it.
+  - id: DOSSIER-BAZEL-SCOPE
+    doc: docs/qualification-dossier-v1.md
+    text: "`bazel test //proofs/rocq/... //proofs/verus/...`"
+    evidence:
+      - kind: count-min
+        pattern: 'run: bazel test //proofs/rocq/'
+        glob: ['.github/workflows/*.yml']
+        min: 1
+      - kind: count-min
+        pattern: 'run: bazel test //proofs/verus/'
+        glob: ['.github/workflows/*.yml']
+        min: 1
+      # And the claim that CI runs NO OTHER bazel test tree: if a third appears,
+      # the dossier row naming exactly two becomes stale and must be updated.
+      # Matched on the INVOCATION form: a comment mentioning a bazel target is
+      # not a gate, and counting one made this predicate measure prose.
+      - kind: count-max
+        pattern: 'run: bazel test //'
+        glob: ['.github/workflows/*.yml']
+        max: 2
+
   # ── Admit-free proofs ─────────────────────────────────────────────────────
   # The README claims 0 Admitted/admit/Axiom across the Rocq proofs. Re-counted
   # from the actual .v source (not a typed figure); a single admit/axiom → red.
