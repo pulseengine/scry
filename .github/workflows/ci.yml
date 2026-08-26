@@ -305,6 +305,35 @@ jobs:
         run: wasm-tools validate bazel-bin/scry.wasm
       - name: wasm-tools print (header)
         run: wasm-tools print bazel-bin/scry.wasm | head -15
+      # scry#152: the SHIPPED v3.2.6 component announced "scry 0.0.0". The
+      # constant is env!("CARGO_PKG_VERSION"); rules_rust populates that from
+      # the Bazel target's `version` attribute and defaults it to 0.0.0, and
+      # Bazel builds the shipped artifact. FEAT-083 set the attribute and
+      # claims.yaml pins it to the workspace version — but BOTH of those guard
+      # the SOURCE. Only this step guards the ARTIFACT.
+      #
+      # The unit test cannot do it: the Bazel rust_test target is not invoked by
+      # any workflow (scry#141's residual), and the assertion it replaced was
+      # tautological anyway.
+      - name: Guard — the built component carries the workspace version
+        run: |
+          set -euo pipefail
+          WS=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          echo "workspace version: $WS"
+          # -a is load-bearing: scry.wasm is BINARY, and without it grep
+          # reports "no match" for a string that IS present — silently, and
+          # differently between BSD and GNU grep. Verified against two real
+          # artifacts before this shipped; the version without -a failed BOTH
+          # the fixed and the broken component, i.e. it was vacuous.
+          if ! grep -qaF "$WS" bazel-bin/scry.wasm; then
+            echo "::error::built component does not contain the workspace version $WS"
+            exit 1
+          fi
+          if grep -qaF "0.0.0" bazel-bin/scry.wasm; then
+            echo "::error::built component contains the rules_rust default 0.0.0 — a BUILD.bazel target is missing its version attribute (scry#152)"
+            exit 1
+          fi
+          echo "OK — built component carries $WS and not the 0.0.0 default"
       - name: Upload composed component as artifact
         uses: actions/upload-artifact@v4
         with:
