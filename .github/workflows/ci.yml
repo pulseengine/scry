@@ -170,13 +170,23 @@ jobs:
       # that were never tested — which is exactly how this happened.
       - name: Guard — every publishable crate is actually tested
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          # Extract the tested package names ONCE, then do fixed-string
+          # membership. The first version built a regex per crate name and
+          # failed in CI with `grep: Unmatched ( or \(` — the alternation
+          # survived YAML and BSD grep locally but not GNU grep. It failed
+          # CLOSED (red, naming all 12 crates) rather than open, which is the
+          # right direction, but a guard whose own matching is fragile is not
+          # a guard. No dynamic regex now.
+          tested=$(grep -oE -- '(-p|--package) [A-Za-z0-9_-]+' .github/workflows/ci.yml \
+                   | awk '{print $2}' | sort -u)
           missing=""
           for d in crates/*/; do
-            name=$(grep -m1 '^name = ' "$d/Cargo.toml" 2>/dev/null | cut -d'"' -f2) || continue
+            [ -f "$d/Cargo.toml" ] || continue
+            name=$(grep -m1 '^name = ' "$d/Cargo.toml" | cut -d'"' -f2)
             [ -z "$name" ] && continue
             grep -q '^publish = false' "$d/Cargo.toml" && continue
-            grep -qE -- "(-p|--package) $name( |$|\\)" .github/workflows/ci.yml || missing="$missing $name"
+            printf '%s\n' "$tested" | grep -qxF "$name" || missing="$missing $name"
           done
           if [ -n "$missing" ]; then
             echo "::error::publishable crate(s) never run by any cargo test step:$missing"
