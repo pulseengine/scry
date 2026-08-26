@@ -9100,11 +9100,28 @@ mod tests {
     /// value is what actually closes it; this test only proves it stays derived.
     #[test]
     fn issue133_scry_version_is_derived_from_the_package_version() {
-        assert_eq!(
-            SCRY_VERSION,
-            env!("CARGO_PKG_VERSION"),
-            "SCRY_VERSION must be derived, not hand-maintained — a literal drifts \
-             silently and ships a component that misidentifies itself"
+        // scry#152: the assertion that USED to be here was
+        //     assert_eq!(SCRY_VERSION, env!("CARGO_PKG_VERSION"))
+        // which is TAUTOLOGICAL, because SCRY_VERSION *is* that expression. It
+        // compared a value to itself and could not fail under any build.
+        //
+        // It was not vacuous when written — red-first it failed honestly with
+        // left "3.2.4" / right "3.2.5", because SCRY_VERSION was still a
+        // literal. It became vacuous the MOMENT the fix landed, since the fix
+        // makes the asserted identity true by construction. A test can be
+        // meaningful before a change and worthless after it, and mutation-
+        // checking the implementation does not reveal that: reverting to a
+        // literal makes it fail, which looks like a healthy oracle.
+        //
+        // What it failed to catch: rules_rust populates CARGO_PKG_VERSION from
+        // the Bazel target's `version` attribute and defaults it to "0.0.0".
+        // Bazel builds the SHIPPED component, so v3.2.6 went out announcing
+        // "scry 0.0.0" with this test green.
+        assert_ne!(
+            SCRY_VERSION, "0.0.0",
+            "SCRY_VERSION is the rules_rust default — the Bazel target is \
+             missing its `version` attribute, and the shipped component will \
+             announce 0.0.0 (scry#152)"
         );
         // Non-vacuity: a bare `assert_eq!(X, X)` would pass on any value, so
         // pin the shape too — the released artifact showed this string verbatim.

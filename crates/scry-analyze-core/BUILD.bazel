@@ -17,6 +17,18 @@ rust_library(
     srcs = ["src/lib.rs"],
     crate_name = "scry_analyze_core",
     edition = "2024",
+    # scry#152: rules_rust populates CARGO_PKG_VERSION from THIS attribute, and
+    # its default is "0.0.0". Without it, `SCRY_VERSION` — which is
+    # env!("CARGO_PKG_VERSION") — resolves to 3.2.6 under cargo and 0.0.0 under
+    # Bazel. Bazel builds the SHIPPED component, so v3.2.6 went out announcing
+    # itself as "scry 0.0.0".
+    #
+    # Hard-coded here because Bazel cannot read Cargo.toml, which recreates the
+    # drift FEAT-076 was meant to end — so it is GATED: claims.yaml pins this
+    # literal to the workspace version, and claim-check goes red if they part.
+    # A number that must be maintained by hand is acceptable only when
+    # something mechanical notices when it is not.
+    version = "3.2.6",
     visibility = ["//visibility:public"],
     tags = ["feat-014"],
     deps = [
