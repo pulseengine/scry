@@ -1160,8 +1160,8 @@ artifacts:
 
   - id: FEAT-068
     type: feature
-    title: "v3.3 — guidance.json v2: versioned schema carrying obligation IDs"
-    status: proposed
+    title: "v3.3 — guidance.json: a versioned schema carrying obligation IDs (shipped as v2, now v3)"
+    status: accepted
     release: v3.3.0
     description: >
       The v3.2.2 guidance feed shipped un-versioned. v2 adds an explicit
@@ -1172,7 +1172,8 @@ artifacts:
     fields:
       phase: phase-3
       acceptance-criteria:
-        - "Given guidance.json v2, When a consumer reads it, Then every advisory carries a stable obligation ID and the document declares its schema version and module hash."
+        - "Given guidance.json, When a consumer reads it, Then every advisory carries a stable obligation ID and the document declares its schema version and module hash. VERIFIED on a real feed: guidance_schema=3, module_sha256 present, and every advisory carries obligation_id / site_key / group_key / id_build_local."
+        - "VERSION DRIFT, recorded rather than hidden: this feature shipped the feed at schema 2; FEAT-082 then added `id_build_local` and bumped it to 3. The AC requires the document to DECLARE its version, not to be any particular one, so it is satisfied — but the feature title said `v2` while the artifact said `3`, which is exactly the drift claims.yaml exists to catch and which no predicate covered here."
     links:
       - type: traces-to
         target: REQ-018
@@ -1210,7 +1211,7 @@ artifacts:
   - id: FEAT-070
     type: feature
     title: "v3.3 — Guard refinement for `br_if` on a bare value (precision)"
-    status: proposed
+    status: accepted
     release: v3.3.0
     description: >
       Our guard refinement recognises `local.get X; i32.const c; <cmp>; br_if`,
@@ -1269,7 +1270,7 @@ artifacts:
   - id: FEAT-072
     type: feature
     title: "v3.3 — Obligation anchors + the delta view (identity, made visible)"
-    status: proposed
+    status: accepted
     release: v3.3.0
     description: >
       The dashboard renders ONE snapshot. The entire value of a stable obligation
@@ -1327,7 +1328,7 @@ artifacts:
   - id: FEAT-073
     type: feature
     title: "v3.3 — Self-adjudication harness: scry adjudicates scry, in observation mode"
-    status: proposed
+    status: accepted
     release: v3.3.0
     description: >
       Roll the fix-verify loop out ON OURSELVES. FEAT-025 already dogfoods scry
