@@ -630,7 +630,7 @@ mod tests {
         let ps = adv_pentagons_dim3();
         for a in ps.iter().step_by(41) {
             for b in ps.iter().step_by(59) {
-                let m = a.meet(&b);
+                let m = a.meet(b);
                 for v in gamma3(&m) {
                     assert!(a.contains(&v) && b.contains(&v), "meet gained {v:?}");
                 }
@@ -651,7 +651,7 @@ mod tests {
         let ps = adv_pentagons_dim3();
         for a in ps.iter().step_by(31) {
             for b in ps.iter().step_by(47) {
-                if a.leq(&b) {
+                if a.leq(b) {
                     for v in gamma3(a) {
                         assert!(b.contains(&v), "leq unsound {v:?}\na={a:?}\nb={b:?}");
                     }
