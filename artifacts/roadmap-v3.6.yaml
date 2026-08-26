@@ -4,7 +4,7 @@ artifacts:
   - id: FEAT-084
     type: feature
     title: "v3.6 — Reduce known-bits into the interval domain so a masked address is provable (scry#126)"
-    status: proposed
+    status: implemented
     release: v3.6.0
     description: >
       avrabe measured scry over 468 real-world modules: 97% hit
@@ -54,6 +54,26 @@ artifacts:
     tags: [precision, bits, reduced-product, consumer-driven, v3.6]
     fields:
       phase: phase-3
+      implementation-notes: >
+        IMPLEMENTED (branch feat-084-bits-interval-reduction): interpret_op
+        arms for i32.and / i32.or / i32.xor and constant-count i32.shl /
+        i32.shr_u, each a round-trip through the PROVEN scry-sai-bits domain
+        (BitsCongruence.v): interval -> BitsCong (two justified conversions
+        only: an i32 singleton, or a non-negative interval whose high bits are
+        known-0) -> the domain's own transfer -> interval (sound projection of
+        the unsigned [umin, umax]; a range straddling 2^31 projects to top).
+        `x & M` with M a non-negative constant comes out [0, M]; the fixture's
+        masked load is PROVEN-SAFE, red-first baseline quoted in the tests.
+
+        DELIBERATELY NOT MODELLED (still the honest unsupported-op fallback):
+        the i64 bitwise family, i32.shr_s, rotl/rotr; a variable shift count
+        and a sign-bit mask push top for the RESULT only (no function-wide
+        degrade, no false bound). AC#1-#3 verified by feat084_* tests in
+        scry-sai-core, each mutation-checked (3 mutations, each killed by the
+        intended test alone). AC#4 (the corpus 18% figure) is OUTSTANDING —
+        it needs avrabe's offered re-run over the 468-module corpus against
+        this branch; status stays short of verified until that number lands,
+        whichever way it goes.
       acceptance-criteria:
         - "Given `local.get p; i32.const M; i32.and; i32.load` with M+width < the memory size, When scry analyses it, Then the load is PROVEN-SAFE. RED-FIRST BASELINE captured before implementation: today it is POTENTIAL-TRAP with an accompanying `unsupported-op` advisory, while the constant-address load in the same module is PROVEN-SAFE."
         - "Given a mask that does NOT bound the address below the memory size, Then the load stays POTENTIAL-TRAP — the reduction must not become a source of unsound proofs, which is the only way this feature could be worse than the fallback it replaces."

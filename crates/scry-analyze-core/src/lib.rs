@@ -5725,6 +5725,33 @@ fn interpret_op(
             // (untracked) global — locals/stack are unaffected (sound).
             let _ = ctx.operand_stack.pop();
         }
+        // FEAT-084 (scry#126): i32 bitwise family, interpreted through the
+        // PROVEN known-bits × congruence domain (scry-sai-bits, FEAT-037,
+        // BitsCongruence.v) — interval → bits → transfer → interval. The
+        // headline: `x & M` with `M` a non-negative constant bounds a masked
+        // address to `[0, M]`, making the bounds-check idiom provable. This
+        // ALSO stops `i32.and` (433 fallbacks in avrabe's 468-module corpus)
+        // from scrubbing the whole function to ⊤. A sign-bit mask, a variable
+        // shift count, or any shape outside the two sound interval→bits
+        // conversions falls back to ⊤ for the RESULT only — never a false
+        // bound, never a function-wide degrade.
+        // NOT modelled here (still the unsupported-op fallback): the i64
+        // bitwise family, `i32.shr_s`, and `rotl`/`rotr`.
+        Operator::I32And => {
+            i32_bitop(ctx, func_index, pc, |a, b| a.and(b, 32))?;
+        }
+        Operator::I32Or => {
+            i32_bitop(ctx, func_index, pc, |a, b| a.or(b, 32))?;
+        }
+        Operator::I32Xor => {
+            i32_bitop(ctx, func_index, pc, |a, b| a.xor(b, 32))?;
+        }
+        Operator::I32Shl => {
+            i32_shiftop(ctx, func_index, pc, |a, s| a.shl(s, 32))?;
+        }
+        Operator::I32ShrU => {
+            i32_shiftop(ctx, func_index, pc, |a, s| a.shr_u(s, 32))?;
+        }
         // FEAT-045: division / remainder — classify the runtime trap from the
         // operand intervals, then push ⊤ for the result. Modelling them here
         // (instead of the `other` fallback) ALSO stops a div/rem from degrading
@@ -5834,6 +5861,141 @@ fn i32_binop(
                 .push(AbstractValue::I32Interval(domain::top()));
         }
     }
+    Ok(())
+}
+
+/// FEAT-084 (scry#126): sound [`BitsCong`] approximation of an i32 interval
+/// (signed i64 reading, the encoding `Interval` uses for i32 values).
+///
+/// Only two shapes yield information; everything else is ⊤ (sound):
+/// * a singleton in i32 range → the exact constant (bit pattern of the i32);
+/// * a non-negative interval `[lo, hi]` with `hi ≤ i32::MAX` → every value's
+///   bits at or above `bit_len(hi)` are known-0 (`0 ≤ x ≤ hi` unsigned).
+///
+/// An interval containing negatives is ⊤: its members' unsigned readings
+/// straddle the 2^31 boundary, so no bit is common. This is the
+/// interval→known-bits half of the FEAT-037 reduced product, applied at the
+/// operand level (BitsCongruence.v mechanizes the domain's own transfers).
+fn bits_from_i32_interval(iv: Interval) -> BitsCong {
+    if scry_interval::is_bot(iv) {
+        return BitsCong::bottom();
+    }
+    if iv.lo == iv.hi && iv.lo >= i32::MIN as i64 && iv.hi <= i32::MAX as i64 {
+        return BitsCong::constant(iv.lo as i32 as u32 as u64, 32);
+    }
+    if iv.lo >= 0 && iv.hi <= i32::MAX as i64 {
+        // hi > 0 here (hi == 0 with lo ≥ 0 is the singleton case above).
+        let bit_len = 64 - (iv.hi as u64).leading_zeros();
+        let zeros = scry_bits::width_mask(32) & !((1u64 << bit_len) - 1);
+        return BitsCong {
+            kb: scry_bits::KnownBits::new(zeros, 0, 32),
+            cong: Cong::top(),
+        }
+        .reduce(32);
+    }
+    BitsCong::top()
+}
+
+/// FEAT-084: sound i32 interval (signed reading) from a [`BitsCong`]'s
+/// unsigned range `[umin, umax]` at width 32.
+///
+/// * `umax ≤ i32::MAX` — every member is non-negative in the signed reading
+///   and the unsigned order agrees with the signed one: `[umin, umax]`.
+/// * `umin ≥ 2^31` — every member is negative; `u ↦ u − 2^32` is monotone on
+///   the range, so `[umin − 2^32, umax − 2^32]`.
+/// * straddling 2^31 — the signed reading is not an interval of the unsigned
+///   one; give up (⊤). A sign-bit mask (e.g. `x & 0x8000_0FFF`) lands here,
+///   which is exactly the "negative mask must not bound" soundness case.
+fn i32_interval_from_bits(bc: &BitsCong) -> Interval {
+    if bc.is_bottom() {
+        // Unreachable state: mirror the interval transfers, which propagate ⊥.
+        return scry_interval::bottom();
+    }
+    let umin = bc.umin(32);
+    let umax = bc.umax(32);
+    if umax <= i32::MAX as u64 {
+        Interval {
+            lo: umin as i64,
+            hi: umax as i64,
+        }
+    } else if umin > i32::MAX as u64 {
+        Interval {
+            lo: (umin as u32 as i32) as i64,
+            hi: (umax as u32 as i32) as i64,
+        }
+    } else {
+        domain::top()
+    }
+}
+
+/// FEAT-084: interpret an i32 bitwise binop (`and`/`or`/`xor`) by round-trip
+/// through the PROVEN known-bits × congruence domain (scry-sai-bits,
+/// BitsCongruence.v): interval → BitsCong (sound approximation), the domain's
+/// own transfer, BitsCong → interval (sound projection). The headline case —
+/// `x & M` with `M` a non-negative constant — comes out as `[0, M]`, tight
+/// enough for the in-bounds decision on a masked address.
+///
+/// These operators write no locals and no memory, so the octagon and the
+/// FEAT-058 memory domain are untouched (the octagon's `classify_store`
+/// treats a bitwise producer as `Other` ⇒ `forget`, its sound default).
+/// A non-interval operand pushes ⊤ WITHOUT degrading the function — pop 2 /
+/// push ⊤ is a complete model of a pure binop.
+fn i32_bitop(
+    ctx: &mut FuncCtx,
+    func_index: u32,
+    pc: u32,
+    f: fn(&BitsCong, &BitsCong) -> BitsCong,
+) -> Result<(), AnalyzeError> {
+    let b = ctx.operand_stack.pop().ok_or_else(|| {
+        AnalyzeError::Internal(format!(
+            "func {func_index} pc {pc}: i32 bitop with empty stack"
+        ))
+    })?;
+    let a = ctx.operand_stack.pop().ok_or_else(|| {
+        AnalyzeError::Internal(format!(
+            "func {func_index} pc {pc}: i32 bitop with single operand"
+        ))
+    })?;
+    let result = match (as_i32_interval(&a), as_i32_interval(&b)) {
+        (Some(ai), Some(bi)) => {
+            i32_interval_from_bits(&f(&bits_from_i32_interval(ai), &bits_from_i32_interval(bi)))
+        }
+        _ => domain::top(),
+    };
+    ctx.operand_stack.push(AbstractValue::I32Interval(result));
+    Ok(())
+}
+
+/// FEAT-084: interpret an i32 shift (`shl`/`shr_u`) with a CONSTANT count via
+/// the bits domain. Wasm takes the count mod 32. A non-constant count (or a
+/// non-interval operand) pushes ⊤ without degrading — count 0 makes the
+/// result equal the unbounded input, so nothing tighter is sound.
+fn i32_shiftop(
+    ctx: &mut FuncCtx,
+    func_index: u32,
+    pc: u32,
+    f: fn(&BitsCong, u32) -> BitsCong,
+) -> Result<(), AnalyzeError> {
+    let count = ctx.operand_stack.pop().ok_or_else(|| {
+        AnalyzeError::Internal(format!(
+            "func {func_index} pc {pc}: i32 shift with empty stack"
+        ))
+    })?;
+    let value = ctx.operand_stack.pop().ok_or_else(|| {
+        AnalyzeError::Internal(format!(
+            "func {func_index} pc {pc}: i32 shift with single operand"
+        ))
+    })?;
+    let result = match (as_i32_interval(&value), as_i32_interval(&count)) {
+        (Some(vi), Some(ci))
+            if ci.lo == ci.hi && ci.lo >= i32::MIN as i64 && ci.hi <= i32::MAX as i64 =>
+        {
+            let s = (ci.lo as i32 as u32) % 32;
+            i32_interval_from_bits(&f(&bits_from_i32_interval(vi), s))
+        }
+        _ => domain::top(),
+    };
+    ctx.operand_stack.push(AbstractValue::I32Interval(result));
     Ok(())
 }
 
@@ -7960,6 +8122,192 @@ mod tests {
             oob[0].verdict,
             TrapVerdict::PotentialTrap,
             "an unmodelled narrow load cannot be proven in-bounds"
+        );
+    }
+
+    /// FEAT-084 helper: the OutOfBounds verdict for the (single) memory access
+    /// in function `func_index`. `None` if the function has no such trap check
+    /// — callers assert `Some(..)` so a test can never pass because the access
+    /// silently produced no obligation at all.
+    fn oob_verdict_in_func(r: &AnalysisResult, func_index: u32) -> Option<TrapVerdict> {
+        let checks: alloc::vec::Vec<_> = r
+            .trap_checks
+            .iter()
+            .filter(|t| t.func_index == func_index && t.kind == TrapKind::OutOfBounds)
+            .collect();
+        assert!(
+            checks.len() <= 1,
+            "test fixtures here have at most one memory access per function; got {checks:?}"
+        );
+        checks.first().map(|t| t.verdict)
+    }
+
+    /// FEAT-084 helper: true iff `func_index` recorded an `unsupported-op` gap.
+    fn has_unsupported_gap(r: &AnalysisResult, func_index: u32) -> bool {
+        r.gaps
+            .iter()
+            .any(|g| g.func_index == func_index && g.kind == GapKind::UnsupportedOp)
+    }
+
+    /// FEAT-084 (scry#126) AC#1: `x & 0xFFF` bounds the address to [0, 4095],
+    /// an order of magnitude inside the 65536-byte memory, so the load is
+    /// PROVEN-SAFE. Red-first baseline on main: POTENTIAL-TRAP with an
+    /// `unsupported-op` gap, while the constant-address load beside it proves.
+    #[test]
+    fn feat084_masked_address_proven_safe() {
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func (export \"masked\") (param i32) (result i32) \
+                 local.get 0 i32.const 0xFFF i32.and i32.load) \
+               (func (export \"constant\") (result i32) \
+                 i32.const 16 i32.load))",
+        );
+        // Precondition (anti-vacuity): both loads produced an OOB obligation.
+        let masked = oob_verdict_in_func(&r, 0).expect("masked load must be classified");
+        let constant = oob_verdict_in_func(&r, 1).expect("constant load must be classified");
+        assert_eq!(
+            constant,
+            TrapVerdict::ProvenSafe,
+            "baseline sanity: the constant-address load proves"
+        );
+        assert_eq!(
+            masked,
+            TrapVerdict::ProvenSafe,
+            "x & 0xFFF ≤ 4095 < 65536-4: the masked load must be PROVEN-SAFE"
+        );
+        assert!(
+            !has_unsupported_gap(&r, 0),
+            "i32.and is modelled — no unsupported-op gap; gaps={:?}",
+            r.gaps
+        );
+    }
+
+    /// FEAT-084 AC#2 (NEGATIVE — the test that keeps the reduction honest): a
+    /// mask that does NOT bound the address below the memory size must stay
+    /// POTENTIAL-TRAP. `x & 0x1FFFF` can reach 131071 ≥ 65536.
+    #[test]
+    fn feat084_unbounding_mask_stays_potential_trap() {
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func (export \"f\") (param i32) (result i32) \
+                 local.get 0 i32.const 0x1FFFF i32.and i32.load))",
+        );
+        let v = oob_verdict_in_func(&r, 0).expect("the load must still be classified");
+        assert_eq!(
+            v,
+            TrapVerdict::PotentialTrap,
+            "x & 0x1FFFF reaches 131071 ≥ memory size 65536 — must NOT prove"
+        );
+    }
+
+    /// FEAT-084 AC#2 (NEGATIVE, sign-agnostic i32): a mask with the sign bit
+    /// set does not bound the value — `x & 0x80000FFF` admits addresses like
+    /// 0x80000000 (or, signed, negative values). Must stay POTENTIAL-TRAP.
+    #[test]
+    fn feat084_negative_mask_stays_potential_trap() {
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func (export \"f\") (param i32) (result i32) \
+                 local.get 0 i32.const 0x80000FFF i32.and i32.load))",
+        );
+        let v = oob_verdict_in_func(&r, 0).expect("the load must still be classified");
+        assert_eq!(
+            v,
+            TrapVerdict::PotentialTrap,
+            "a sign-bit mask does not bound the address — must NOT prove"
+        );
+    }
+
+    /// FEAT-084 AC#3: `i32.and` no longer scrubs the function — a DOWNSTREAM
+    /// constant-address load (after the mask result is stored to a local)
+    /// retains its proof. Red-first baseline on main: the and degrades the
+    /// whole function first, so the later load is POTENTIAL-TRAP.
+    #[test]
+    fn feat084_downstream_facts_survive_the_mask() {
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func (export \"g\") (param i32) (result i32) (local i32) \
+                 local.get 0 i32.const 0xFFF i32.and local.set 1 \
+                 i32.const 16 i32.load))",
+        );
+        let v = oob_verdict_in_func(&r, 0).expect("the downstream load must be classified");
+        assert_eq!(
+            v,
+            TrapVerdict::ProvenSafe,
+            "the const-address load AFTER the mask must stay proven (no scrub)"
+        );
+        assert!(
+            !has_unsupported_gap(&r, 0),
+            "no unsupported-op gap for a function whose only exotic op is i32.and; gaps={:?}",
+            r.gaps
+        );
+    }
+
+    /// FEAT-084: `i32.or` — OR can only set bits, so `(x & 0xF00) | 0xFF` is
+    /// bounded by 0xFFF and the load proves.
+    #[test]
+    fn feat084_or_bounded_proven_safe() {
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func (export \"f\") (param i32) (result i32) \
+                 local.get 0 i32.const 0xF00 i32.and i32.const 0xFF i32.or i32.load))",
+        );
+        let v = oob_verdict_in_func(&r, 0).expect("load classified");
+        assert_eq!(v, TrapVerdict::ProvenSafe, "(x & 0xF00) | 0xFF ≤ 0xFFF");
+    }
+
+    /// FEAT-084: `i32.xor` of a bounded value with a constant inside the same
+    /// bit budget stays bounded: `(x & 0xFFF) ^ 0xFF ≤ 0xFFF`.
+    #[test]
+    fn feat084_xor_bounded_proven_safe() {
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func (export \"f\") (param i32) (result i32) \
+                 local.get 0 i32.const 0xFFF i32.and i32.const 0xFF i32.xor i32.load))",
+        );
+        let v = oob_verdict_in_func(&r, 0).expect("load classified");
+        assert_eq!(v, TrapVerdict::ProvenSafe, "(x & 0xFFF) ^ 0xFF ≤ 0xFFF");
+    }
+
+    /// FEAT-084: `i32.shl` by a constant count keeps the known high zeros:
+    /// `(x & 0xFF) << 4 ≤ 0xFF0`.
+    #[test]
+    fn feat084_shl_bounded_proven_safe() {
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func (export \"f\") (param i32) (result i32) \
+                 local.get 0 i32.const 0xFF i32.and i32.const 4 i32.shl i32.load))",
+        );
+        let v = oob_verdict_in_func(&r, 0).expect("load classified");
+        assert_eq!(v, TrapVerdict::ProvenSafe, "(x & 0xFF) << 4 ≤ 0xFF0");
+    }
+
+    /// FEAT-084: `i32.shr_u` by a constant count bounds any x: `x >> 20 ≤ 0xFFF`.
+    #[test]
+    fn feat084_shr_u_bounded_proven_safe() {
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func (export \"f\") (param i32) (result i32) \
+                 local.get 0 i32.const 20 i32.shr_u i32.load))",
+        );
+        let v = oob_verdict_in_func(&r, 0).expect("load classified");
+        assert_eq!(v, TrapVerdict::ProvenSafe, "x >> 20 ≤ 0xFFF < 65536-4");
+    }
+
+    /// FEAT-084 (NEGATIVE for shifts): a variable shift count proves nothing —
+    /// `x >> y` must stay POTENTIAL-TRAP (count 0 leaves x unbounded).
+    #[test]
+    fn feat084_variable_shift_count_stays_potential_trap() {
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func (export \"f\") (param i32 i32) (result i32) \
+                 local.get 0 local.get 1 i32.shr_u i32.load))",
+        );
+        let v = oob_verdict_in_func(&r, 0).expect("the load must still be classified");
+        assert_eq!(
+            v,
+            TrapVerdict::PotentialTrap,
+            "a variable shift count bounds nothing — must NOT prove"
         );
     }
 
