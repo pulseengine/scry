@@ -1,0 +1,60 @@
+# v3.2.7 — filed in its own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-083
+    type: feature
+    title: "v3.2.7 — The shipped component reports its real version (scry#152)"
+    status: proposed
+    release: v3.2.7
+    description: >
+      Found by running the SHIPPED v3.2.6 artifact minutes after cutting it.
+      The component announced `scry 0.0.0` — not 3.2.6, and not the 3.2.4 that
+      scry#133 was about.
+
+      MECHANISM. FEAT-076 replaced a hand-maintained literal with
+      `env!("CARGO_PKG_VERSION")`, which is correct under cargo. The shipped
+      component is built by BAZEL, and rules_rust populates CARGO_PKG_VERSION
+      from the target's `version` attribute, defaulting it to "0.0.0". No
+      `crates/*/BUILD.bazel` set one. So the fix was right in the build nobody
+      ships and wrong in the build everybody consumes.
+
+      THE OTHER HALF, and the more instructive one: the test written for
+      scry#133 could not catch this. It asserted
+      `assert_eq!(SCRY_VERSION, env!("CARGO_PKG_VERSION"))` where SCRY_VERSION
+      IS that expression — tautological, unable to fail under any build.
+
+      It was NOT vacuous when written. Red-first it failed honestly with
+      left "3.2.4" / right "3.2.5", because SCRY_VERSION was still a literal.
+      It became vacuous the moment the fix landed, because the fix makes the
+      asserted identity true by construction. This is a vacuity class the
+      project's mutation-check discipline does not cover: reverting the
+      implementation to a literal makes such a test fail, which looks like a
+      healthy oracle, while the passing state carries no information at all.
+      A test can be meaningful before a change and worthless after it.
+
+      FIX, in two parts that are deliberately separate. (1) Set `version` on the
+      Bazel target so CARGO_PKG_VERSION matches the workspace under both builds.
+      (2) Replace the tautology with `assert_ne!(SCRY_VERSION, "0.0.0")`, which
+      names the rules_rust default explicitly and CAN fail.
+
+      The hard-coded Bazel literal recreates exactly the drift FEAT-076 set out
+      to end — Bazel cannot read Cargo.toml — so it is GATED rather than
+      trusted: claims.yaml pins it to the workspace version and forbids the
+      "0.0.0" default returning in any crate. A number maintained by hand is
+      acceptable only when something mechanical notices when it stops being
+      maintained.
+
+      HONESTY NOTE carried forward: v3.2.6's CHANGELOG says FEAT-076 fixed the
+      component misreporting its version. It did not — it changed HOW it
+      misreports. That is recorded on scry#152 and on the closed scry#133
+      rather than left for a consumer to discover from the artifact.
+    tags: [release-machinery, honesty, vacuous-oracle, bazel, v3.2.7]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the Bazel-built component, When it emits its version diagnostic, Then the string is the workspace version and never the rules_rust default. RED-FIRST EVIDENCE from the shipped artifact: the v3.2.6 wasm contains the byte string `0.0.0` and does NOT contain `3.2.6`."
+        - "Given the unit test for this, When SCRY_VERSION is forced to the default, Then it FAILS. Verified: `assert_ne!` fires with the rules_rust message. The assertion it replaces could not fail under any build."
+        - "Given claims.yaml, When the Bazel literal drifts from the workspace version OR any crate reverts to the 0.0.0 default, Then claim-check goes red. MUTATION-CHECKED both directions: drift -> red, default -> red, restored -> 7/7."
+        - "NOT YET CLOSED BY THIS FEATURE: the end-to-end check that the BUILT component carries the expected version. The unit test guards the constant; only a byte-check on the produced wasm guards the artifact, and the Bazel-built rust_test target is not invoked by any workflow (scry#141's residual). Stated rather than implied."
+    links:
+      - type: traces-to
+        target: REQ-017

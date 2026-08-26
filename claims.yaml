@@ -28,6 +28,26 @@ claims:
         glob: ['Cargo.toml']
         min: 1
 
+  # ── Bazel version pin (scry#152) ──────────────────────────────────────────
+  # rules_rust populates CARGO_PKG_VERSION from the target's `version` attr and
+  # defaults it to "0.0.0". Bazel builds the SHIPPED component, so a missing or
+  # stale pin means the artifact announces the wrong version — which is exactly
+  # what v3.2.6 did. The literal cannot be derived (Bazel cannot read
+  # Cargo.toml), so it is pinned to the workspace version here instead.
+  - id: BAZEL-VERSION-PIN
+    doc: crates/scry-analyze-core/BUILD.bazel
+    text: 'version = "3.2.6",'
+    evidence:
+      - kind: count-min
+        pattern: 'version = "3\.2\.6"'
+        glob: ['Cargo.toml']
+        min: 1
+      # And the default must never come back.
+      - kind: count-max
+        pattern: 'version = "0\.0\.0"'
+        glob: ['crates/*/BUILD.bazel']
+        max: 0
+
   # ── Dossier CI-gate scope (scry#141) ──────────────────────────────────────
   # The qualification dossier cited `bazel test //...` as a DO-330 T-1(4) gate.
   # CI never ran that — only the two proof trees. An assessor-facing document
