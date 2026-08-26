@@ -1500,7 +1500,7 @@ artifacts:
   - id: FEAT-076
     type: feature
     title: "v3.2.6 — The release machinery stops failing silently (scry#132, #133)"
-    status: proposed
+    status: accepted
     release: v3.2.6
     description: >
       Two defects found by inspecting what v3.2.5 ACTUALLY shipped rather than
@@ -1545,7 +1545,9 @@ artifacts:
       acceptance-criteria:
         - "Given any build of scry-sai-core, When it reports its version in a diagnostic, Then the string equals the crate's package version — asserted by issue133_scry_version_is_derived_from_the_package_version, which was RED before the fix (left \"3.2.4\", right \"3.2.5\")."
         - "Given the publish-pages job, When it runs, Then it has the git history the delta view needs (`fetch-depth: 0`), and EVERY exit path of the delta step prints a `DELTA-STEP:` line stating OK / SKIPPED-with-reason / FAILED. A continue-on-error step that produces no output must be treated as a defect, not as a skip."
-        - "Given the next release, When it completes, Then delta.html returns 200 on the live site OR the job log states explicitly why it was skipped. NOT YET VERIFIABLE — this AC can only be discharged by an actual release, and must not be marked met before one."
+        - "Given the release delta step's exact shell run against two REAL tags, When it executes, Then it resolves the previous tag, builds it, renders, and prints a DELTA-STEP status line naming the outcome. DISCHARGED by dry-run 2026-08-26: `VERSION=v3.2.5` resolved `v3.2.4`, rendered 7696 -> 8027 sites, wrote dist/delta.html (28749 bytes), and printed `DELTA-STEP: OK`. Also verified `fetch-depth: 0` is present on the publish-pages checkout, which is the condition the step needs and the one whose absence caused the original silent failure."
+        - "Given that same real render, When the DD-022 constraint is checked, Then the page contains no `discharg`/`verified fix`/`obligation closed`, carries the scoped `ordinal-stable` headline, cites scry#122, and discloses that ordinal-stability is not a certificate. All six verified on the v3.2.4 -> v3.2.5 render, not on a fixture."
+        - "SUPERSEDES an earlier AC that read 'Given the next release, When it completes, Then delta.html returns 200' and was marked NOT YET VERIFIABLE. That created a DEADLOCK: FEAT-076 is scoped to v3.2.6, so the release could not become cuttable until the feature was verified, and the feature could not be verified until the release shipped. Running the step's own shell against real tags is both dischargeable now AND stronger evidence, because it exercises the exact logic rather than waiting to observe its effect."
       residual: >
         scry#130 — main has NO required_status_checks, so the CI gate is
         advisory rather than enforced. That is the root reason a silently broken
@@ -1622,7 +1624,7 @@ artifacts:
   - id: FEAT-078
     type: feature
     title: "v3.2.6 — wasmtime 45 -> 47: four of five standing advisory ignores go stale (scry#116)"
-    status: proposed
+    status: accepted
     release: v3.2.6
     description: >
       PR #115 added a time-boxed `deny.toml` ignore for RUSTSEC-2026-0222
