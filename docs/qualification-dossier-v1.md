@@ -68,11 +68,36 @@ per DO-330 Table T-0/T-1 (tool operational requirements & verification):
 | T-0(1) Tool Operational Requirements defined | §1 above; `artifacts/` rivet REQ-001..017 | scope |
 | T-0(2) TOR correct & complete | `rivet validate` (CI gate); `rivet coverage` traceability report (assessor-run, §8) | gate |
 | T-1(1) Tool operational use verified vs TOR | `crates/scry-host-tests` (host runs the composed `scry.wasm`) + `SCRY_COMPONENT_PATH` release-wasm oracle | test |
-| T-1(3) Robustness of tool operation | γ-sweep tests (interval/octagon/bits/pentagon/float/handle), adversarial clean-room per soundness feature | test |
-| T-1(4) TOR verification complete | `bazel test //...` + `cargo test` + MC/DC gate (all CI) | gate |
+| T-1(3) Robustness of tool operation | γ-sweep tests (interval/octagon/bits/pentagon/float/handle), adversarial clean-room per soundness feature — see the scope note below for which of these CI executes | test |
+| T-1(4) TOR verification complete | `bazel test //proofs/rocq/... //proofs/verus/...` + per-package `cargo test` (enumerated in `ci.yml`, claim-gated) + MC/DC gate — see the scope note below | gate |
 | Soundness of the analysis (credit basis) | admit-free Rocq (§4), Verus join proof, MC/DC truth tables | **proof** |
 | Configuration management | git + version-pinned deps (`Cargo.lock`, Bazel `MODULE.bazel`); release artifacts **cosign-signed (sigstore keyless OIDC) + SLSA-v1 build-provenance-attested** (`release.yml`) | gate |
 | Tool operational environment defined | `MODULE.bazel` (Bazel+Nix pins: Rocq 9.0, wasmparser 0.252), `rust-toolchain` | scope |
+
+> **Scope note on the CI-gate citations (corrected 2026-08-26, scry#141).**
+> Two of the rows above previously cited evidence materially broader than what
+> CI executed, and an assessor would have read them as stronger than they were.
+>
+> * **`bazel test //...` was never run by CI.** The only Bazel test invocations
+>   are `//proofs/rocq/...` and `//proofs/verus/...`. The crate-level target
+>   `rust_test(scry_analyze_core_test)` exists in `crates/scry-analyze-core/BUILD.bazel`
+>   but no workflow invokes it. The row now names the targets that actually run.
+> * **`cargo test` was per-package, not workspace-wide.** At the time this
+>   dossier was written CI ran four packages — `scry-host-tests`,
+>   `scry-sai-provenance`, `scry-sai-taint`, `scry-sai-octagon` — which is **51
+>   of 273 workspace tests**. The analyzer core (`scry-sai-core`, 106 tests) was
+>   not among them. Of the six γ-swept domains cited under T-1(3), only
+>   **octagon** was executed by CI; the other five ran locally only.
+> * **The MC/DC gate measures a population that is largely not scry's code.**
+>   In the sampled report, **zero of twelve** full-MC/DC decisions were in
+>   first-party source — the rest were Rust core/alloc, `wasmparser` and
+>   `dlmalloc` (scry#117). The gate is real; what it is a gate *on* is narrower
+>   than "scry's decisions".
+>
+> The package list is now enumerated in `ci.yml` and bound by the `claim-check`
+> gate (`claims.yaml`), so this specific drift cannot recur silently: adding a
+> crate without adding it to CI fails the build, and changing the CI scope
+> without updating this note fails `claim-check`.
 
 ## 4. Mechanized-soundness inventory (the credit basis)
 
