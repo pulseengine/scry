@@ -21,10 +21,10 @@ claims:
   # Cargo.toml + this pattern together — exactly the point.)
   - id: STATUS-VERSION
     doc: README.md
-    text: "**v3.2.5 shipped**"
+    text: "**v3.2.6 shipped**"
     evidence:
       - kind: count-min
-        pattern: 'version = "3\.2\.5"'
+        pattern: 'version = "3\.2\.6"'
         glob: ['Cargo.toml']
         min: 1
 

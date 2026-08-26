@@ -7,6 +7,78 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.2.6] — 2026-08-26
+
+Five fixes, three of which were things quietly WRONG rather than missing. All
+five were found by inspecting what the project actually did — running the
+released artifact, reading CI logs, re-measuring a claim — not by the fixture
+suite.
+
+### Fixed — CI (the one that changes what every other green means)
+
+- **CI never ran 81% of the test suite** (#141, FEAT-080). The Test job ran
+  `cargo test` on FOUR packages; `scry-sai-core` — the analyzer itself — was not
+  among them. 222 of 273 workspace tests never executed: nine of twelve
+  published crates, eight of ten abstract domains, all of scry-viz, and every
+  regression oracle recently added. A green Test check meant "host-tests,
+  provenance, taint and octagon pass", not "the analyzer works".
+
+  Fixed in two parts, because fixing it once is not enough: the nine missing
+  packages are added, AND a guard fails the job — naming the crate — if any
+  publishable crate is absent from a `cargo test` invocation. The guard is
+  mutation-checked; a guard that cannot fail is the same defect one level up.
+  It also went red on its own first run (a dynamic regex that survived BSD grep
+  and not GNU grep) and was rewritten without one — it failed CLOSED, which is
+  why that was visible in one run instead of hiding.
+
+  Confirmed in CI on main, not merely locally: the Test job now executes
+  **322 tests** against the 51 it ran before.
+
+### Fixed — release machinery
+
+- **The release machinery stopped failing silently** (#132/#133, FEAT-076).
+  `SCRY_VERSION` was a hand-maintained literal the v3.2.5 bump missed, so the
+  shipped 3.2.5 component reported itself as "scry 3.2.4" — and consumers
+  identify the producing analyzer from that string. Now derived from
+  `env!("CARGO_PKG_VERSION")`.
+
+  The FEAT-072 delta view also never rendered on Pages and said nothing about
+  it: a shallow checkout left no tags, and `grep` returns 1 on empty input under
+  GitHub's default `bash -e`, so the step aborted BEFORE the message it was
+  written to print. Every exit path now prints a `DELTA-STEP:` status line.
+
+### Fixed — analysis honesty
+
+- **Every havoc'd region now records a gap** (#121, FEAT-079). A typed region
+  with an empty write set and no call vanished with no record of any kind — no
+  trap check, no gap, no advisory. That was a hole in REQ-017's invariant (the
+  analyzer was MAXIMALLY conservative and said nothing at all), a one-line
+  laundering vector (wrapping a flagged expression in a typed block removed it
+  from the report entirely), and a source of wrong downstream verdicts.
+
+  Measured on scry's own module: gaps 2046 -> 2100. Those 54 regions were always
+  being havoc'd; they were simply never disclosed. **The number rising is
+  visibility, not regression.**
+
+### Fixed — identity
+
+- **Function identity survives v0 Rust mangling** (#144, FEAT-082). FEAT-077
+  (below) stripped only the LEGACY disambiguator. A downstream consumer reported
+  their target is v0-mangled, where the disambiguator is a crate-level
+  `Cs<base62>_` near the front — so on the module that most needed a stable join
+  key, the fix gave none. Measured: identity churned `217a5de8eb443492` vs
+  `d32b864664215709`. Legacy behaviour is unchanged, regression-pinned.
+
+### Security / dependencies
+
+- **wasmtime 45 -> 47** (#116, FEAT-078), clearing **four of five** standing
+  advisory ignores: RUSTSEC-2026-0182, -0188, -0190, -0222. Measured with a
+  control — at wasmtime 45 zero ignores were stale, so the bump is what cleared
+  them rather than their having been stale already. RUSTSEC-2026-0204 survives
+  (crossbeam-epoch 0.9.18) and its comment now names what would actually clear
+  it. No API churn: the harness compiles unmodified.
+
+
 ### Added — scry-sai-core
 
 - **FEAT-077 (scry#123): two-tier function identity.** `func_ident` — the
@@ -32,6 +104,26 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   build-local site vanishing/appearing between builds is expected identity
   churn, not evidence a site came or went.
 
+### Falsification
+
+This release is wrong if a module that analysed successfully under 3.2.5 now
+returns an error or a different verdict set, or if the gap-count increase
+reflects anything other than previously-silent havoc'd regions. The gap delta
+was measured on ONE module (scry's own); a corpus-wide before/after would
+falsify it properly.
+
+It is also wrong if the CI guard can be satisfied while a publishable crate goes
+untested — it was mutation-checked against one crate, not all twelve.
+
+### Known issues shipped
+
+- **#130** — `main` has no `required_status_checks`, so the CI gate is advisory.
+  Every merge in this release was verified by hand instead. Needs repo-admin.
+- **#128** — an operand-stack defect in `func.wast`, unmasked by the v3.2.5 panic
+  fix. Cause deliberately recorded as uncharacterised rather than guessed.
+- **#123** — obligation identity still churns ~26% per build, down from ~48%.
+  The residual is the collision population, which is MARKED `id_build_local`
+  rather than hidden.
 
 ## [3.2.5] — 2026-08-21
 
