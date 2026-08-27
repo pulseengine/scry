@@ -7,6 +7,52 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.2.7] — 2026-08-27
+
+Two fixes. Both were found by looking at what the project actually did rather
+than at what it claimed, and one was found by running the artifact shipped
+minutes earlier.
+
+### Fixed — the shipped artifact now tells the truth about itself
+
+- **The shipped component announced `scry 0.0.0`** (#152, FEAT-083). Found by
+  running the SHIPPED v3.2.6 artifact minutes after cutting it — not 3.2.6, and
+  not the 3.2.4 that #133 had been about.
+
+  The mechanism is worth recording because the previous fix caused it. FEAT-076
+  replaced a hand-maintained literal with `env!("CARGO_PKG_VERSION")`, which is
+  correct under cargo. The shipped component is built by **Bazel**, and
+  `rules_rust` populates `CARGO_PKG_VERSION` from the target's `version`
+  attribute — which was absent, so it defaulted to `0.0.0`. A fix that is right
+  for one build system and silently wrong for the one that ships.
+
+  Fixed in three layers, because the source-level assertion had become
+  tautological (`SCRY_VERSION == env!("CARGO_PKG_VERSION")` where the constant
+  IS that env): the Bazel target now carries `version`, `claims.yaml` pins the
+  literal, and CI byte-checks the **built artifact** with `grep -qaF` — the `-a`
+  matters, since without it the check passed on both the fixed and the broken
+  wasm.
+
+### Fixed — CI
+
+- **Clippy ran on 4 of 12 crates** (#157, FEAT-086), the same defect as #141's
+  Test job one gate over. Two live clippy errors existed on main that the job
+  could not see. Both gates are now widened, and the coverage guard checks
+  **both** rather than one.
+
+  The guard's first version scraped the workflow with `awk` ranges that chained
+  across the whole file, so its two lists came out identical — it could not
+  detect the drift it existed for, and printed `FIRES` under mutation with the
+  wrong attribution. Replaced with a YAML-parsing checker shipping a
+  `--self-test` that CI runs BEFORE the real check.
+
+  Recorded plainly: **the implementation merged as PR #159 titled
+  "FEAT-086 (#157)" while no such artifact existed.** It was filed after the
+  fact (#160). `rivet validate` cannot catch that — it validates artifacts that
+  exist, not references to ones that do not. That gap is what #161's commit
+  traceability now closes.
+
+
 ## [3.2.6] — 2026-08-26
 
 Five fixes, three of which were things quietly WRONG rather than missing. All
