@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use scry_analyze_core::{AnalysisConfig, analyze};
+use scry_analyze_core::{AnalysisConfig, analyze, verify_against};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -182,7 +182,11 @@ fn run(args: &[String]) -> Result<PathBuf, CliError> {
 /// analyzed in-process, so the comparison cannot drift from the producer's
 /// key derivation and no JSON parser has to be trusted in the middle.
 ///
-/// It reports what changed. It does NOT adjudicate — see `scry#122`.
+/// The delta feed reports what changed and does NOT adjudicate (`scry#122`).
+/// FEAT-065 (REQ-021): alongside it, `<stem>.verify.json` carries the
+/// ADJUDICATED verdict distribution from `verify_against` — conservative by
+/// construction (`discharged` only under the full identity conjunction;
+/// everything short of certainty degrades to `uncertain`).
 fn run_delta(args: &[String]) -> Result<PathBuf, CliError> {
     let mut inputs: Vec<PathBuf> = Vec::new();
     let mut output: Option<PathBuf> = None;
@@ -253,6 +257,19 @@ fn run_delta(args: &[String]) -> Result<PathBuf, CliError> {
     std::fs::write(&json_out, scry_viz::render_delta_json(&delta))
         .map_err(|e| err(4, format!("writing {}: {e}", json_out.display())))?;
     eprintln!("scry-viz: wrote {}", json_out.display());
+
+    // FEAT-065 (REQ-021): the adjudicated verdict distribution, as its own
+    // feed — the delta feed above stays observational.
+    let verify = verify_against(&analyzed[0], &analyzed[1]);
+    let verify_out = out.with_extension("verify.json");
+    std::fs::write(&verify_out, scry_viz::render_verify_json(&verify))
+        .map_err(|e| err(4, format!("writing {}: {e}", verify_out.display())))?;
+    eprintln!(
+        "scry-viz: wrote {} (FEAT-065 adjudication: {} verdict(s), gate {})",
+        verify_out.display(),
+        verify.verdicts.len(),
+        if verify.gate_pass() { "PASS" } else { "FAIL" },
+    );
 
     // A one-line human summary on stderr, phrased so it cannot be mistaken for
     // a verdict: counts of what MOVED, plus how much of it is attributable.

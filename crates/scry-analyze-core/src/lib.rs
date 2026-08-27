@@ -488,6 +488,46 @@ pub struct AnalysisResult {
     /// pc)`. Library-only (not in the WIT mirror or the frozen v1 JSON
     /// contract), like [`Self::bit_facts`].
     pub advisories: Vec<Advisory>,
+    /// FEAT-065 (REQ-021): per-function identity records — the same two-tier
+    /// identity `stamp_obligation_ids` derives (DD-020/FEAT-077/FEAT-087),
+    /// surfaced per FUNCTION so [`verify_against`] can (a) pair functions
+    /// across two runs and (b) tell whether a function's body changed between
+    /// them via [`FuncIdentity::body_shape_hash`] (the AC-mandated
+    /// discriminator between `still-open-untouched` and
+    /// `still-open-after-edit`). One entry per DEFINED function, sorted by
+    /// `func_index`. Library-only (not in the WIT mirror or the frozen v1 JSON
+    /// contract), like [`Self::bit_facts`].
+    pub func_identities: Vec<FuncIdentity>,
+}
+
+/// FEAT-065 (REQ-021): the identity record of one defined function, as used by
+/// [`verify_against`]. `ident` / `id_build_local` / `ident_survives_own_edit`
+/// are exactly the values `stamp_obligation_ids` folds into every advisory in
+/// the function (single source of truth — both come out of the same tier
+/// decision); `body_shape_hash` is ALWAYS the operator-shape hash of the body,
+/// regardless of which identity tier won.
+///
+/// GRANULARITY (honest scope): `body_shape_hash` hashes operator NAMES, not
+/// immediates (it is the hash the unnamed-identity tier already used). An edit
+/// that changes only immediates — `i32.const 0` → `i32.const 7` — therefore
+/// reads as "body unchanged". That granularity is what makes `discharged`
+/// sound: a shape-preserving edit cannot delete or insert an operator, so the
+/// k-th same-kind operator in a region is still the k-th — site correspondence
+/// is EXACT. The flip side: `still-open-untouched` means "no operator was
+/// added, removed or reordered", not "no byte changed".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FuncIdentity {
+    /// Absolute function index in THIS run (positional; not stable across runs).
+    pub func_index: u32,
+    /// The tier identity: unique stripped name / raw name / plain name / body
+    /// shape hash (DD-020). What `site_key`/`group_key` hashes embed.
+    pub ident: String,
+    /// See [`Advisory::id_build_local`].
+    pub id_build_local: bool,
+    /// See [`Advisory::ident_survives_own_edit`].
+    pub ident_survives_own_edit: bool,
+    /// The operator-shape hash of the body (always computed, every tier).
+    pub body_shape_hash: String,
 }
 
 /// FEAT-040: one analysis-gap record — a site where scry was conservative.
@@ -795,6 +835,15 @@ impl AdvisoryClass {
             AdvisoryClass::PrecisionGap => 2,
             AdvisoryClass::LeverageableFact => 3,
         }
+    }
+
+    /// FEAT-065 (REQ-021): is this class an OPEN obligation — something an
+    /// edit could aim to resolve (a proven fault, an unproven obligation, or a
+    /// precision gap) — as opposed to a proven fact
+    /// ([`Self::LeverageableFact`], which [`verify_against`] treats as the
+    /// PROVEN-SAFE state rather than as an obligation)?
+    pub fn is_open_obligation(self) -> bool {
+        !matches!(self, AdvisoryClass::LeverageableFact)
     }
 }
 
@@ -2473,7 +2522,7 @@ pub fn analyze(
     );
     // FEAT-064: give every advisory an identity that survives the next edit, so
     // a consumer comparing two runs can tell DISCHARGED from MOVED.
-    stamp_obligation_ids(&mut advisories, &defined_funcs, &function_meta);
+    let func_identities = stamp_obligation_ids(&mut advisories, &defined_funcs, &function_meta);
 
     Ok(AnalysisResult {
         invariants,
@@ -2493,6 +2542,7 @@ pub fn analyze(
         float_facts,
         handle_findings,
         advisories,
+        func_identities,
     })
 }
 
@@ -3312,7 +3362,7 @@ fn stamp_obligation_ids(
     advisories: &mut [Advisory],
     defined_funcs: &[DefinedFunc<'_>],
     function_meta: &[FunctionMeta],
-) {
+) -> Vec<FuncIdentity> {
     for a in advisories.iter_mut().filter(|a| is_module_scoped(&a.code)) {
         a.obligation_id = obligation_id_of("<module>", "", "<module>", 0, &a.code);
         a.site_key = site_key_of("<module>", "", "<module>", 0);
@@ -3341,23 +3391,35 @@ fn stamp_obligation_ids(
             *candidates.entry(key).or_insert(0) += 1;
         }
     }
+    let mut func_identities: Vec<FuncIdentity> = Vec::with_capacity(defined_funcs.len());
     for f in defined_funcs {
         let name = function_meta
             .iter()
             .find(|m| m.func_index == f.abs_index)
             .and_then(|m| m.name.as_deref());
+        // FEAT-065 (REQ-021): the shape hash is computed for EVERY function
+        // (not only the unnamed tier) — it is the adjudicator's discriminator
+        // between `still-open-untouched` and `still-open-after-edit`.
+        let body_hash = body_shape_hash(&f.ops);
         // FEAT-087 (scry#122 item 2): the third element is a SECOND,
         // INDEPENDENT bit — "does this ident survive an edit to its own body?"
         // Only the body-shape-hash tier answers no; it is nonetheless NOT
         // build-local, because the hash is deterministic across builds.
         let (ident, build_local, survives_own_edit) = match name {
-            None => (body_shape_hash(&f.ops), false, false),
+            None => (body_hash.clone(), false, false),
             Some(raw) => match strip_rust_disambiguator(raw) {
                 Some(stripped) if candidates.get(&stripped) == Some(&1) => (stripped, false, true),
                 Some(_) => (String::from(raw), true, true),
                 None => (String::from(raw), false, true),
             },
         };
+        func_identities.push(FuncIdentity {
+            func_index: f.abs_index,
+            ident: ident.clone(),
+            id_build_local: build_local,
+            ident_survives_own_edit: survives_own_edit,
+            body_shape_hash: body_hash,
+        });
         let keys = structural_keys(&f.ops);
         for a in advisories
             .iter_mut()
@@ -3377,6 +3439,684 @@ fn stamp_obligation_ids(
             }
         }
     }
+    func_identities
+}
+
+// ───────────────────────── FEAT-065 (REQ-021) ─────────────────────────
+
+/// FEAT-065 (REQ-021): the verdict [`verify_against`] assigns to ONE obligation
+/// when a fresh analysis is compared against a prior one.
+///
+/// `Discharged` is a CERTAINTY claim and is guarded the way the analyzer guards
+/// PROVEN-SAFE: it is claimed only when every precondition holds (see
+/// [`verify_against`]); everything short of that degrades to `Uncertain`, never
+/// up to `Discharged`.
+///
+/// HONEST CONSEQUENCE, stated up front (FEAT-087 measured 10,520 of 10,520 on a
+/// stripped build): on a STRIPPED module every obligation-carrying function
+/// falls to the body-shape-hash identity tier, whose ident does not survive an
+/// edit to its own body — so `ident_survives_own_edit` is false for EVERY
+/// obligation and `Discharged` is UNREACHABLE. Stripping is standard in release
+/// builds: on that common production shape a fix-verify loop cannot converge on
+/// a `Discharged` verdict, and the honest answer it gets is `Uncertain`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifyVerdict {
+    /// A CERTAINTY claim: the obligation was open, the same site now carries a
+    /// proof of safety, and every identity precondition held (four-term
+    /// conjunction + shape-unchanged corroboration). The fix worked.
+    Discharged,
+    /// The site survives, the obligation persists, and the function body's
+    /// operator shape did NOT change: genuinely not addressed.
+    StillOpenUntouched,
+    /// The site survives, the obligation persists, and the body DID change.
+    /// scry cannot distinguish an ineffective fix from one it cannot see
+    /// (FEAT-089) — explicitly NOT a failure signal to an agent.
+    StillOpenAfterEdit,
+    /// A previously PROVEN-SAFE site is no longer proven safe. Fails the gate.
+    Regressed,
+    /// The identity survived but its position (function index) changed — the
+    /// module was edited around it. Informational; NOT progress.
+    Moved,
+    /// The site is gone because the code is gone (function deleted, or a
+    /// same-kind operator removed from the region). NEVER a discharge:
+    /// deleting the code that carried an unproven obligation proves nothing.
+    RemovedWithCode,
+    /// Some precondition of a certainty claim is unmet: identity not
+    /// comparable across builds, identity destroyed by its own edit, group
+    /// membership changed, body shape changed under a would-be discharge,
+    /// ambiguous identity, or no prior state to compare against.
+    Uncertain,
+}
+
+impl VerifyVerdict {
+    /// Stable machine-readable name (what a JSON surface emits).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VerifyVerdict::Discharged => "discharged",
+            VerifyVerdict::StillOpenUntouched => "still-open-untouched",
+            VerifyVerdict::StillOpenAfterEdit => "still-open-after-edit",
+            VerifyVerdict::Regressed => "regressed",
+            VerifyVerdict::Moved => "moved",
+            VerifyVerdict::RemovedWithCode => "removed-with-code",
+            VerifyVerdict::Uncertain => "uncertain",
+        }
+    }
+}
+
+/// FEAT-065 (REQ-021): the adjudication of one obligation across two runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObligationVerdict {
+    /// The verdict.
+    pub verdict: VerifyVerdict,
+    /// The obligation's site identity ([`Advisory::site_key`]) — the matching
+    /// key. Matching is by `site_key`, NEVER by `obligation_id`: the id embeds
+    /// the advisory code, which changes on the very transition being detected.
+    pub site_key: String,
+    /// The obligation's ordinal domain ([`Advisory::group_key`]).
+    pub group_key: String,
+    /// The advisory code of the obligation being adjudicated
+    /// (e.g. `div-by-zero`).
+    pub code: String,
+    /// Function index in the BEFORE run (`None` for an obligation that has no
+    /// before-state, i.e. `introduced`).
+    pub before_func_index: Option<u32>,
+    /// Function index in the AFTER run (`None` when the site is gone).
+    pub after_func_index: Option<u32>,
+    /// TRUE for an obligation in the AFTER run at a site that had NO advisory
+    /// at all in the BEFORE run: introduced by the edit (or surfaced by
+    /// identity churn — indistinguishable, and both fail the gate). An agent
+    /// that fixed A while breaking B must not pass clean.
+    pub introduced: bool,
+    /// Human/agent rationale — for `Uncertain`, names the failed precondition.
+    pub reason: String,
+}
+
+/// FEAT-065 (REQ-021): the full adjudication of an AFTER run against a BEFORE
+/// run. See [`verify_against`].
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct VerifyReport {
+    /// One entry per adjudicated obligation: every open obligation of the
+    /// BEFORE run, every regression, and every introduced obligation of the
+    /// AFTER run.
+    pub verdicts: Vec<ObligationVerdict>,
+}
+
+impl VerifyReport {
+    /// Count of verdicts of one kind.
+    pub fn count(&self, v: VerifyVerdict) -> usize {
+        self.verdicts.iter().filter(|o| o.verdict == v).count()
+    }
+
+    /// The machine-usable gate: FALSE when the edit regressed a proven-safe
+    /// site or introduced a new obligation. `Uncertain` and `still-open-*` do
+    /// NOT fail the gate — an agent is failed on positive evidence of harm,
+    /// never on scry's inability to see its fix.
+    pub fn gate_pass(&self) -> bool {
+        !self
+            .verdicts
+            .iter()
+            .any(|o| o.verdict == VerifyVerdict::Regressed || o.introduced)
+    }
+
+    /// Process-exit-code mapping of [`Self::gate_pass`] (0 = pass, 1 = fail).
+    pub fn exit_code(&self) -> i32 {
+        i32::from(!self.gate_pass())
+    }
+}
+
+/// FEAT-065 (REQ-021): adjudicate a fresh analysis (`after`) against a prior
+/// one (`before`) — scry judging its own oracle, conservative by construction.
+///
+/// Emits one [`ObligationVerdict`] for (a) every OPEN obligation of the
+/// `before` run, (b) every regression of a previously PROVEN-SAFE site, and
+/// (c) every obligation of the `after` run at a site with no prior advisory
+/// (`introduced`). Matching is by [`Advisory::site_key`], NEVER by
+/// `obligation_id` — the id embeds the advisory code, which changes on the
+/// very open→safe transition being detected.
+///
+/// `Discharged` is a certainty claim, guarded like the analyzer guards
+/// PROVEN-SAFE. It requires ALL of:
+///   1. the site was matched by `site_key` and the after-run carries a proof
+///      of safety there ([`AdvisoryClass::LeverageableFact`]) with no
+///      persisting open advisory of the same code;
+///   2. `!id_build_local` on both sides (FEAT-077 — build-local keys are not
+///      comparable across builds at all);
+///   3. `ident_survives_own_edit` on both sides (FEAT-087 — a body-derived
+///      identity is destroyed by the very edit being adjudicated; on a
+///      STRIPPED module this term is false for EVERY obligation, so
+///      `Discharged` is UNREACHABLE there — the honest production-shape
+///      consequence, stated rather than discovered);
+///   4. the ordinal domain's membership (`group_key` population) is unchanged
+///      (DD-021 — `survivor_inherits_deleted_identity` admits a false
+///      discharge otherwise);
+///   5. the containing function's OPERATOR SHAPE is unchanged
+///      ([`FuncIdentity::body_shape_hash`]). This is the content
+///      corroboration REQ-021's review made mandatory: a cardinality-
+///      preserving delete+insert leaves the group membership byte-identical
+///      (the case that falsified DD-021's rationale), so terms 1–4 alone
+///      still admit a false discharge. A shape-preserving edit cannot delete
+///      or insert an operator, so under term 5 site correspondence is exact —
+///      which is also why term 5 subsumes term 4 (same shape ⇒ same groups);
+///      term 4 is kept as an explicit, independently-checked conjunct.
+///
+/// Consequently a discharge is claimable on exactly two edit shapes: a fix in
+/// ANOTHER function (the obligation's own body untouched), and an
+/// immediates-only fix in the same function (`i32.const 0` → `i32.const 7`).
+/// Everything else that looks like open→safe degrades to `Uncertain` — a
+/// sound checker that over-claims a discharge is the same error as an unsound
+/// analysis, one layer up.
+pub fn verify_against(before: &AnalysisResult, after: &AnalysisResult) -> VerifyReport {
+    use alloc::collections::{BTreeMap, BTreeSet};
+
+    let module_site = site_key_of("<module>", "", "<module>", 0);
+
+    // Per-function identity lookups (by index within a run, by ident across).
+    let by_index = |r: &AnalysisResult| -> BTreeMap<u32, FuncIdentity> {
+        r.func_identities
+            .iter()
+            .map(|f| (f.func_index, f.clone()))
+            .collect()
+    };
+    let b_funcs = by_index(before);
+    let a_funcs = by_index(after);
+    let by_ident = |r: &AnalysisResult| -> BTreeMap<String, Vec<u32>> {
+        let mut m: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+        for f in &r.func_identities {
+            m.entry(f.ident.clone()).or_default().push(f.func_index);
+        }
+        m
+    };
+    let b_idents = by_ident(before);
+    let a_idents = by_ident(after);
+
+    // Site → advisories (non-empty keys only; module-scoped handled apart).
+    fn site_map(r: &AnalysisResult) -> BTreeMap<String, Vec<&Advisory>> {
+        let mut m: BTreeMap<String, Vec<&Advisory>> = BTreeMap::new();
+        for adv in r.advisories.iter().filter(|x| !x.site_key.is_empty()) {
+            m.entry(adv.site_key.clone()).or_default().push(adv);
+        }
+        m
+    }
+    let b_sites = site_map(before);
+    let a_sites = site_map(after);
+
+    // A site key claimed by advisories of MORE THAN ONE function in one run
+    // (two byte-identical unnamed bodies, a duplicated name) cannot be matched
+    // — every conclusion over it degrades to Uncertain.
+    let ambiguous = |list: &[&Advisory]| -> bool {
+        list.iter()
+            .map(|x| x.func_index)
+            .collect::<BTreeSet<_>>()
+            .len()
+            > 1
+    };
+
+    // Ordinal-domain population: group_key → its distinct site keys.
+    let group_pop =
+        |sites: &BTreeMap<String, Vec<&Advisory>>| -> BTreeMap<String, BTreeSet<String>> {
+            let mut m: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+            for list in sites.values() {
+                for adv in list {
+                    m.entry(adv.group_key.clone())
+                        .or_default()
+                        .insert(adv.site_key.clone());
+                }
+            }
+            m
+        };
+    let b_groups = group_pop(&b_sites);
+    let a_groups = group_pop(&a_sites);
+    let group_count = |m: &BTreeMap<String, BTreeSet<String>>, k: &str| -> usize {
+        m.get(k).map(|s| s.len()).unwrap_or(0)
+    };
+
+    // Module-scope edit signal: the multiset of body shapes across the module.
+    fn body_multiset(r: &AnalysisResult) -> Vec<&str> {
+        let mut v: Vec<&str> = r
+            .func_identities
+            .iter()
+            .map(|f| f.body_shape_hash.as_str())
+            .collect();
+        v.sort_unstable();
+        v
+    }
+    let module_bodies_changed = body_multiset(before) != body_multiset(after);
+
+    // An AMBIGUOUS site (claimed by several byte-identical unnamed bodies, or
+    // by duplicated names) cannot be attributed function-by-function — but the
+    // POPULATION argument still holds: when the site's full advisory multiset
+    // (code + class) and the claiming functions' body-shape multiset are both
+    // unchanged across the runs, every one of its obligations persists
+    // wholesale in an unchanged body, and each is honestly
+    // `still-open-untouched`. Measured need: 30 of 10,558 self-comparison
+    // verdicts on scry's own module sit on 15 such duplicate-body sites.
+    // Anything short of both equalities stays `Uncertain` — attribution of a
+    // CHANGE inside an ambiguous group is exactly what cannot be done.
+    let population_stable = |site: &str| -> bool {
+        let (Some(bl), Some(al)) = (b_sites.get(site), a_sites.get(site)) else {
+            return false;
+        };
+        let sig = |list: &[&Advisory], funcs: &BTreeMap<u32, FuncIdentity>| {
+            let mut codes: Vec<(String, u8)> = list
+                .iter()
+                .map(|x| (x.code.clone(), x.class.rank()))
+                .collect();
+            codes.sort_unstable();
+            let mut hashes: Vec<String> = list
+                .iter()
+                .map(|x| x.func_index)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .filter_map(|fi| funcs.get(&fi).map(|f| f.body_shape_hash.clone()))
+                .collect();
+            hashes.sort_unstable();
+            (codes, hashes)
+        };
+        sig(bl, &b_funcs) == sig(al, &a_funcs)
+    };
+
+    let mut verdicts: Vec<ObligationVerdict> = Vec::new();
+    let mut push = |verdict: VerifyVerdict,
+                    site_key: &str,
+                    group_key: &str,
+                    code: &str,
+                    bfi: Option<u32>,
+                    afi: Option<u32>,
+                    introduced: bool,
+                    reason: &str| {
+        verdicts.push(ObligationVerdict {
+            verdict,
+            site_key: site_key.into(),
+            group_key: group_key.into(),
+            code: code.into(),
+            before_func_index: bfi,
+            after_func_index: afi,
+            introduced,
+            reason: reason.into(),
+        });
+    };
+
+    // ── pass 1: every OPEN obligation of the before run ─────────────────────
+    for b in before
+        .advisories
+        .iter()
+        .filter(|x| x.class.is_open_obligation())
+    {
+        if b.site_key.is_empty() {
+            push(
+                VerifyVerdict::Uncertain,
+                "",
+                &b.group_key,
+                &b.code,
+                Some(b.func_index),
+                None,
+                false,
+                "no identity was stamped on this obligation; nothing can be matched",
+            );
+            continue;
+        }
+        // Module-scoped obligation (`unbounded-stack`): the `<module>` ident
+        // cannot alias, but scry does not adjudicate a module-scoped
+        // discharge — a vanished module obligation stays Uncertain.
+        if b.site_key == module_site {
+            let persists = after.advisories.iter().any(|x| {
+                x.site_key == module_site && x.code == b.code && x.class.is_open_obligation()
+            });
+            if persists {
+                let (v, why) = if module_bodies_changed {
+                    (
+                        VerifyVerdict::StillOpenAfterEdit,
+                        "the module-scoped obligation persists and the module was edited",
+                    )
+                } else {
+                    (
+                        VerifyVerdict::StillOpenUntouched,
+                        "the module-scoped obligation persists and no function body changed",
+                    )
+                };
+                push(
+                    v,
+                    &b.site_key,
+                    &b.group_key,
+                    &b.code,
+                    Some(b.func_index),
+                    Some(b.func_index),
+                    false,
+                    why,
+                );
+            } else {
+                push(
+                    VerifyVerdict::Uncertain,
+                    &b.site_key,
+                    &b.group_key,
+                    &b.code,
+                    Some(b.func_index),
+                    None,
+                    false,
+                    "the module-scoped obligation is no longer reported; scry does not adjudicate module-scoped discharge",
+                );
+            }
+            continue;
+        }
+
+        let b_list = b_sites
+            .get(&b.site_key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        if ambiguous(b_list) {
+            if population_stable(&b.site_key) {
+                push(
+                    VerifyVerdict::StillOpenUntouched,
+                    &b.site_key,
+                    &b.group_key,
+                    &b.code,
+                    Some(b.func_index),
+                    None,
+                    false,
+                    "the site is claimed by several identical functions, but its advisory population and every claiming body are unchanged wholesale; each obligation persists untouched",
+                );
+            } else {
+                push(
+                    VerifyVerdict::Uncertain,
+                    &b.site_key,
+                    &b.group_key,
+                    &b.code,
+                    Some(b.func_index),
+                    None,
+                    false,
+                    "this site key is claimed by more than one function in the before run and its population changed; matching is ambiguous",
+                );
+            }
+            continue;
+        }
+
+        match a_sites.get(&b.site_key) {
+            Some(a_list) => {
+                if ambiguous(a_list) {
+                    if population_stable(&b.site_key) {
+                        push(
+                            VerifyVerdict::StillOpenUntouched,
+                            &b.site_key,
+                            &b.group_key,
+                            &b.code,
+                            Some(b.func_index),
+                            None,
+                            false,
+                            "the site is claimed by several identical functions, but its advisory population and every claiming body are unchanged wholesale; each obligation persists untouched",
+                        );
+                    } else {
+                        push(
+                            VerifyVerdict::Uncertain,
+                            &b.site_key,
+                            &b.group_key,
+                            &b.code,
+                            Some(b.func_index),
+                            None,
+                            false,
+                            "this site key is claimed by more than one function in the after run and its population changed; matching is ambiguous",
+                        );
+                    }
+                    continue;
+                }
+                let afi = a_list[0].func_index;
+                let shape_unchanged = match (b_funcs.get(&b.func_index), a_funcs.get(&afi)) {
+                    (Some(x), Some(y)) => Some(x.body_shape_hash == y.body_shape_hash),
+                    _ => None,
+                };
+                let same_code_open = a_list
+                    .iter()
+                    .any(|x| x.code == b.code && x.class.is_open_obligation());
+                let proven_safe = a_list
+                    .iter()
+                    .find(|x| x.class == AdvisoryClass::LeverageableFact);
+
+                if same_code_open {
+                    match shape_unchanged {
+                        Some(false) => push(
+                            VerifyVerdict::StillOpenAfterEdit,
+                            &b.site_key,
+                            &b.group_key,
+                            &b.code,
+                            Some(b.func_index),
+                            Some(afi),
+                            false,
+                            "the obligation persists and the function body changed; scry cannot distinguish an ineffective fix from one it cannot see — not a failure signal",
+                        ),
+                        Some(true) if b.func_index != afi => push(
+                            VerifyVerdict::Moved,
+                            &b.site_key,
+                            &b.group_key,
+                            &b.code,
+                            Some(b.func_index),
+                            Some(afi),
+                            false,
+                            "identity and body are unchanged but the function index shifted; informational, not progress",
+                        ),
+                        Some(true) => push(
+                            VerifyVerdict::StillOpenUntouched,
+                            &b.site_key,
+                            &b.group_key,
+                            &b.code,
+                            Some(b.func_index),
+                            Some(afi),
+                            false,
+                            "the obligation persists and the function body's operator shape is unchanged; genuinely not addressed",
+                        ),
+                        None => push(
+                            VerifyVerdict::Uncertain,
+                            &b.site_key,
+                            &b.group_key,
+                            &b.code,
+                            Some(b.func_index),
+                            Some(afi),
+                            false,
+                            "no function identity record on one side; the edit state cannot be corroborated",
+                        ),
+                    }
+                } else if proven_safe.is_some() {
+                    // Candidate discharge. Every conjunct must hold; the first
+                    // failure names itself (a certainty claim degrades, never
+                    // rounds up).
+                    let safe = proven_safe.unwrap();
+                    let reason_failed = if b.id_build_local || safe.id_build_local {
+                        Some(
+                            "id_build_local: this identity is not comparable across builds (FEAT-077)",
+                        )
+                    } else if !b.ident_survives_own_edit || !safe.ident_survives_own_edit {
+                        Some(
+                            "ident_survives_own_edit is false: a body-derived identity cannot corroborate a discharge (FEAT-087); on a stripped module this holds for every obligation, so discharged is unreachable there",
+                        )
+                    } else if group_count(&b_groups, &b.group_key)
+                        != group_count(&a_groups, &b.group_key)
+                    {
+                        Some(
+                            "the ordinal domain's membership changed; a surviving site may have inherited a deleted sibling's identity (DD-021)",
+                        )
+                    } else if shape_unchanged != Some(true) {
+                        Some(
+                            "the function's operator shape changed: a same-kind delete+insert is indistinguishable from a fix at this site (the case that falsified DD-021), so the open→safe transition cannot be attributed",
+                        )
+                    } else {
+                        None
+                    };
+                    match reason_failed {
+                        None => push(
+                            VerifyVerdict::Discharged,
+                            &b.site_key,
+                            &b.group_key,
+                            &b.code,
+                            Some(b.func_index),
+                            Some(afi),
+                            false,
+                            "the obligation is now proven safe at the same site, the identity is comparable and edit-stable, the ordinal domain is unchanged, and the operator shape is unchanged (site correspondence exact)",
+                        ),
+                        Some(why) => push(
+                            VerifyVerdict::Uncertain,
+                            &b.site_key,
+                            &b.group_key,
+                            &b.code,
+                            Some(b.func_index),
+                            Some(afi),
+                            false,
+                            why,
+                        ),
+                    }
+                } else {
+                    push(
+                        VerifyVerdict::Uncertain,
+                        &b.site_key,
+                        &b.group_key,
+                        &b.code,
+                        Some(b.func_index),
+                        Some(afi),
+                        false,
+                        "the site survives but carries neither the obligation nor a proof of safety",
+                    );
+                }
+            }
+            None => {
+                // The site key is gone. A missing key is evidence the code is
+                // gone ONLY under the comparability conjunction (FEAT-087).
+                if b.id_build_local || !b.ident_survives_own_edit {
+                    push(
+                        VerifyVerdict::Uncertain,
+                        &b.site_key,
+                        &b.group_key,
+                        &b.code,
+                        Some(b.func_index),
+                        None,
+                        false,
+                        "the site key is absent but this identity tier cannot distinguish deletion from identity churn; a missing key is not evidence the code is gone",
+                    );
+                    continue;
+                }
+                let ident = b_funcs.get(&b.func_index).map(|f| f.ident.clone());
+                let unique_before = ident
+                    .as_deref()
+                    .map(|i| b_idents.get(i).map(|v| v.len()) == Some(1))
+                    .unwrap_or(false);
+                let in_after = ident.as_deref().and_then(|i| a_idents.get(i));
+                match (unique_before, in_after) {
+                    (true, None) => push(
+                        VerifyVerdict::RemovedWithCode,
+                        &b.site_key,
+                        &b.group_key,
+                        &b.code,
+                        Some(b.func_index),
+                        None,
+                        false,
+                        "the containing function was deleted (its identity is absent from the after run); removal is not a discharge",
+                    ),
+                    (true, Some(v)) if v.len() == 1 => {
+                        if group_count(&a_groups, &b.group_key)
+                            < group_count(&b_groups, &b.group_key)
+                        {
+                            push(
+                                VerifyVerdict::RemovedWithCode,
+                                &b.site_key,
+                                &b.group_key,
+                                &b.code,
+                                Some(b.func_index),
+                                Some(v[0]),
+                                false,
+                                "a same-kind operator was removed from this region (the ordinal domain shrank); attribution within the group is positional (DD-020), but the removed code is certainly not a discharge",
+                            );
+                        } else {
+                            push(
+                                VerifyVerdict::Uncertain,
+                                &b.site_key,
+                                &b.group_key,
+                                &b.code,
+                                Some(b.func_index),
+                                Some(v[0]),
+                                false,
+                                "the site key is absent while the function survives and the ordinal domain did not shrink; the site's fate cannot be attributed",
+                            );
+                        }
+                    }
+                    _ => push(
+                        VerifyVerdict::Uncertain,
+                        &b.site_key,
+                        &b.group_key,
+                        &b.code,
+                        Some(b.func_index),
+                        None,
+                        false,
+                        "the containing function's identity is not unique enough to pair across the runs",
+                    ),
+                }
+            }
+        }
+    }
+
+    // ── pass 2: regressions of previously PROVEN-SAFE sites ────────────────
+    // Alarming is the safe direction: a false regression blocks a merge, a
+    // missed one ships an unproven trap behind a stale green. COUNT-aware so a
+    // duplicated (ambiguous) site cannot hide one copy regressing behind a
+    // sibling that was open all along.
+    let open_code_count = |list: &[&Advisory], code: &str| -> usize {
+        list.iter()
+            .filter(|x| x.code == code && x.class.is_open_obligation())
+            .count()
+    };
+    for (site, a_list) in &a_sites {
+        let Some(b_list) = b_sites.get(site) else {
+            continue;
+        };
+        if !b_list
+            .iter()
+            .any(|x| x.class == AdvisoryClass::LeverageableFact)
+        {
+            continue;
+        }
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for a in a_list.iter().filter(|x| x.class.is_open_obligation()) {
+            if !seen.insert(a.code.as_str()) {
+                continue;
+            }
+            let n_after = open_code_count(a_list, &a.code);
+            let n_before = open_code_count(b_list, &a.code);
+            if n_after > n_before {
+                push(
+                    VerifyVerdict::Regressed,
+                    site,
+                    &a.group_key,
+                    &a.code,
+                    Some(b_list[0].func_index),
+                    Some(a.func_index),
+                    false,
+                    "this site was PROVEN-SAFE in the before run and now carries an open obligation; the edit broke it",
+                );
+            }
+        }
+    }
+
+    // ── pass 3: obligations introduced at sites with NO prior advisory ─────
+    // An agent that fixed A while breaking B must not pass clean (AC12).
+    for a in after
+        .advisories
+        .iter()
+        .filter(|x| x.class.is_open_obligation())
+    {
+        if a.site_key.is_empty() || a.site_key == module_site {
+            continue;
+        }
+        if b_sites.contains_key(&a.site_key) {
+            continue;
+        }
+        push(
+            VerifyVerdict::Uncertain,
+            &a.site_key,
+            &a.group_key,
+            &a.code,
+            None,
+            Some(a.func_index),
+            true,
+            "an open obligation exists at a site with no prior advisory: introduced by the edit, or surfaced by identity churn — indistinguishable, and neither passes the gate",
+        );
+    }
+
+    VerifyReport { verdicts }
 }
 
 fn compute_advisories(
@@ -7590,6 +8330,7 @@ mod tests {
             float_facts: alloc::vec![],
             handle_findings: alloc::vec![],
             advisories: alloc::vec![],
+            func_identities: alloc::vec![],
         };
         assert_eq!(res.invariants.points.len(), 1);
         assert!(matches!(rp, AbstractValue::RegionPointer(_)));
@@ -11076,5 +11817,669 @@ mod tests {
             r.trap_checks.len(),
             "this fixture proves nothing safe; a naming change must not alter that"
         );
+    }
+
+    // ─────────────── FEAT-065 (REQ-021): verify_against ───────────────
+
+    /// Shared driver: analyze both texts, adjudicate `after` against `before`.
+    fn adjudicate(before: &str, after: &str) -> (AnalysisResult, AnalysisResult, VerifyReport) {
+        let b = analyze_default(before);
+        let a = analyze_default(after);
+        let rep = verify_against(&b, &a);
+        (b, a, rep)
+    }
+
+    fn open_advisories(r: &AnalysisResult) -> alloc::vec::Vec<&Advisory> {
+        r.advisories
+            .iter()
+            .filter(|a| a.class.is_open_obligation())
+            .collect()
+    }
+
+    /// The stamped `site_key` of the `code` advisory in function `fi` — with a
+    /// panic (not a silent None) when the fixture failed to raise it, so no
+    /// test downstream of this helper can be vacuous about its fixture.
+    fn site_of(r: &AnalysisResult, fi: u32, code: &str) -> String {
+        r.advisories
+            .iter()
+            .find(|a| a.func_index == fi && a.code == code && !a.site_key.is_empty())
+            .unwrap_or_else(|| panic!("fixture must raise a stamped `{code}` in func {fi}"))
+            .site_key
+            .clone()
+    }
+
+    /// FEAT-065: `func_identities` is the adjudicator's function-level surface:
+    /// one entry per defined function, `ident` from the same tier decision the
+    /// advisories carry, and `body_shape_hash` ALWAYS populated. The shape hash
+    /// is immediate-blind BY DESIGN (that is what makes a shape-preserving fix
+    /// adjudicable): two bodies differing only in immediates hash identically,
+    /// two bodies differing in operator shape do not.
+    #[test]
+    fn feat065_func_identities_cover_every_defined_function() {
+        let r = analyze_default(
+            "(module \
+               (func $named (result i32) i32.const 10 i32.const 0 i32.div_s) \
+               (func (result i32) i32.const 12 i32.const 7 i32.div_s) \
+               (func (result i32) i32.const 1))",
+        );
+        assert_eq!(
+            r.func_identities.len(),
+            3,
+            "one identity record per defined function; got {:?}",
+            r.func_identities
+        );
+        let named = &r.func_identities[0];
+        let unnamed_div = &r.func_identities[1];
+        let unnamed_const = &r.func_identities[2];
+        assert_eq!(named.ident, "named", "tier 1-3: ident is the name");
+        assert!(named.ident_survives_own_edit && !named.id_build_local);
+        assert_eq!(
+            unnamed_div.ident, unnamed_div.body_shape_hash,
+            "tier 4: ident IS the body shape hash"
+        );
+        assert!(!unnamed_div.ident_survives_own_edit);
+        // Immediate-blindness, the property `discharged` soundness rests on:
+        // same operator shape (const const div) despite different immediates.
+        assert_eq!(
+            named.body_shape_hash, unnamed_div.body_shape_hash,
+            "shape hash must be immediate-blind (op names only)"
+        );
+        assert_ne!(
+            named.body_shape_hash, unnamed_const.body_shape_hash,
+            "a different operator shape must hash differently"
+        );
+    }
+
+    /// FEAT-065 AC9 (ADVERSARIAL — the original test passed vacuously): a
+    /// module compared with ITSELF yields one verdict per open obligation and
+    /// EVERY one of them is `still-open-untouched`. No regressed, no moved,
+    /// no discharged, no removed, no uncertain, nothing introduced. The AC
+    /// text predates the AC2 still-open split; self-comparison means unchanged
+    /// bodies, so the correct expectation is the `-untouched` arm.
+    #[test]
+    fn feat065_ac9_self_comparison_yields_only_still_open_untouched() {
+        // The last two functions are BYTE-IDENTICAL unnamed bodies: they share
+        // one body-shape-hash identity, so their sites are AMBIGUOUS (claimed
+        // by two functions). Self-comparison must still adjudicate them
+        // still-open-untouched — the population is unchanged wholesale, and 30
+        // of 10,558 verdicts on scry's own module sit on exactly this shape.
+        let src = "(module \
+             (func $rec (result i32) call $rec) \
+             (func $open (param i32) (result i32) local.get 0 local.get 0 i32.div_s) \
+             (func $safe (result i32) i32.const 10 i32.const 7 i32.div_s) \
+             (func (param i32) (result i32) i32.const 9 local.get 0 i32.div_s) \
+             (func (param i32) (result i32) i32.const 9 local.get 0 i32.div_s))";
+        let r = analyze_default(src);
+        // Non-vacuity of the ambiguity: one site key must be claimed by BOTH
+        // duplicate functions.
+        {
+            let mut funcs_per_site: alloc::collections::BTreeMap<
+                &str,
+                alloc::collections::BTreeSet<u32>,
+            > = alloc::collections::BTreeMap::new();
+            for adv in r.advisories.iter().filter(|x| !x.site_key.is_empty()) {
+                funcs_per_site
+                    .entry(adv.site_key.as_str())
+                    .or_default()
+                    .insert(adv.func_index);
+            }
+            assert!(
+                funcs_per_site.values().any(|f| f.len() > 1),
+                "fixture must contain an AMBIGUOUS site (duplicate unnamed bodies)"
+            );
+        }
+        // Non-vacuity: the fixture must carry open obligations ACROSS SCOPES
+        // (module-scoped unbounded-stack + site-scoped div-by-zero) AND at
+        // least one proven-safe fact (so the regression path has material to
+        // stay silent about).
+        let open = open_advisories(&r);
+        assert!(
+            open.len() >= 3 && open.iter().any(|a| a.code == "unbounded-stack"),
+            "fixture must raise >=3 open obligations incl. unbounded-stack; got {:?}",
+            r.advisories
+                .iter()
+                .map(|a| &a.code)
+                .collect::<alloc::vec::Vec<_>>()
+        );
+        assert!(
+            r.advisories
+                .iter()
+                .any(|a| a.class == AdvisoryClass::LeverageableFact),
+            "fixture must carry a proven-safe fact"
+        );
+
+        let rep = verify_against(&r, &r);
+        assert_eq!(
+            rep.verdicts.len(),
+            open.len(),
+            "self-comparison must adjudicate EVERY open obligation (no silent drop); got {:?}",
+            rep.verdicts
+        );
+        for v in &rep.verdicts {
+            assert_eq!(
+                v.verdict,
+                VerifyVerdict::StillOpenUntouched,
+                "self-comparison: every verdict is still-open-untouched, got {v:?}"
+            );
+            assert!(!v.introduced, "nothing is introduced by a no-op: {v:?}");
+        }
+        assert!(rep.gate_pass(), "a no-op edit must pass the gate");
+        assert_eq!(rep.exit_code(), 0);
+    }
+
+    /// FEAT-065 AC2/AC3/AC6: the fix-invisible case (the feat064 AC3 fixture —
+    /// a GENUINE br_if fix scry cannot see, FEAT-089) must come back
+    /// `still-open-after-edit`, while an obligation in a function the edit did
+    /// NOT touch stays `still-open-untouched`. The discriminator is the body
+    /// shape hash (AC3): a body that did not change cannot contain a fix.
+    #[test]
+    fn feat065_ac6_fix_invisible_is_still_open_after_edit_not_untouched() {
+        const BEFORE: &str = "(module \
+             (func $d (export \"d\") (param i32) (result i32) (local $r i32) \
+               block i32.const 10 local.get 0 i32.div_s local.set $r end \
+               local.get $r) \
+             (func $u (param i32) (result i32) i32.const 20 local.get 0 i32.div_s))";
+        const AFTER: &str = "(module \
+             (func $d (export \"d\") (param i32) (result i32) (local $r i32) \
+               block local.get 0 i32.eqz br_if 0 \
+               i32.const 10 local.get 0 i32.div_s local.set $r end \
+               local.get $r) \
+             (func $u (param i32) (result i32) i32.const 20 local.get 0 i32.div_s))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        // Non-vacuity: div-by-zero must be open in BOTH functions in BOTH runs
+        // (FEAT-089: the genuine fix does not close the obligation).
+        let s_d = site_of(&b, 0, "div-by-zero");
+        let s_u = site_of(&b, 1, "div-by-zero");
+        assert_eq!(
+            s_d,
+            site_of(&a, 0, "div-by-zero"),
+            "identity must survive the fix"
+        );
+        assert_eq!(s_u, site_of(&a, 1, "div-by-zero"));
+
+        let verdict_at = |s: &str| {
+            rep.verdicts
+                .iter()
+                .find(|v| v.site_key == *s && v.code == "div-by-zero")
+                .unwrap_or_else(|| {
+                    panic!("a verdict must exist for site {s}; got {:?}", rep.verdicts)
+                })
+        };
+        assert_eq!(
+            verdict_at(&s_d).verdict,
+            VerifyVerdict::StillOpenAfterEdit,
+            "the edited function's persisting obligation is fix-invisible, NOT untouched"
+        );
+        assert_eq!(
+            verdict_at(&s_u).verdict,
+            VerifyVerdict::StillOpenUntouched,
+            "an untouched function's obligation must not inherit the edit signal"
+        );
+        assert!(rep.gate_pass(), "still-open is not a failure signal");
+    }
+
+    /// FEAT-065 AC1/AC4: `discharged` IS reachable — on the shape it is sound
+    /// for: a shape-preserving fix (immediates only: `i32.const 0` divisor →
+    /// `i32.const 7`) in a named function. Every conjunct holds: matched by
+    /// site_key, !id_build_local, ident_survives_own_edit, group membership
+    /// unchanged — and the operator shape is unchanged, so site
+    /// correspondence is exact and the discharge is a certainty claim.
+    #[test]
+    fn feat065_ac4_discharged_on_a_shape_preserving_fix() {
+        const BEFORE: &str = "(module (func $f (result i32) i32.const 10 i32.const 0 i32.div_s))";
+        const AFTER: &str = "(module (func $f (result i32) i32.const 10 i32.const 7 i32.div_s))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        // Non-vacuity: the obligation must be open before and the SAME site
+        // must carry a proof of safety after.
+        let s = site_of(&b, 0, "div-by-zero");
+        assert!(
+            a.advisories
+                .iter()
+                .any(|x| x.site_key == s && x.class == AdvisoryClass::LeverageableFact),
+            "after-fixture must prove the same site safe; got {:?}",
+            a.advisories
+        );
+        let v = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == s && v.code == "div-by-zero")
+            .unwrap_or_else(|| {
+                panic!(
+                    "a verdict must exist for the fixed site; got {:?}",
+                    rep.verdicts
+                )
+            });
+        assert_eq!(
+            v.verdict,
+            VerifyVerdict::Discharged,
+            "a sound, shape-preserving, identity-corroborated fix is a discharge: {v:?}"
+        );
+        assert_eq!(rep.count(VerifyVerdict::Uncertain), 0, "{:?}", rep.verdicts);
+        assert!(rep.gate_pass());
+        assert_eq!(rep.exit_code(), 0);
+    }
+
+    /// FEAT-065 AC7: deleting the function that contained an open obligation
+    /// is `removed-with-code` — NEVER `discharged`. Deleting the code that
+    /// carried an unproven obligation proves nothing, and an agent optimising
+    /// against a conflated verdict would learn to delete rather than to fix.
+    #[test]
+    fn feat065_ac7_deleted_function_is_removed_with_code_never_discharged() {
+        const BEFORE: &str = "(module \
+             (func $keep (param i32) (result i32) i32.const 10 local.get 0 i32.div_s) \
+             (func $gone (param i32) (result i32) i32.const 30 local.get 0 i32.div_s))";
+        const AFTER: &str = "(module \
+             (func $keep (param i32) (result i32) i32.const 10 local.get 0 i32.div_s))";
+        let (b, _a, rep) = adjudicate(BEFORE, AFTER);
+        let s_gone = site_of(&b, 1, "div-by-zero");
+        let s_keep = site_of(&b, 0, "div-by-zero");
+        let v_gone = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == s_gone && v.code == "div-by-zero")
+            .unwrap_or_else(|| {
+                panic!("deleted obligation needs a verdict; got {:?}", rep.verdicts)
+            });
+        assert_eq!(
+            v_gone.verdict,
+            VerifyVerdict::RemovedWithCode,
+            "gone-with-the-function is removal, not progress: {v_gone:?}"
+        );
+        assert_eq!(
+            rep.count(VerifyVerdict::Discharged),
+            0,
+            "deletion must NEVER read as discharged; got {:?}",
+            rep.verdicts
+        );
+        let v_keep = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == s_keep && v.code == "div-by-zero")
+            .expect("kept obligation needs a verdict");
+        assert_eq!(v_keep.verdict, VerifyVerdict::StillOpenUntouched);
+    }
+
+    /// FEAT-065 AC8: an edit that turns a PROVEN-SAFE site back into an
+    /// obligation is `regressed`, and the exit code signals failure.
+    #[test]
+    fn feat065_ac8_regression_is_reported_and_fails_the_gate() {
+        const BEFORE: &str = "(module (func $f (result i32) i32.const 10 i32.const 7 i32.div_s))";
+        const AFTER: &str = "(module (func $f (result i32) i32.const 10 i32.const 0 i32.div_s))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        // Non-vacuity: proven-safe before (and NOT open), open after.
+        let s = site_of(&b, 0, "proven-safe");
+        assert!(
+            !b.advisories
+                .iter()
+                .any(|x| x.site_key == s && x.class.is_open_obligation()),
+            "before-fixture must carry no open obligation at the safe site"
+        );
+        assert_eq!(
+            s,
+            site_of(&a, 0, "div-by-zero"),
+            "the regression must hit the SAME site"
+        );
+        let v = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == s && v.code == "div-by-zero")
+            .unwrap_or_else(|| panic!("regression needs a verdict; got {:?}", rep.verdicts));
+        assert_eq!(v.verdict, VerifyVerdict::Regressed, "{v:?}");
+        assert!(!rep.gate_pass(), "a regression must fail the gate");
+        assert_eq!(rep.exit_code(), 1);
+    }
+
+    /// FEAT-065 AC10 (ADVERSARIAL — the case that falsified DD-021's
+    /// rationale): one same-kind operator deleted and another inserted in the
+    /// same region, leaving the group multiset byte-identical. The after-run
+    /// PROVES the surviving site safe — the exact bait the withdrawn
+    /// adjudicator took as `discharged`. The honest verdict is `uncertain`:
+    /// the operator shape changed, so positional identity cannot say whether
+    /// this is a fixed operator or a deleted one plus a safe stranger.
+    #[test]
+    fn feat065_ac10_cardinality_preserving_delete_insert_is_uncertain() {
+        const BEFORE: &str = "(module (func $g (result i32) \
+             i32.const 1 drop i32.const 10 i32.const 0 i32.div_s))";
+        const AFTER: &str = "(module (func $g (result i32) \
+             i32.const 10 i32.const 7 i32.div_s i32.const 1 drop))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        let s = site_of(&b, 0, "div-by-zero");
+        // Non-vacuity 1: the site survives BYTE-IDENTICALLY (same func ident,
+        // same region path, same kind, same ordinal) …
+        assert_eq!(
+            s,
+            site_of(&a, 0, "proven-safe"),
+            "the inserted same-kind operator must inherit the deleted one's site key"
+        );
+        // Non-vacuity 2: … and the group multiset is byte-identical across
+        // the runs — this IS the falsifying configuration.
+        let groups = |r: &AnalysisResult| {
+            let mut m: alloc::collections::BTreeMap<String, alloc::collections::BTreeSet<String>> =
+                alloc::collections::BTreeMap::new();
+            for adv in r.advisories.iter().filter(|x| !x.site_key.is_empty()) {
+                m.entry(adv.group_key.clone())
+                    .or_default()
+                    .insert(adv.site_key.clone());
+            }
+            m
+        };
+        assert_eq!(groups(&b), groups(&a), "group membership must be unchanged");
+        let v = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == s && v.code == "div-by-zero")
+            .unwrap_or_else(|| panic!("the obligation needs a verdict; got {:?}", rep.verdicts));
+        assert_eq!(
+            v.verdict,
+            VerifyVerdict::Uncertain,
+            "a shape-changing open→safe transition is UNCERTAIN, never discharged: {v:?}"
+        );
+        assert_eq!(
+            rep.count(VerifyVerdict::Discharged),
+            0,
+            "{:?}",
+            rep.verdicts
+        );
+    }
+
+    /// FEAT-065 AC5/AC11: an obligation whose function identity came from the
+    /// body-shape hash (`ident_survives_own_edit: false` — every function of a
+    /// STRIPPED module, FEAT-087: 10,520 of 10,520) is NEVER `discharged`,
+    /// even on the one shape where matching would technically work (a
+    /// shape-preserving immediate fix keeps the hash ident equal). The
+    /// fallback identity cannot corroborate a discharge; the AC makes the
+    /// production-shape consequence explicit rather than discovered.
+    #[test]
+    fn feat065_ac11_body_hash_identity_never_discharges() {
+        const BEFORE: &str = "(module (func (result i32) i32.const 10 i32.const 0 i32.div_s))";
+        const AFTER: &str = "(module (func (result i32) i32.const 10 i32.const 7 i32.div_s))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        let s = site_of(&b, 0, "div-by-zero");
+        // Non-vacuity: tier-4 identity, open before, SAME site proven after —
+        // every other discharge precondition is deliberately satisfied.
+        let adv = b.advisories.iter().find(|x| x.site_key == s).unwrap();
+        assert!(
+            !adv.ident_survives_own_edit && !adv.id_build_local,
+            "fixture must sit on the body-shape-hash tier"
+        );
+        assert!(
+            a.advisories
+                .iter()
+                .any(|x| x.site_key == s && x.class == AdvisoryClass::LeverageableFact),
+            "after-fixture must prove the same site safe (the bait must be real)"
+        );
+        let v = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == s && v.code == "div-by-zero")
+            .unwrap_or_else(|| panic!("the obligation needs a verdict; got {:?}", rep.verdicts));
+        assert_eq!(v.verdict, VerifyVerdict::Uncertain, "{v:?}");
+        assert_eq!(
+            rep.count(VerifyVerdict::Discharged),
+            0,
+            "discharged must be UNREACHABLE on the stripped/unnamed shape"
+        );
+    }
+
+    /// FEAT-065 AC4 term (2): a BUILD-LOCAL identity (shared stripped name →
+    /// raw disambiguated name, FEAT-077) is not comparable across builds, so
+    /// even a perfect-looking open→safe transition at a matching key degrades
+    /// to `uncertain`.
+    #[test]
+    fn feat065_ac4_build_local_identity_never_discharges() {
+        const BEFORE: &str = "(module \
+             (func $\"_ZN3dep7generic17haaaaaaaaaaaaaaaaE\" (result i32) \
+               i32.const 10 i32.const 0 i32.div_s) \
+             (func $\"_ZN3dep7generic17hbbbbbbbbbbbbbbbbE\" (result i32) \
+               i32.const 12 i32.const 6 i32.div_s))";
+        const AFTER: &str = "(module \
+             (func $\"_ZN3dep7generic17haaaaaaaaaaaaaaaaE\" (result i32) \
+               i32.const 10 i32.const 7 i32.div_s) \
+             (func $\"_ZN3dep7generic17hbbbbbbbbbbbbbbbbE\" (result i32) \
+               i32.const 12 i32.const 6 i32.div_s))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        let s = site_of(&b, 0, "div-by-zero");
+        let adv = b.advisories.iter().find(|x| x.site_key == s).unwrap();
+        assert!(
+            adv.id_build_local && adv.ident_survives_own_edit,
+            "fixture must sit on the build-local raw-name tier; got {adv:?}"
+        );
+        assert!(
+            a.advisories
+                .iter()
+                .any(|x| x.site_key == s && x.class == AdvisoryClass::LeverageableFact),
+            "after-fixture must prove the same site safe (the bait must be real)"
+        );
+        let v = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == s && v.code == "div-by-zero")
+            .unwrap_or_else(|| panic!("the obligation needs a verdict; got {:?}", rep.verdicts));
+        assert_eq!(v.verdict, VerifyVerdict::Uncertain, "{v:?}");
+        assert_eq!(rep.count(VerifyVerdict::Discharged), 0);
+    }
+
+    /// FEAT-065 AC12 (ADVERSARIAL — pre-rework this produced ZERO verdicts):
+    /// an edit that INTRODUCES a new obligation at a site with no prior
+    /// advisory gets a verdict, and the gate fails — an agent that fixed A
+    /// while breaking B must not pass clean.
+    #[test]
+    fn feat065_ac12_introduced_obligation_gets_a_verdict_and_fails_the_gate() {
+        const BEFORE: &str = "(module (func $f (param i32) (result i32) \
+             i32.const 10 i32.const 7 i32.div_s))";
+        const AFTER: &str = "(module (func $f (param i32) (result i32) \
+             i32.const 10 i32.const 7 i32.div_s \
+             i32.const 20 local.get 0 i32.div_s i32.add))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        // Non-vacuity: the after-run must actually carry a NEW open obligation
+        // at a site the before-run has no advisory for.
+        let new_site = site_of(&a, 0, "div-by-zero");
+        assert!(
+            !b.advisories.iter().any(|x| x.site_key == new_site),
+            "the new obligation's site must have no prior advisory"
+        );
+        let v = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == new_site && v.code == "div-by-zero")
+            .unwrap_or_else(|| {
+                panic!(
+                    "an introduced obligation MUST get a verdict; got {:?}",
+                    rep.verdicts
+                )
+            });
+        assert!(v.introduced, "{v:?}");
+        assert!(v.before_func_index.is_none());
+        assert!(
+            !rep.gate_pass(),
+            "introducing an obligation must not pass clean"
+        );
+        assert_eq!(rep.exit_code(), 1);
+        assert_eq!(
+            rep.count(VerifyVerdict::Regressed),
+            0,
+            "the untouched safe site did not regress; got {:?}",
+            rep.verdicts
+        );
+    }
+
+    /// FEAT-065: an identity whose position moved while its body shape did NOT
+    /// change (a function inserted ahead of it shifts `func_index`) is
+    /// `moved` — informational, not progress, and not an edit signal.
+    #[test]
+    fn feat065_moved_position_shift_with_unchanged_body_is_moved() {
+        const BEFORE: &str = "(module \
+             (func $t (param i32) (result i32) i32.const 10 local.get 0 i32.div_s))";
+        const AFTER: &str = "(module \
+             (func $pad (result i32) i32.const 1) \
+             (func $t (param i32) (result i32) i32.const 10 local.get 0 i32.div_s))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        let s = site_of(&b, 0, "div-by-zero");
+        assert_eq!(
+            s,
+            site_of(&a, 1, "div-by-zero"),
+            "identity must survive the shift"
+        );
+        assert!(
+            !a.advisories.iter().any(|x| x.func_index == 0),
+            "the inserted pad function must itself be advisory-free"
+        );
+        let v = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == s && v.code == "div-by-zero")
+            .unwrap_or_else(|| panic!("the obligation needs a verdict; got {:?}", rep.verdicts));
+        assert_eq!(v.verdict, VerifyVerdict::Moved, "{v:?}");
+        assert_eq!(v.before_func_index, Some(0));
+        assert_eq!(v.after_func_index, Some(1));
+        assert!(rep.gate_pass(), "moved is informational");
+    }
+
+    /// FEAT-065 / FEAT-087 consumer rule: on the body-shape-hash tier an edit
+    /// DESTROYS the identity, so the vanished before-site is `uncertain` —
+    /// NEVER `removed-with-code` (a missing key is not evidence the code is
+    /// gone). The churned after-sites surface as `introduced` and fail the
+    /// gate: on a stripped module the loop honestly cannot converge (AC5),
+    /// which must show up as a failed gate plus uncertainty, not as invented
+    /// removals.
+    #[test]
+    fn feat065_identity_churn_on_the_hash_tier_is_not_removal() {
+        const BEFORE: &str = "(module (func (result i32) i32.const 10 i32.const 0 i32.div_s))";
+        const AFTER: &str = "(module (func (result i32) nop i32.const 10 i32.const 0 i32.div_s))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        let s = site_of(&b, 0, "div-by-zero");
+        // Non-vacuity: the shape edit must actually churn the identity — the
+        // before-site must be ABSENT from the after run.
+        assert!(
+            !a.advisories.iter().any(|x| x.site_key == s),
+            "fixture must churn the tier-4 identity (site absent after)"
+        );
+        let v = rep
+            .verdicts
+            .iter()
+            .find(|v| v.site_key == s && v.code == "div-by-zero")
+            .unwrap_or_else(|| panic!("the obligation needs a verdict; got {:?}", rep.verdicts));
+        assert_eq!(
+            v.verdict,
+            VerifyVerdict::Uncertain,
+            "a missing tier-4 key is churn, not evidence of removal: {v:?}"
+        );
+        assert_eq!(
+            rep.count(VerifyVerdict::RemovedWithCode),
+            0,
+            "no removal may be invented from identity churn; got {:?}",
+            rep.verdicts
+        );
+        assert!(
+            rep.verdicts.iter().any(|v| v.introduced),
+            "the churned after-sites must surface as introduced"
+        );
+        assert!(
+            !rep.gate_pass(),
+            "on the stripped shape the loop honestly cannot converge (AC5)"
+        );
+    }
+
+    /// FEAT-065: an AMBIGUOUS site (two byte-identical unnamed bodies share
+    /// one identity) whose population CHANGED — one copy's divisor fixed
+    /// `0 → 7`, an immediate edit the shape hash cannot see — must stay
+    /// `uncertain`: attribution of a change inside an ambiguous group is
+    /// exactly what cannot be done, and `still-open-untouched` here would tell
+    /// the agent its (real) fix touched nothing. Only an ambiguous group whose
+    /// population is unchanged WHOLESALE adjudicates to still-open (AC9 on
+    /// scry's own module: 30 verdicts sit on such sites).
+    #[test]
+    fn feat065_ambiguous_site_with_changed_population_stays_uncertain() {
+        const BEFORE: &str = "(module \
+             (func (result i32) i32.const 8 i32.const 0 i32.div_s) \
+             (func (result i32) i32.const 8 i32.const 0 i32.div_s))";
+        const AFTER: &str = "(module \
+             (func (result i32) i32.const 8 i32.const 0 i32.div_s) \
+             (func (result i32) i32.const 8 i32.const 7 i32.div_s))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        let s = site_of(&b, 0, "div-by-zero");
+        // Non-vacuity: the site must be ambiguous in BOTH runs (the immediate
+        // edit does not change the shape hash) and the after run must carry
+        // the proven-safe bait.
+        for (r, name) in [(&b, "before"), (&a, "after")] {
+            let claimants: alloc::collections::BTreeSet<u32> = r
+                .advisories
+                .iter()
+                .filter(|x| x.site_key == s)
+                .map(|x| x.func_index)
+                .collect();
+            assert!(
+                claimants.len() > 1,
+                "the {name} run must keep the site ambiguous; got {claimants:?}"
+            );
+        }
+        assert!(
+            a.advisories
+                .iter()
+                .any(|x| x.site_key == s && x.class == AdvisoryClass::LeverageableFact),
+            "the fixed copy must be proven safe (the bait must be real)"
+        );
+        let open_verdicts: alloc::vec::Vec<_> = rep
+            .verdicts
+            .iter()
+            .filter(|v| v.site_key == s && v.code == "div-by-zero")
+            .collect();
+        assert!(
+            !open_verdicts.is_empty(),
+            "the duplicated obligations need verdicts; got {:?}",
+            rep.verdicts
+        );
+        for v in open_verdicts {
+            assert_eq!(
+                v.verdict,
+                VerifyVerdict::Uncertain,
+                "a changed ambiguous population cannot be attributed: {v:?}"
+            );
+        }
+        assert_eq!(rep.count(VerifyVerdict::Discharged), 0);
+        assert_eq!(
+            rep.count(VerifyVerdict::StillOpenUntouched),
+            0,
+            "{:?}",
+            rep.verdicts
+        );
+    }
+
+    /// FEAT-065: the count-aware regression check — one copy of a duplicated
+    /// (ambiguous) site regressing from proven-safe to open must alarm even
+    /// though a sibling copy was open all along (a presence-only check would
+    /// see `div-by-zero` already open and stay silent).
+    #[test]
+    fn feat065_regression_inside_a_duplicated_site_still_alarms() {
+        const BEFORE: &str = "(module \
+             (func (result i32) i32.const 8 i32.const 0 i32.div_s) \
+             (func (result i32) i32.const 8 i32.const 7 i32.div_s))";
+        const AFTER: &str = "(module \
+             (func (result i32) i32.const 8 i32.const 0 i32.div_s) \
+             (func (result i32) i32.const 8 i32.const 0 i32.div_s))";
+        let (b, a, rep) = adjudicate(BEFORE, AFTER);
+        let s = site_of(&b, 0, "div-by-zero");
+        // Non-vacuity: before has one open + one safe copy at the SAME key;
+        // after has two open copies.
+        let count = |r: &AnalysisResult, open: bool| {
+            r.advisories
+                .iter()
+                .filter(|x| x.site_key == s && x.class.is_open_obligation() == open)
+                .count()
+        };
+        assert!(
+            count(&b, true) >= 1 && count(&b, false) >= 1,
+            "before must mix open and safe copies at one key"
+        );
+        assert!(
+            count(&a, true) > count(&b, true),
+            "after must have MORE open copies"
+        );
+        assert!(
+            rep.count(VerifyVerdict::Regressed) >= 1,
+            "a regressed duplicate must alarm despite an open sibling; got {:?}",
+            rep.verdicts
+        );
+        assert!(!rep.gate_pass());
     }
 }

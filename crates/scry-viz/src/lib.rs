@@ -32,7 +32,7 @@ use core::fmt::Write as _;
 use scry_analyze_core::{
     AbstractValue, AdvisoryClass, AnalysisResult, Diagnostic, DiagnosticSeverity, FunctionMeta,
     FunctionStack, GapKind, HandleFindingKind, Interval, PentagonBound, Region, SecurityLabel,
-    SoundnessTag, StackBound, TaintFindingKind, TrapKind, TrapVerdict,
+    SoundnessTag, StackBound, TaintFindingKind, TrapKind, TrapVerdict, VerifyReport, VerifyVerdict,
 };
 
 /// The hero / page title — a precise, scoped one-liner (not "verification
@@ -1603,7 +1603,11 @@ fn esc(raw: &str) -> String {
 /// vanish/appear is NOT evidence the site came or went. The guidance feed's
 /// advisory shape is UNCHANGED from v4; the version is shared by both feeds,
 /// so it moves once.
-pub const GUIDANCE_SCHEMA_VERSION: u32 = 6;
+///
+/// v7 (FEAT-065, REQ-021) adds a third feed kind: the VERIFY feed
+/// ([`render_verify_json`]), the adjudicated verdict distribution of
+/// `verify_against`. The guidance and delta feed shapes are unchanged from v6.
+pub const GUIDANCE_SCHEMA_VERSION: u32 = 7;
 
 /// Serialize the actionable findings as a machine-consumable JSON document — the
 /// feed an AI-agent consumer reads instead of scraping the (now capped) HTML.
@@ -3197,6 +3201,58 @@ mod tests {
             );
         }
     }
+
+    /// FEAT-065 (REQ-021): the VERIFY feed carries the ADJUDICATED verdict
+    /// distribution — `"adjudicated":true`, unlike the delta feed — and lists
+    /// EVERY verdict class explicitly even at zero, because a silently absent
+    /// class is exactly how a distribution shift hides (the AC demands a
+    /// newly-silent class be explained, which requires it be visible).
+    #[test]
+    fn feat065_verify_feed_reports_the_adjudicated_distribution() {
+        let r = analyze_wat(
+            "(module (func $open (param i32) (result i32) \
+               local.get 0 local.get 0 i32.div_s))",
+        );
+        let rep = scry_analyze_core::verify_against(&r, &r);
+        // Non-vacuity: the self-comparison must actually adjudicate the
+        // fixture's open obligations (div-by-zero + signed-overflow).
+        assert!(
+            rep.verdicts.len() >= 2,
+            "fixture must yield >=2 verdicts; got {:?}",
+            rep.verdicts
+        );
+        let json = render_verify_json(&rep);
+        assert!(json.contains("\"kind\":\"verify\""), "{json}");
+        assert!(
+            json.contains("\"adjudicated\":true"),
+            "the verify feed IS adjudicated (FEAT-065), unlike the delta feed: {json}"
+        );
+        assert!(
+            json.contains(&format!("\"still-open-untouched\":{}", rep.verdicts.len())),
+            "self-comparison: every verdict is still-open-untouched: {json}"
+        );
+        // Every class visible, including the zero ones.
+        for cls in [
+            "discharged",
+            "still-open-after-edit",
+            "regressed",
+            "moved",
+            "removed-with-code",
+            "uncertain",
+        ] {
+            assert!(
+                json.contains(&format!("\"{cls}\":0")),
+                "verdict class {cls:?} must be listed explicitly at zero: {json}"
+            );
+        }
+        assert!(json.contains("\"gate_pass\":true"), "{json}");
+        assert!(json.contains("\"exit_code\":0"), "{json}");
+        assert!(json.contains("\"introduced\":0"), "{json}");
+        assert!(
+            schema_at_least(&json, 7),
+            "the verify feed must declare the schema that introduced it: {json}"
+        );
+    }
 }
 
 // ── FEAT-072: the delta view ────────────────────────────────────────────────
@@ -3800,5 +3856,50 @@ pub fn render_delta_json(d: &Delta) -> String {
         d.unchanged(),
         d.ordinal_stable_changes(),
     );
+    s
+}
+
+/// FEAT-065 (REQ-021): serialize an adjudicated [`VerifyReport`] as the VERIFY
+/// feed — the machine verdict distribution `scry-viz delta` writes beside the
+/// (non-adjudicated) delta feed, and the surface the FEAT-073 self-history
+/// harness aggregates.
+///
+/// Unlike the delta feed this one IS adjudicated (`"adjudicated":true`): the
+/// counts are `verify_against` verdicts, conservative by construction. Every
+/// verdict class is listed EXPLICITLY even when zero — a silent class is how a
+/// distribution shift hides (FEAT-065 AC: a newly-silent class must be
+/// explained, which requires it to be visible).
+pub fn render_verify_json(rep: &VerifyReport) -> String {
+    let mut s = String::with_capacity(512);
+    let _ = write!(
+        s,
+        "{{\"guidance_schema\":{},\"kind\":\"verify\",\"adjudicated\":true,\
+         \"adjudicator\":\"FEAT-065 verify_against (REQ-021): conservative adjudication; \
+         discharged is a certainty claim and is unreachable on stripped modules \
+         (FEAT-087), uncertain is the honest degradation\",\
+         \"gate_pass\":{},\"exit_code\":{},\"total\":{},\"introduced\":{},\
+         \"verdicts\":{{",
+        GUIDANCE_SCHEMA_VERSION,
+        rep.gate_pass(),
+        rep.exit_code(),
+        rep.verdicts.len(),
+        rep.verdicts.iter().filter(|v| v.introduced).count(),
+    );
+    const ALL: [VerifyVerdict; 7] = [
+        VerifyVerdict::Discharged,
+        VerifyVerdict::StillOpenUntouched,
+        VerifyVerdict::StillOpenAfterEdit,
+        VerifyVerdict::Regressed,
+        VerifyVerdict::Moved,
+        VerifyVerdict::RemovedWithCode,
+        VerifyVerdict::Uncertain,
+    ];
+    for (i, v) in ALL.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let _ = write!(s, "\"{}\":{}", v.as_str(), rep.count(*v));
+    }
+    s.push_str("}}");
     s
 }
