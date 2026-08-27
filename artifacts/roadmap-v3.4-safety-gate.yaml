@@ -3,7 +3,7 @@ artifacts:
   - id: FEAT-088
     type: feature
     title: "v3.4 — A forgotten safety goal cannot hide behind the `undeveloped` diamond"
-    status: proposed
+    status: accepted
     release: v3.4.0
     description: >
       `rivet coverage` reports `goal-has-support` and `goal-has-context` at 40%
