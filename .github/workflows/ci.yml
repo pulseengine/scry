@@ -280,7 +280,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      administration: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -290,12 +289,18 @@ jobs:
           python-version: "3.12"
       - name: Install PyYAML
         run: pip install pyyaml
-      - name: Guard — every requirable CI job is actually required
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # --against-file, NOT the live ruleset: a workflow's GITHUB_TOKEN cannot
+      # read rulesets (`administration` is not a grantable Actions scope, and a
+      # workflow requesting it is rejected wholesale — the run fails with zero
+      # jobs and no log, which reads like an outage rather than a syntax
+      # error). So CI gates on .github/required-checks.txt, which catches the
+      # rot WE cause: a job added or renamed without updating the file. A
+      # ruleset RESET is invisible to anything in-repo and needs the live mode,
+      # run with admin credentials.
+      - name: Guard — every requirable CI job is in required-checks.txt
         run: |
           python3 tools/check-required-checks.py --self-test
-          python3 tools/check-required-checks.py
+          python3 tools/check-required-checks.py --against-file
 
   # A README is a claim about the system — the same species as a requirement,
   # gated the same way. `claim-check` re-derives every load-bearing doc claim

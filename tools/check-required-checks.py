@@ -23,6 +23,21 @@ gate fails if one ever is.
 NEW JOBS ARE NOT A FAILURE. A job added in the current PR does not yet exist on
 main, so it cannot be required yet -- requiring it would deadlock every other
 open PR. Those are reported as PENDING: add them to the ruleset after merge.
+
+TWO MODES, because of a credential fact learned the hard way: a workflow's
+GITHUB_TOKEN CANNOT read rulesets. `administration` is not a grantable Actions
+permission scope, and a workflow requesting it is REJECTED WHOLESALE by GitHub
+-- the run fails with zero jobs and no log, which looks like an outage rather
+than a syntax error.
+
+  --against-file  compares the jobs to .github/required-checks.txt. No API, so
+                  CI can run it. Catches a job ADDED or RENAMED without the
+                  file being updated -- the rot modes WE cause, in our own PRs.
+  (default)       compares the jobs to the LIVE ruleset, and additionally
+                  checks the file against it. Needs admin credentials, so it
+                  runs locally or from a credentialed schedule. This is the
+                  only mode that can catch a ruleset RESET or an out-of-band
+                  edit, because that is invisible to anything in-repo.
 """
 import sys, json, subprocess
 
@@ -109,6 +124,7 @@ def self_test():
     return bad
 
 
+REQUIRED_FILE = ".github/required-checks.txt"
 WORKFLOWS = [".github/workflows/ci.yml", ".github/workflows/rivet-delta.yml"]
 
 
@@ -125,22 +141,44 @@ def main():
         print("SELF-TEST PASS" if not f else f"SELF-TEST FAIL ({f})")
         return 1 if f else 0
 
-    try:
-        out = subprocess.run(
-            ["gh", "api", "repos/pulseengine/scry/rulesets/16891064"],
-            capture_output=True, text=True, timeout=120)
-        rs = json.loads(out.stdout)
-        rule = next((r for r in rs["rules"] if r["type"] == "required_status_checks"), None)
-    except Exception as e:
-        # FAIL CLOSED: unable to read the ruleset is not evidence it is correct.
-        print(f"FAIL: could not read the ruleset ({e}). CI needs `permissions: "
-              f"administration: read`.")
-        return 1
-    if rule is None:
-        print("FAIL: the ruleset has NO required_status_checks rule -- this is exactly "
-              "scry#130, and it was fixed on 2026-08-27. Something reset it.")
-        return 1
-    required = {c["context"] for c in rule["parameters"]["required_status_checks"]}
+    from_file = {l.strip() for l in open(REQUIRED_FILE, encoding="utf-8")
+                 if l.strip() and not l.startswith("#")}
+    extra = []
+    if "--against-file" in sys.argv:
+        if not from_file:
+            print(f"FAIL: {REQUIRED_FILE} is empty -- nothing to gate against")
+            return 1
+        required = from_file
+        print(f"  mode: --against-file ({REQUIRED_FILE})")
+    else:
+        try:
+            out = subprocess.run(
+                ["gh", "api", "repos/pulseengine/scry/rulesets/16891064"],
+                capture_output=True, text=True, timeout=120)
+            rs = json.loads(out.stdout)
+            rule = next((r for r in rs["rules"] if r["type"] == "required_status_checks"), None)
+        except Exception as e:
+            # FAIL CLOSED: unable to read the ruleset is not evidence it is
+            # correct. In CI use --against-file; GITHUB_TOKEN cannot read
+            # rulesets at all.
+            print(f"FAIL: could not read the ruleset ({e}). This mode needs admin "
+                  f"credentials; CI should use --against-file.")
+            return 1
+        if rule is None:
+            print("FAIL: the ruleset has NO required_status_checks rule -- this is exactly "
+                  "scry#130, and it was fixed on 2026-08-27. Something reset it.")
+            return 1
+        required = {c["context"] for c in rule["parameters"]["required_status_checks"]}
+        # The file is what CI can see; if it has drifted from the live setting,
+        # CI is gating on a fiction.
+        if from_file != required:
+            for c in sorted(required - from_file):
+                extra.append(f"{c!r} is required LIVE but missing from {REQUIRED_FILE} "
+                             f"-- CI gates on the file, so it is gating on a fiction")
+            for c in sorted(from_file - required):
+                extra.append(f"{c!r} is listed in {REQUIRED_FILE} but is NOT required live "
+                             f"-- the ruleset was reset or edited out of band")
+        print(f"  mode: live ruleset (file agrees: {from_file == required})")
 
     main_jobs, pr_jobs = {}, {}
     for wf in WORKFLOWS:
@@ -154,6 +192,7 @@ def main():
     print(f"  required contexts: {len(required)}; jobs on main: {len(main_jobs)}; "
           f"jobs in this PR: {len(pr_jobs)}")
     fails, pending = verdict(main_jobs, pr_jobs, required)
+    fails += extra
     for p in pending:
         print(f"  PENDING (not a failure): job {p!r} is new in this PR. Add it to the "
               f"ruleset AFTER merge -- requiring it now deadlocks every other open PR.")
