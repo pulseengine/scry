@@ -264,6 +264,39 @@ jobs:
           python3 tools/check-commit-trailers.py --self-test
           python3 tools/check-commit-trailers.py
 
+  # scry#130 follow-up. The required-check setting was fixed on 2026-08-27;
+  # this exists so it cannot silently rot back. Three ways it rots: a job is
+  # ADDED and never required (scry#130 returning one job at a time, invisible
+  # because the PR still goes green); a job is RENAMED (the stale context can
+  # never report, so every PR deadlocks); or the ruleset is RESET — it is named
+  # `temper-default-branch-protection`, so something else may regenerate it.
+  #
+  # Needs `administration: read` to see the ruleset, and full history to read
+  # ci.yml as it exists on main — a job new in THIS PR is reported as pending,
+  # not failed, because requiring it before it merges deadlocks every other
+  # open PR.
+  required-checks-drift:
+    name: Required checks track CI jobs (scry#130)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      administration: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install pyyaml
+      - name: Guard — every requirable CI job is actually required
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/check-required-checks.py --self-test
+          python3 tools/check-required-checks.py
+
   # A README is a claim about the system — the same species as a requirement,
   # gated the same way. `claim-check` re-derives every load-bearing doc claim
   # (version, admit-free proof count, published-crate count, WrapAdd.v, the

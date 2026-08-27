@@ -77,3 +77,69 @@ artifacts:
     links:
       - type: traces-to
         target: REQ-005
+
+  - id: FEAT-093
+    type: feature
+    title: "v3.4 — The required-check set cannot silently rot back to scry#130"
+    status: proposed
+    release: v3.4.0
+    description: >
+      scry#130 was enforced on 2026-08-27: the ruleset
+      `temper-default-branch-protection` now requires all ten jobs of ci.yml.
+      Verified in BOTH directions, which is what distinguishes a gate from a
+      setting — every open PR flipped to `mergeStateStatus=BLOCKED` on apply,
+      and PR #164 merged `CLEAN` once its ten checks passed.
+
+      A setting that was wrong for months can be wrong again, and would be
+      invisible: CI still runs, PRs still go green, and nothing announces that
+      a job stopped being enforced. Three concrete ways it rots:
+
+        1. A JOB IS ADDED and never required — scry#130 returning one job at a
+           time, with no symptom at all.
+        2. A JOB IS RENAMED — the stale context can never report, so every PR
+           deadlocks. The opposite failure, equally silent until it bites.
+        3. THE RULESET IS RESET — its name says `temper-`, i.e. something else
+           may regenerate it. `required_status_checks` would simply vanish.
+
+      THE DEADLOCK RULE, which is why this is not set-equality. A check may be
+      required only if it reports on EVERY pull request. `rivet-delta.yml` is
+      PATH-FILTERED (`artifacts/**`, `rivet.yaml`, …) so `Rivet artifact delta`
+      does not run on a code-only PR; requiring it would block such PRs
+      forever. The gate therefore fails if a path-filtered or `if:`-conditional
+      job is ever required, and carries the exclusion WITH its reason so the
+      exclusion is auditable rather than folklore.
+
+      NEW JOBS ARE NOT FAILURES. A job added in the current PR does not exist
+      on main and cannot be required yet — requiring it would deadlock every
+      other open PR. The gate reads ci.yml from BOTH `origin/main` and the PR,
+      and reports such jobs as PENDING with the instruction to add them after
+      merge. Without this the gate would fail on the very PR that introduces it.
+    tags: [release-machinery, gate, drift, scry130, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a job that exists on main and runs on every PR but is absent from the required set, When the gate runs, Then it FAILS naming that job. MUTATION-CHECKED AGAINST THE LIVE RULESET: `Format` was removed from the real required set (asserted 10 -> 9 before applying), the gate failed with `job 'Format' exists on main and runs on every PR, but is NOT required`, and restoring returned it to 10 contexts and exit 0."
+        - "Given a path-filtered or `if:`-conditional job that IS required, When the gate runs, Then it FAILS — such a check never reports on some PRs and deadlocks them. Self-tested."
+        - "Given a required context matching no job in either ci.yml or rivet-delta.yml, When the gate runs, Then it FAILS — a renamed or deleted job leaves a context that can never report."
+        - "Given the ruleset has no `required_status_checks` rule at all, When the gate runs, Then it FAILS explicitly as scry#130 recurring, rather than passing because there is nothing to compare."
+        - "Given a job introduced by the CURRENT PR, When the gate runs, Then it is reported PENDING and does NOT fail. Verified on this PR itself, which introduces two such jobs and still exits 0."
+        - "Given the ruleset cannot be read, When the gate runs, Then it FAILS CLOSED naming the needed `administration: read` permission — inability to check is not evidence of correctness (scry#141)."
+        - "SELF-TESTED, run BEFORE the real check in CI: 6 cases over the pure `verdict()` function covering all four failure directions plus the pending case."
+      residual: >
+        The gate reads the ruleset by hard-coded id (16891064). If the ruleset
+        is deleted and recreated rather than edited, the id changes and the
+        gate fails closed — noisy, but in the safe direction.
+
+        A job RENAMED in a PR shows as PENDING at PR time (the old name still
+        exists on main, still required, still reporting) and only fails after
+        the rename merges. That ordering is correct but means a rename costs
+        one red build on main. Renaming a required job is a two-step operation:
+        add the new name, require it, then drop the old one.
+
+        This checks that the required SET tracks the jobs. It does not check
+        that each job is a MEANINGFUL gate — `check-gate-coverage.py` covers
+        the crate dimension, and nothing covers "this job asserts something
+        real", which remains a human judgement.
+    links:
+      - type: traces-to
+        target: REQ-005
