@@ -222,6 +222,36 @@ jobs:
       - name: rivet validate
         run: rivet validate
 
+  # scry#161: the V-model's artifact side and the code side were never
+  # connected -- rivet ships commit-to-artifact traceability and it shipped
+  # here unconfigured, so `Broken refs` read 0 for want of any reference to
+  # check. That counter is exactly what would have caught PR #159 merging with
+  # a commit naming FEAT-086 before the artifact existed (#160).
+  #
+  # Its own job, not a step on the rivet job, so a traceability failure is
+  # legible in the checks list rather than buried behind artifact validation.
+  #
+  # FORWARD-ONLY: scoped to origin/main..HEAD, so the 85 pre-existing orphan
+  # commits never enter the gate. NOT `rivet commits --strict`, which also
+  # promotes the repo-wide unimplemented-artifacts warning (Artifact coverage:
+  # 1/257) that no pull request can satisfy.
+  commit-traceability:
+    name: Commit traceability (rivet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # origin/main..HEAD cannot resolve on a shallow clone.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install rivet-cli
+        run: cargo install --locked --git https://github.com/pulseengine/rivet rivet-cli
+      - name: Guard — every code commit links an artifact that RESOLVES
+        run: |
+          python3 tools/check-commit-trailers.py --self-test
+          python3 tools/check-commit-trailers.py
+
   # A README is a claim about the system — the same species as a requirement,
   # gated the same way. `claim-check` re-derives every load-bearing doc claim
   # (version, admit-free proof count, published-crate count, WrapAdd.v, the

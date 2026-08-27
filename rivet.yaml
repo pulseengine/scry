@@ -19,6 +19,41 @@ project:
     - safety-case
     - aspice
 
+# scry#161: the V-model's artifact side and the code side were never
+# connected, and the tool to connect them shipped unconfigured. Turning the
+# analysis on is the two-line part; the value is the `Broken refs` counter,
+# which catches a commit naming an artifact id that does not resolve. That is
+# exactly the defect that let PR #159 merge referencing FEAT-086 before the
+# artifact existed (#160) — found by grepping, not by a gate.
+#
+# Only link types this schema actually uses are mapped. `implements`/`fixes`
+# appear in rivet's example config but are not in use here, and a trailer
+# mapping to a link type the schema does not have would be a broken reference
+# by construction.
+commits:
+  format: trailers
+  # ONLY `Refs` is mapped, and that is a finding, not laziness. rivet's
+  # trailer-key matcher is FUZZY: with `Verifies` mapped it reads the ordinary
+  # prose line "Verified: bazel build //:scry green" as a malformed artifact
+  # trailer, and counts those commits as BOTH `Linked` and `Broken refs` —
+  # measured, 4 of each on this history, all of them prose (5 commits carry
+  # such a line). A gate that fails on a normal sentence gets switched off, so
+  # the mapping is kept to the one key with no prose collision here. Reported
+  # upstream; widen this once the matcher stops guessing.
+  trailers:
+    Refs: traces-to
+  exempt-types:
+    - chore
+    - style
+    - ci
+    - docs
+    - build
+  skip-trailer: "Trace: skip"
+  # The code side is what #161 measured as disconnected, so that is what is
+  # traced. Artifact-only commits are not orphans.
+  traced-paths:
+    - crates/
+
 sources:
   - path: artifacts
     format: generic-yaml

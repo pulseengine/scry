@@ -1,0 +1,79 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-091
+    type: feature
+    title: "v3.4 — Connect the code side to the artifact side: commit traceability, gated forward-only (scry#161)"
+    status: proposed
+    release: v3.4.0
+    description: >
+      scry#161 measured that rivet's commit-to-artifact traceability shipped
+      unconfigured, so the V-model's artifact side and the code side were never
+      connected. Enabling it is a config block; the value is the `broken_refs`
+      counter, which catches a commit naming an artifact id that does not
+      resolve — exactly how PR #159 merged referencing FEAT-086 before the
+      artifact existed (scry#160), found by grepping rather than by a gate.
+
+      TWO MEASUREMENTS CORRECT #161's PREMISE, and both changed the design.
+
+      (1) #161 reports "zero of 125 commits carry an artifact trailer". With a
+      `Verifies` mapping configured, rivet instead reports `linked: 4`,
+      `broken_refs: 4` AND `malformed_refs: 4` — the SAME four commits inflating
+      three counters at once. None of them carry a trailer. All four are the
+      ordinary prose line `Verified: bazel build //:scry green + wasm-tools
+      validate ok.`, which rivet's FUZZY trailer-key matcher reads as a
+      malformed `Verifies:`. Five commits in this history carry such a line.
+      Measured by A/B: with `Verifies` mapped the three counters read 4/4/4;
+      with it unmapped they read 0/0/0 and orphans rises 81 -> 85.
+
+      So the honest baseline is `linked: 0, orphans: 85, broken_refs: 0` — and
+      `linked: 4` was never real. The trailer mapping is therefore kept to
+      `Refs: traces-to` alone. That is a finding, not laziness: a gate that
+      fails on a normal English sentence gets switched off, and `Verified:` is
+      an entirely natural thing to write in a commit body. Reported upstream;
+      widen the mapping when the matcher stops guessing.
+
+      (2) `rivet commits --strict` cannot be the gate. It also promotes the
+      repo-wide unimplemented-artifacts warning, which reports `Artifact
+      coverage: 1/257 (0.4%)` — a condition NO pull request can satisfy.
+      Measured: a range with one correctly-linked commit and zero orphans and
+      zero broken refs still exits 1 under `--strict`. A gate no PR can pass is
+      not a gate. `tools/check-commit-trailers.py` therefore reads the JSON
+      summary and fails on only the three counters a PR is responsible for —
+      `orphans`, `broken_refs`, `malformed_refs` — and deliberately ignores
+      `unimplemented` and `artifact_coverage`.
+
+      FORWARD-ONLY BY CONSTRUCTION: the gate is scoped to `origin/main..HEAD`,
+      so the 85 pre-existing orphans never enter it and no history rewrite is
+      needed. `traced-paths: [crates/]` scopes it to the code side, which is
+      what #161 measured as disconnected; artifact-only commits are not orphans.
+      It runs as its OWN CI job so a traceability failure is legible in the
+      checks list rather than buried behind artifact validation.
+    tags: [traceability, v-model, gate, issue-driven, scry161, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a commit touching `crates/` with NO artifact trailer, When the gate runs over its range, Then it FAILS with `orphans=1`. VERIFIED end-to-end on the real repo, exit 1."
+        - "Given the same commit carrying `Refs: REQ-005`, When the gate runs, Then it PASSES — `linked: 1, orphans: 0, broken_refs: 0`, exit 0. This is the direction `--strict` could not satisfy, and is why the gate is not `--strict`."
+        - "Given a commit whose trailer names an artifact that does NOT exist (`Refs: FEAT-99999` — the scry#160 defect), When the gate runs, Then it FAILS with `broken_refs=1` and a message naming that defect. VERIFIED end-to-end, exit 1."
+        - "Given rivet exits non-zero because a reference is broken, When the gate runs, Then it still PARSES the JSON summary and reports WHICH counter failed. Fixed after first measurement: bailing on the exit code alone degraded an informative failure to `rivet exited 1`."
+        - "Given rivet is missing or produces no parseable summary, When the gate runs, Then it FAILS CLOSED — a gate that skips on a missing tool reports green while checking nothing (scry#141)."
+        - "SELF-TESTED, run BEFORE the real check in CI: 6 cases over the pure `verdict()` function, including that `linked` and `exempt` NEVER fail the gate and that a missing counter key reads 0."
+      residual: >
+        The 85 historical orphan commits stay orphans, deliberately: linking
+        them would mean rewriting history or fabricating after-the-fact
+        attributions, and neither is worth it. `rivet commits` without a range
+        still reports them, and that number is the honest record of when the
+        connection started, not a defect to be driven to zero.
+
+        The mapping carries ONE trailer key while rivet's matcher is fuzzy, so
+        `Satisfies`/`Verifies` are unavailable and everything routes through
+        `traces-to`. That is a real loss of expressiveness accepted to keep the
+        gate trustworthy. `Fixes:` was also found once as prose in history and
+        is likewise unmapped.
+
+        This gate does NOT check that the linked artifact is the RIGHT one — a
+        commit can satisfy it with any resolving id. It catches unlinked and
+        dangling, not mis-attributed.
+    links:
+      - type: traces-to
+        target: REQ-005
