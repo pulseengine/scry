@@ -1197,6 +1197,23 @@ artifacts:
       list means "not proven", never "unsafe".
       Interop note: the same shape as the output contract in WasmBounds (Sudo &
       Winstein, Stanford), which is a cleaner interface than our full feed.
+
+      MEASURED BEFORE BUILDING (2026-08-27, scry's own scry_mcdc.wasm,
+      identical stripped and unstripped): scry proves **55** memory accesses
+      safe against **8,162** it cannot — a **0.67%** proven rate. The export
+      this feature describes would therefore carry 55 sites out of 8,217. synth
+      measures software bounds checks at ~25-40% overhead, so eliding 0.67% of
+      them recovers on the order of 0.2% of runtime.
+
+      That does not kill the feature, but it relocates the work: the blocker is
+      NOT the export format, it is PRECISION. The same module shows 1,639
+      `unmodeled-control-flow` and 623 `unsupported-op` advisories — an
+      `if`/`else` havocs its region (by design, with an honest gap record), and
+      FEAT-089 measured that a disequality guard cannot refine an interval at
+      all. Shipping the channel before the payload exists would hand synth a
+      correct and nearly empty file. Precision work (FEAT-089 and the
+      region-havoc family) should land first, and this AC should be re-measured
+      after it, not before.
     tags: [bounds-elision, synth, interop, embedded, v3.3]
     fields:
       phase: phase-3
