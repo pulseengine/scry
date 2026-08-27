@@ -302,11 +302,33 @@ artifacts:
       EVIDENCE BEFORE REWORK: FEAT-073 runs the refuted adjudicator over scry's
       OWN commit history in observation mode, so which of the nine scry#122 work
       items actually fire on real code is a measurement rather than a guess.
+
+      NOT SATISFIED BY FEAT-065 ALONE, recorded 2026-08-27 because with
+      FEAT-065 now `accepted` this requirement READS satisfiable and is not.
+      The adjudication MACHINERY exists and is verified; the LOOP it promises
+      cannot converge. Measured by FEAT-065's own AC13 run over scry's history
+      (4 commit pairs, ~13,800 obligations each):
+        * `discharged` = 0 on every real pair
+        * the gate FAILS on every real pair
+        * ~47% `uncertain`, matching scry#123's measured 43-45% identity churn
+        * on a STRIPPED module `discharged` is UNREACHABLE by construction
+          (FEAT-087: `ident_survives_own_edit` false for 10,520 of 10,520), and
+          stripping is standard in release builds
+      The obstacle is PRECISION, not adjudication. FEAT-089 is the unblocker: a
+      correct div-by-zero repair guards with `br_if` on `i32.eqz`, which
+      establishes a disequality, and an interval cannot represent one (scry#165)
+      — so the fix is invisible and the agent is told the obligation still
+      stands. An agent gated on that re-fixes working code.
+      DO NOT promote this requirement on FEAT-065's acceptance. What would
+      discharge it: FEAT-089 landing, then a re-measurement showing a genuine
+      fix reaching `discharged` on a shape an agent would actually write.
     tags: [ai-agent, oracle, fix-verify-loop, gate, adversarial, v3.4]
     fields:
       priority: must
       category: functional
     links:
+      - type: depends-on
+        target: FEAT-089
       - type: traces-to
         target: REQ-020
       - type: traces-to
