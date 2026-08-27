@@ -11993,6 +11993,44 @@ mod tests {
         );
     }
 
+    /// FEAT-089 AC2 names all four i32 div/rem ops. The primary test covers
+    /// `i32.div_s`; this one runs `div_u` / `rem_s` / `rem_u` under ONE guard
+    /// (straight-line, no intervening write/call, so the fact survives across
+    /// all three sites) — each must be PROVEN-SAFE for divisor-zero.
+    #[test]
+    fn feat089_a_div_u_rem_s_rem_u_consult_the_fact_too() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) (local $r i32) \
+               block local.get 0 i32.eqz br_if 0 \
+               i32.const 10 local.get 0 i32.div_u local.set $r \
+               i32.const 10 local.get 0 i32.rem_s local.set $r \
+               i32.const 10 local.get 0 i32.rem_u local.set $r end \
+               local.get $r))",
+        );
+        let dbz: alloc::vec::Vec<&TrapCheck> = r
+            .trap_checks
+            .iter()
+            .filter(|t| t.kind == TrapKind::DivByZero)
+            .collect();
+        assert_eq!(
+            dbz.len(),
+            3,
+            "fixture must classify all three ops; got {dbz:?}"
+        );
+        for t in &dbz {
+            assert_eq!(
+                t.verdict,
+                TrapVerdict::ProvenSafe,
+                "`{}` must consult the non-zero fact",
+                t.op
+            );
+        }
+        assert!(
+            !r.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "no divisor-zero obligation may stand under the guard"
+        );
+    }
+
     /// FEAT-089 AC4: `!= 0` says nothing about `INT_MIN / -1`. At a site where
     /// BOTH obligations stand (⊤ dividend, ⊤ divisor), the non-zero fact must
     /// clear the divisor-zero obligation ONLY — the signed-overflow obligation
