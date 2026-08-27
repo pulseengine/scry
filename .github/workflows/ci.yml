@@ -19,9 +19,21 @@ name: CI
 #   * Bazel build of the composed component (//:scry).
 #   * wasm-tools validate on the built bazel-bin/scry.wasm.
 #
-# Required-status-check names that temper's branch protection
-# expects: `Format`, `Clippy`, `Test` — all three are real Cargo
-# gates as of FEAT-001 AC#3.
+# Required status checks (scry#130, enforced 2026-08-27). The ruleset
+# `temper-default-branch-protection` now requires ALL TEN jobs of this
+# workflow before a PR can merge: Format, Clippy, Test, Bazel build
+# (//:scry), MC/DC (witness), cargo-deny, Doc claims (claim-check),
+# Rivet artifact validation, WIT round-trip, AADL model (spar parse).
+# Until then it required NOTHING — this comment claimed three were
+# required and none were, so "merged green" rested on whoever merged
+# remembering to look.
+#
+# `Rivet artifact delta` is deliberately NOT required: it lives in
+# rivet-delta.yml, which is PATH-FILTERED (artifacts/**, rivet.yaml, …).
+# A required check that never reports on a code-only PR blocks that PR
+# forever. Any job added here is required only once its name exists on
+# every PR — add it to the ruleset AFTER it has merged to main, never
+# before, or every open PR deadlocks.
 
 on:
   push:
