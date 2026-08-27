@@ -77,8 +77,16 @@ def workflow_jobs(text):
     return out
 
 
-def verdict(main_jobs, pr_jobs, required):
-    """Pure -> (failures, pending). Drives --self-test."""
+def verdict(main_jobs, pr_jobs, required, in_file=None):
+    """Pure -> (failures, pending). Drives --self-test.
+
+    `in_file` is the checked-in required-checks.txt contents when known; a job
+    new in this PR that is absent from it is a FAILURE, not merely pending,
+    because shipping the job without the file entry is what opens the red
+    window (see below).
+    """
+    if in_file is None:
+        in_file = required
     fails, pending = [], []
     for name, (requirable, why) in main_jobs.items():
         if requirable and name not in required:
@@ -94,7 +102,23 @@ def verdict(main_jobs, pr_jobs, required):
                          f"it can never report, so every PR deadlocks")
     for name, (requirable, _) in pr_jobs.items():
         if requirable and name not in main_jobs and name not in required:
+            # A job NEW in this PR must be added to required-checks.txt IN THE
+            # SAME PR. Observed the hard way: #167 added two jobs without it,
+            # so the moment it merged, main and every open PR failed this gate
+            # until a follow-up PR (#170) landed the file. Requiring both
+            # together removes that window entirely -- on merge the file
+            # already lists them, and only the ruleset needs its (instant)
+            # update.
             pending.append(name)
+    for name, (requirable, _) in pr_jobs.items():
+        if requirable and name not in main_jobs and name not in in_file:
+            fails.append(
+                f"job {name!r} is new in this PR but is NOT in "
+                f"{REQUIRED_FILE} -- add it in THIS PR. Landing the job "
+                f"without the file entry makes main, and every open PR, fail "
+                f"this gate until a follow-up lands the file (scry#167 did "
+                f"exactly that)"
+            )
     for name, why in EXPECTED_EXCLUSIONS.items():
         if name in pr_jobs and pr_jobs[name][0]:
             fails.append(f"{name!r} is listed as a deliberate exclusion ({why}) but is now "
@@ -111,12 +135,22 @@ def self_test():
         ("a path-filtered job IS required (deadlock)", {"A": R(), "D": N("workflow is path-filtered")},
          {"A": R(), "D": N("x")}, {"A", "D"}, 1, 0),
         ("a required context matches no job (renamed)", {"A": R()}, {"A": R()}, {"A", "Gone"}, 1, 0),
-        ("a NEW job in this PR is pending, not a failure", {"A": R()}, {"A": R(), "New": R()}, {"A"}, 0, 1),
+        # A new job WITH its file entry: pending only (the ruleset still needs
+        # its instant update), no failure.
+        ("a NEW job carrying its file entry is pending, not a failure",
+         {"A": R()}, {"A": R(), "New": R()}, {"A"}, 0, 1, {"A", "New"}),
+        # A new job WITHOUT its file entry: this is the scry#167 shape, and it
+        # must FAIL here rather than after merge, when it takes main and every
+        # open PR down with it.
+        ("a NEW job missing from the file FAILS in this PR",
+         {"A": R()}, {"A": R(), "New": R()}, {"A"}, 1, 1, {"A"}),
         ("ruleset reset: nothing required at all", {"A": R(), "B": R()}, {"A": R(), "B": R()}, set(), 2, 0),
     ]
     bad = 0
-    for name, mj, pj, req, wf, wp in cases:
-        f, p = verdict(mj, pj, req)
+    for case in cases:
+        name, mj, pj, req, wf, wp = case[:6]
+        in_file = case[6] if len(case) > 6 else None
+        f, p = verdict(mj, pj, req, in_file)
         ok = len(f) == wf and len(p) == wp
         bad += not ok
         print(f"  [{'ok' if ok else 'SELF-TEST FAILED'}] {name}: {len(f)} fail / {len(p)} pending, "
@@ -191,7 +225,7 @@ def main():
 
     print(f"  required contexts: {len(required)}; jobs on main: {len(main_jobs)}; "
           f"jobs in this PR: {len(pr_jobs)}")
-    fails, pending = verdict(main_jobs, pr_jobs, required)
+    fails, pending = verdict(main_jobs, pr_jobs, required, from_file)
     fails += extra
     for p in pending:
         print(f"  PENDING (not a failure): job {p!r} is new in this PR. Add it to the "
