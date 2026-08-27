@@ -21,10 +21,10 @@ claims:
   # Cargo.toml + this pattern together — exactly the point.)
   - id: STATUS-VERSION
     doc: README.md
-    text: "**v3.2.6 shipped**"
+    text: "**v3.2.7 shipped**"
     evidence:
       - kind: count-min
-        pattern: 'version = "3\.2\.6"'
+        pattern: 'version = "3\.2\.7"'
         glob: ['Cargo.toml']
         min: 1
 
@@ -32,14 +32,14 @@ claims:
   # rules_rust populates CARGO_PKG_VERSION from the target's `version` attr and
   # defaults it to "0.0.0". Bazel builds the SHIPPED component, so a missing or
   # stale pin means the artifact announces the wrong version — which is exactly
-  # what v3.2.6 did. The literal cannot be derived (Bazel cannot read
+  # what v3.2.7 did. The literal cannot be derived (Bazel cannot read
   # Cargo.toml), so it is pinned to the workspace version here instead.
   - id: BAZEL-VERSION-PIN
     doc: crates/scry-analyze-core/BUILD.bazel
-    text: 'version = "3.2.6",'
+    text: 'version = "3.2.7",'
     evidence:
       - kind: count-min
-        pattern: 'version = "3\.2\.6"'
+        pattern: 'version = "3\.2\.7"'
         glob: ['Cargo.toml']
         min: 1
       # And the default must never come back.

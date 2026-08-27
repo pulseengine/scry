@@ -28,7 +28,7 @@ rust_library(
     # literal to the workspace version, and claim-check goes red if they part.
     # A number that must be maintained by hand is acceptable only when
     # something mechanical notices when it is not.
-    version = "3.2.6",
+    version = "3.2.7",
     visibility = ["//visibility:public"],
     tags = ["feat-014"],
     deps = [
