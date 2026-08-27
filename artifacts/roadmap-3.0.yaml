@@ -275,7 +275,7 @@ artifacts:
 
       scry shall compare a fresh analysis against a prior one and classify every
       obligation by its stable identity (REQ-020 / FEAT-064): discharged /
-      still-open / regressed / moved / removed-with-code / uncertain. That turns
+      still-open-untouched / still-open-after-edit / regressed / moved / removed-with-code / uncertain. CORRECTED 2026-08-27: `still-open` was SPLIT by FEAT-065 AC2 because it conflated `the agent did not fix it` with `scry cannot see the fix`; an adjudicator conflating those sends an agent to re-fix working code in a loop, the exact failure this requirement exists to prevent. That turns
       the v3.1 PROSE oracle ("re-run scry; this trap_check becomes ProvenSafe")
       into a machine verdict, so an agent's edit is judged by a SOUND
       over-approximation rather than by whether the tests still pass.
@@ -1054,7 +1054,7 @@ artifacts:
   - id: FEAT-065
     type: feature
     title: "v3.4 — `scry verify --against`: scry adjudicates its own oracle"
-    status: proposed
+    status: accepted
     release: v3.4.0
     description: >
       Turn the v3.1 prose verification oracle into a machine verdict. `scry verify

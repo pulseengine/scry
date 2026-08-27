@@ -105,6 +105,29 @@ artifacts:
       The attestation shall be linkable from rivet artifacts so that a
       requirement of the form "memory access X is in-bounds" can be
       `verified-by` a specific AI run.
+
+      MEASURED 2026-08-27 - NOT DISCHARGED, and the near-miss is why this is
+      written down. Three things in the repo look like they satisfy this and do
+      not:
+        * the v3.2.7 release carries 36 signature/certificate assets, but those
+          cosign-sign RELEASE ARTIFACTS (wasm, SBOMs, evidence bundles), not AI
+          RUNS. This requirement asks that EVERY AI RUN produce an attestation.
+        * FEAT-091 (scry#161) links COMMITS to artifacts. This asks that an
+          ATTESTATION be linkable so a claim like "memory access X is in-bounds"
+          is verified-by a specific AI run. Different objects, opposite
+          direction.
+        * release.yml requests the `attestations: write` PERMISSION. Grepping
+          crates/, wit/ and .github/ for dsse|in-toto|attestation returns that
+          permission line and NOTHING else: no predicate, no module-hash record,
+          no domain-set or analyzer-version field, no proven-invariant set, no
+          fallback list. None of the six fields enumerated above is emitted.
+      Linking any of them as `verifies` would MANUFACTURE traceability - the
+      same refusal J-004 records for the undeveloped safety goals.
+
+      CONTEXT: REQ-005 is one of SIX requirements with no incoming `verifies`
+      link (REQ-003/004/005/007/020/021), matching rivet's
+      requirement-verification 15/21. ALL SIX are `priority: must`. The
+      uncovered 29% is not a random tail - it is entirely the must-priority set.
     tags: [attestation, sigil, rivet]
     fields:
       priority: must
