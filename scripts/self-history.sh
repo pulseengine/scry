@@ -26,6 +26,11 @@
 #     survivor_inherits_deleted_identity) and a singleton ordinal domain has none.
 #
 # It graduates to a gate only when REQ-021 has closed. See DD-022.
+#
+# FEAT-065 (REQ-021 rework): each pair now ALSO carries the ADJUDICATED verdict
+# distribution (delta-*.verify.json, aggregated below) from `verify_against` —
+# conservative by construction. The harness itself still exits 0: adjudication
+# per pair exists; the harness gate is REQ-021's closure, not this script.
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # Usage:  scripts/self-history.sh [N_COMMITS] [OUT_DIR]
@@ -103,7 +108,7 @@ SUMMARY="$OUT/summary.json"
   echo "  \"harness\": \"FEAT-073 self-adjudication (observation mode)\","
   echo "  \"adjudicated\": false,"
   echo "  \"adjudication_issue\": \"scry#122\","
-  echo "  \"note\": \"Counts describe what CHANGED between two analyses. No verdict is claimed: matching obligations on a positional ordinal was refuted in review, so no count here may be read as a fix.\","
+  echo "  \"note\": \"Delta counts describe what CHANGED between two analyses and claim no verdict (positional-ordinal matching was refuted in review). Each pair additionally carries a FEAT-065 'verify' block: the conservative adjudicator's verdict distribution, in which discharged is a certainty claim (unreachable on stripped modules) and uncertain is the honest degradation.\","
   echo "  \"pairs\": ["
 } > "$SUMMARY"
 
@@ -117,11 +122,16 @@ for (( i=0 ; i<${#REV[@]}-1 ; i++ )); do
     continue
   fi
   dj="${page%.html}.delta.json"
+  vj="${page%.html}.verify.json"
   if [[ -s "$dj" ]]; then
     [[ $first -eq 0 ]] && echo "," >> "$SUMMARY"
     first=0
     { printf '    {"from":"%s","to":"%s","delta":' "$a" "$b"
       cat "$dj"
+      if [[ -s "$vj" ]]; then
+        printf ',"verify":'
+        cat "$vj"
+      fi
       printf '}'; } >> "$SUMMARY"
   fi
 done
@@ -145,6 +155,19 @@ if [[ -s "$ctlj" ]] && grep -q '"changed":0' "$ctlj" \
 else
   echo "   !! CONTROL FAILED — identity is not stable under a no-op."
   echo "      Every count in this run is suspect. (Still exit 0: observation mode.)"
+fi
+# FEAT-065: the ADJUDICATED control — a self-comparison must contain no
+# discharged, no regressed, no moved, no removal and nothing introduced
+# (REQ-021's adversarial bar, run against the real module, not a fixture).
+ctlv="${ctl%.html}.verify.json"
+if [[ -s "$ctlv" ]] && grep -q '"discharged":0' "$ctlv" \
+   && grep -q '"regressed":0' "$ctlv" && grep -q '"moved":0' "$ctlv" \
+   && grep -q '"removed-with-code":0' "$ctlv" && grep -q '"introduced":0' "$ctlv" \
+   && grep -q '"gate_pass":true' "$ctlv"; then
+  echo "   VERIFY CONTROL OK — self-comparison adjudicates to still-open only."
+else
+  echo "   !! VERIFY CONTROL FAILED — the adjudicator claims progress on a no-op."
+  echo "      Every verdict in this run is suspect. (Still exit 0: observation mode.)"
 fi
 
 echo
