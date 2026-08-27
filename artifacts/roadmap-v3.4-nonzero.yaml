@@ -1,0 +1,74 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-089
+    type: feature
+    title: "v3.4 — A div-by-zero fix must be VISIBLE: non-zero facts a disequality guard establishes"
+    status: proposed
+    release: v3.4.0
+    description: >
+      Found by closing FEAT-064 AC3. The canonical repair for a div-by-zero —
+      branch away when the divisor is zero — is INVISIBLE to scry, even when
+      obligation identity is preserved perfectly.
+
+      MEASURED. A genuine, semantics-preserving fix (`$r` defaults to 0;
+      `br_if` out of an ALREADY PRESENT block returns 0 when the divisor is
+      zero) leaves the division site's `site_key` and every `obligation_id`
+      byte-identical — so the adjudicator can address the site across the edit.
+      And `div-by-zero` still fires afterwards, unchanged.
+
+      MECHANISM, from scry's own source rather than inferred. `try_guard_brif`
+      recognises the shape: `(I32Eqz, BrIf)` maps to `GuardOp::Eq` with `c = 0`.
+      On the TAKEN edge (divisor == 0) that refines to `[0,0]`, which is
+      correct and useless — the division is on the other edge. On the
+      FALL-THROUGH edge the guard licenses `divisor != 0`, and `refine_interval`
+      returns the interval untouched, with the reason stated in the code:
+      `(GuardOp::Eq, false) | (GuardOp::Ne, true) => return iv, // != c: no
+      interval`. A disequality is a HOLE in the middle of a range, which an
+      interval lattice cannot represent. The transfer is SOUND — it just
+      carries no information for exactly the fact the fix establishes.
+
+      This matters beyond precision. REQ-021 gates an AI agent on scry's
+      verdict over its own edit. An agent that fixes the bug CORRECTLY and is
+      then told the obligation still stands has been given a false alarm by the
+      gate, and the fix-verify loop cannot converge. That is worse than a
+      missing feature: it punishes the correct repair.
+
+      DIRECTION, not yet a design. Do not try to encode `!= 0` in the interval
+      domain — the lattice genuinely cannot hold it, and widening the lattice
+      to disjunctions was already rejected for the bounds decision
+      (WasmBounds-hull reasoning). Instead carry a NARROW predicate fact
+      ("this local is known non-zero on this path") that the div/rem trap check
+      consults, in the same shape as FEAT-084's known-bits reduction: a
+      targeted fact feeding one decision, not a new general domain. The
+      soundness obligation is small and statable — the fact holds only on the
+      fall-through edge of a guard whose taken edge is `== 0`, and must be
+      invalidated by any write to the local.
+
+      SECOND, SEPARABLE ITEM: `select` is `unsupported-op`. A `select`-based
+      guard PRESERVES the site identity (measured — `site_key` survived), so it
+      is the one guard form where identity is already free; modelling `select`
+      would make a second fix shape adjudicable. Bounded `interpret_op` work,
+      same shape as FEAT-084.
+
+      NOT CLAIMED: how common any of these shapes is in real fixes. Five
+      hand-written fixtures, zero observed repairs. This says which shapes
+      behave how.
+    tags: [precision, guards, fix-verify-loop, req-021, issue-driven, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "RED FIRST, and the red must be the CURRENT behaviour: given the FEAT-064 AC3 fixture pair, When the post-fix module is analysed, Then `div-by-zero` must NOT be raised at the guarded site. This fails today and is the whole point."
+        - "Given the fall-through edge of a `br_if` whose taken edge establishes `local == 0`, When the trap check for `i32.div_s` / `i32.div_u` / `i32.rem_s` / `i32.rem_u` runs, Then it consults the non-zero fact and reports PROVEN-SAFE for the divisor-zero obligation only."
+        - "SOUNDNESS, adversarial: given the same guard followed by ANY write to the guarded local (`local.set`, `local.tee`, a call that could clobber it, a loop back-edge re-entering the region), When the trap check runs, Then the non-zero fact must be GONE and the obligation must stand. A fact that survives a write is unsound and this must be the clean-room's first target."
+        - "The signed-overflow obligation at the same site is UNAFFECTED — `!= 0` says nothing about `INT_MIN / -1`. A fix that silently clears both would be over-claiming, and the AC3 fixture already shows both obligations at one site."
+        - "MUTATION-CHECKED: forcing the non-zero fact always-true must turn the adversarial soundness test red; forcing it always-false must turn the primary test red."
+        - "`feat064_ac3_a_genuine_fix_preserves_obligation_identity` must still pass UNCHANGED — this feature changes the verdict, never the identity."
+      residual: >
+        Modelling `select` is listed here but is a separate slice and may be
+        split out. Prevalence of each guard shape in real-world fixes remains
+        unmeasured; the corpus in scry#126 could answer it and has not been
+        asked. This does not make every fix visible — only the disequality
+        family, and only where the guard's taken edge pins the local to zero.
+    links:
+      - type: traces-to
+        target: REQ-021
