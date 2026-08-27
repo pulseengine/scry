@@ -1,0 +1,73 @@
+# v3.4.0 safety-case addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-088
+    type: feature
+    title: "v3.4 — A forgotten safety goal cannot hide behind the `undeveloped` diamond"
+    status: proposed
+    release: v3.4.0
+    description: >
+      `rivet coverage` reports `goal-has-support` and `goal-has-context` at 40%
+      (2 of 5) and CANNOT distinguish a safety goal deliberately marked
+      `undeveloped: true` — GSN's diamond, an honest declared incompleteness —
+      from one somebody simply forgot. Both render as uncovered, at the same
+      number. J-004 investigated this on 2026-08-25, established that all three
+      uncovered goals (G-003 Component-Model link-time properties, G-004 the
+      wider PulseEngine deductive/model-checking layers, G-005 scry's own
+      qualifiability) are deliberately undeveloped, and recorded WHY closing it
+      with links would be cosmetic.
+
+      That investigation is correct and it is PROSE. Prose is precisely what the
+      next forgotten goal would hide behind: add a goal with no evidence, and it
+      reads exactly like the three that were reasoned about. J-004 says so
+      itself — "a genuinely forgotten goal would hide among the declared ones."
+      This feature turns that sentence into a gate.
+
+      Two directions are checked, and the second is the one that matters:
+
+        1. a goal with NO supporting `safety-solution` MUST carry
+           `undeveloped: true` — catches a goal nobody developed OR declared;
+        2. a goal carrying `undeveloped: true` MUST be named by a
+           `safety-justification` — catches the flag being added to QUIET the
+           report, which is the shape a forgotten goal takes once someone
+           notices the number.
+
+      (1) alone is satisfiable by typing the flag, so a gate that only checked
+      it would catch the mistake nobody was going to make.
+
+      The checker cross-checks its own population against `rivet list` and FAILS
+      on disagreement. This is not defensive padding: G-005 lives in
+      `roadmap-2.0.yaml`, not `safety-case.yaml`, so a checker reading the
+      obvious single file finds 4 of 5 goals, reports clean, and silently omits
+      the one carrying `asil: D`. The checker must not be able to have the bug
+      it exists to prevent.
+
+      It FAILS CLOSED when PyYAML is unavailable rather than skipping. A gate
+      that silently skips on a missing dependency reports green while checking
+      nothing — the scry#141 failure mode, where 222 of 273 tests never ran.
+    tags: [safety-case, gsn, traceability, honesty, gate, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a safety goal with no supporting `safety-solution` and no `undeveloped: true`, When the gate runs, Then it FAILS naming that goal. Self-tested."
+        - "Given a goal marked `undeveloped: true` that NO `safety-justification` names, When the gate runs, Then it FAILS. This is the subtle direction — the flag added to quiet the report — and it is a self-test fixture, not only a real-repo observation."
+        - "Given a justification that names the goal only in prose (a `rationale` field, no typed link), When the gate runs, Then that counts as justified — J-004's own shape must not be flagged."
+        - "Given the checker scans a subset of the artifact files, When it runs, Then the `rivet list` cross-check FAILS on the population mismatch. MUTATION-CHECKED on the real repo: restricting the scan to `safety-case.yaml` finds 4 of 5 goals and exits 1 with `rivet sees 5 ... this checker sees 4`."
+        - "MUTATION-CHECKED on the real repo, second direction: redacting J-004's links AND its prose produces exactly three violations (G-003/G-004/G-005, `hiding behind the flag`) and exit 1; restoring it returns to PASS."
+        - "Given PyYAML is unavailable, When either the gate or its self-test runs, Then it exits 1 with `this gate cannot run` — VERIFIED by shadowing the module on PYTHONPATH, both paths."
+        - "Given CI, When the rivet job runs, Then `--self-test` runs BEFORE the real check, so a checker that stops discriminating fails the build (the `tools/check-gate-coverage.py` pattern)."
+      residual: >
+        This does NOT make the 40% meaningful, and the next sweep should not
+        read it that way. `rivet coverage` still counts declared-undeveloped
+        goals as uncovered and will still print `goal-has-support 2/5 40.0%`.
+        J-004 notes the figure misleads in BOTH directions; this gate closes
+        exactly one — forgotten hiding among declared. The other direction
+        (a reader seeing 40% and inferring neglect) needs rivet itself to
+        express `undeveloped`, which is reported upstream and is not scry's to
+        fix. G-003/G-004/G-005 remain deliberately undeveloped: this feature
+        does not develop them, and developing them is what J-004 scopes —
+        solutions for host-import reachability and WIT refinement contracts, or
+        narrowing G-003 to the handle-state claim FEAT-049 already supports;
+        cross-repo evidence for G-004; an assessor-facing review for G-005.
+    links:
+      - type: traces-to
+        target: REQ-005
