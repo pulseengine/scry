@@ -250,6 +250,29 @@ artifacts:
       the adjudicator (REQ-021) must report it as `removed-with-code`, never as
       `discharged`. This statement is the shared honesty constraint across both
       halves and is why the split does not weaken either.
+
+      NOT SATISFIED ON THE COMMON PRODUCTION SHAPE, recorded 2026-08-27 for the
+      same reason REQ-021 carries its own limit: this requirement will READ
+      satisfiable the moment FEAT-064 is promoted, and it is not.
+      The claim is `stable identity that survives the edit`. MEASURED by
+      FEAT-087 on a STRIPPED build of scry's own binary (`wasm-tools strip -a`,
+      8.2MB -> 484KB, 853 functions / 32 exported): 766 of 766
+      obligation-carrying functions and ALL 10,520 obligations fall to the
+      `body_shape_hash` identity tier, whose id is a hash of the very bytes an
+      edit changes. Stripping is standard in release builds, so on the common
+      production shape NO obligation has an identity that survives an edit to
+      its own function.
+      WHAT IS DELIVERED, and it is real: identity is now HONEST about which
+      tier it used. FEAT-077 gives a stable id for uniquely-named functions
+      (measured 100% survival) and marks the rest `id_build_local`; FEAT-087
+      adds `ident_survives_own_edit` so a consumer can tell a citable id from
+      one that moves. A consumer reading the conjunction
+      `!id_build_local && ident_survives_own_edit` cites soundly. That is
+      HONEST DEGRADATION, not the requirement's stated property.
+      DO NOT promote REQ-020 on FEAT-064's acceptance. What would discharge it:
+      an identity for unnamed functions that does not derive from the body —
+      which needs content corroboration, not another key scheme (DD-022: the
+      keys are a good ADDRESS and a bad PROOF).
     tags: [ai-agent, fix-verify-loop, identity, oracle, precision, v3.3]
     fields:
       priority: must
