@@ -10901,4 +10901,79 @@ mod tests {
             "the `<module>` ident is body-independent"
         );
     }
+
+    /// FEAT-064 AC3 (scry#122, scry#123): does a GENUINE fix present as a
+    /// changed obligation at a SURVIVING site? AC3 was left explicitly OPEN
+    /// because the only evidence was a sample of scry's own history, which
+    /// recompiles into different monomorphizations. This is the isolating
+    /// fixture AC3 asked for.
+    ///
+    /// The fix is REAL and semantics-preserving — not a deletion of the risky
+    /// functionality. `$r` defaults to 0, so branching out of the ALREADY
+    /// PRESENT block when the divisor is zero returns 0 instead of trapping.
+    /// It opens no new region and adds no second `i32.div_s`, so the division
+    /// site's region path and intra-region ordinal are untouched.
+    ///
+    /// MEASURED RESULT, and it splits cleanly in two:
+    ///   * identity survives PERFECTLY — same `site_key`, byte-identical
+    ///     `obligation_id`s. So identity is NOT what blocks adjudication here.
+    ///   * the obligation set is UNCHANGED — `div-by-zero` still fires after
+    ///     the fix. `br_if` on `i32.eqz` licenses `divisor != 0` on the
+    ///     FALL-THROUGH path, and `refine_interval` documents that a
+    ///     disequality carves no interval (`(GuardOp::Eq, false) => return
+    ///     iv`), so the divisor is never refined.
+    ///
+    /// This test pins the IDENTITY half, which is the AC3 evidence. It
+    /// deliberately does NOT pin `div-by-zero` still firing: that is a defect
+    /// (FEAT-089), and a test asserting a defect becomes a barrier to fixing
+    /// it. When FEAT-089 lands, this test must still pass unchanged.
+    #[test]
+    fn feat064_ac3_a_genuine_fix_preserves_obligation_identity() {
+        const BEFORE: &str = "(module (func $d (export \"d\") (param i32) (result i32) (local $r i32) \
+             block i32.const 10 local.get 0 i32.div_s local.set $r end \
+             local.get $r))";
+        const AFTER: &str = "(module (func $d (export \"d\") (param i32) (result i32) (local $r i32) \
+             block local.get 0 i32.eqz br_if 0 \
+             i32.const 10 local.get 0 i32.div_s local.set $r end \
+             local.get $r))";
+        let pick = |wat: &str| {
+            let r = analyze_default(wat);
+            let v: alloc::vec::Vec<_> = r
+                .advisories
+                .iter()
+                .filter(|a| !a.obligation_id.is_empty() && a.code != "unbounded-stack")
+                .map(|a| (a.obligation_id.clone(), a.site_key.clone(), a.code.clone()))
+                .collect();
+            v
+        };
+        let before = pick(BEFORE);
+        let after = pick(AFTER);
+
+        // Non-vacuity: the fixture must actually raise the obligation whose
+        // identity is the subject, or "identity survived" is a claim about an
+        // empty set.
+        assert!(
+            before.iter().any(|(_, _, c)| c == "div-by-zero"),
+            "precondition: the pre-fix fixture must raise div-by-zero; got {before:?}"
+        );
+
+        let sites_before: alloc::collections::BTreeSet<_> =
+            before.iter().map(|(_, s, _)| s.clone()).collect();
+        let sites_after: alloc::collections::BTreeSet<_> =
+            after.iter().map(|(_, s, _)| s.clone()).collect();
+        assert_eq!(
+            sites_before, sites_after,
+            "a genuine fix that opens no region must leave the site identity intact"
+        );
+
+        let ids_before: alloc::collections::BTreeSet<_> =
+            before.iter().map(|(i, _, _)| i.clone()).collect();
+        let ids_after: alloc::collections::BTreeSet<_> =
+            after.iter().map(|(i, _, _)| i.clone()).collect();
+        assert!(
+            !ids_before.is_empty() && ids_before.is_subset(&ids_after),
+            "every pre-fix obligation id must still be addressable after the fix \
+             (before={ids_before:?} after={ids_after:?})"
+        );
+    }
 }
