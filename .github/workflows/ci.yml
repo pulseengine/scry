@@ -221,6 +221,23 @@ jobs:
         run: cargo install --locked --git https://github.com/pulseengine/rivet rivet-cli
       - name: rivet validate
         run: rivet validate
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install pyyaml
+      # J-004: `rivet coverage` cannot tell a goal DECLARED `undeveloped: true`
+      # (GSN's diamond) from one somebody forgot -- both render as uncovered at
+      # the same 40%. J-004 records that the figure was investigated, but prose
+      # is exactly what the next forgotten goal would hide behind. This gate
+      # makes it mechanical: an unsupported goal must be declared, AND the
+      # declaration must be justified. Ships a --self-test, run FIRST, which
+      # includes the subtle case (flag present, no justification naming it) --
+      # the shape a forgotten goal takes once someone quiets the report.
+      - name: Guard — an unsupported safety goal is DECLARED and justified
+        run: |
+          python3 tools/check-undeveloped-goals.py --self-test
+          python3 tools/check-undeveloped-goals.py
 
   # A README is a claim about the system — the same species as a requirement,
   # gated the same way. `claim-check` re-derives every load-bearing doc claim
