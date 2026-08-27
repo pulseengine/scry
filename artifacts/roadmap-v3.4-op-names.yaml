@@ -3,7 +3,7 @@ artifacts:
   - id: FEAT-092
     type: feature
     title: "v3.4 — One operator, one name: stop leaking Rust identifiers into the operator ranking (scry#126)"
-    status: proposed
+    status: accepted
     release: v3.4.0
     description: >
       `TrapCheck::op` is documented as "the operator name (e.g. `i32.div_s`)" —

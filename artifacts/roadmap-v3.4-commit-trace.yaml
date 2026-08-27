@@ -3,7 +3,7 @@ artifacts:
   - id: FEAT-091
     type: feature
     title: "v3.4 — Connect the code side to the artifact side: commit traceability, gated forward-only (scry#161)"
-    status: proposed
+    status: accepted
     release: v3.4.0
     description: >
       scry#161 measured that rivet's commit-to-artifact traceability shipped
