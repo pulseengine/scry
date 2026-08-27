@@ -1,0 +1,77 @@
+# v3.4.0 delta-identity addendum — closes FEAT-087's declared residual.
+# Follow-on to FEAT-072 (delta view) and FEAT-087 (second identity bit).
+artifacts:
+  - id: FEAT-090
+    type: feature
+    title: "v3.4 — The delta view carries the second identity bit: a vanish on the body-shape-hash tier is told apart from evidence (FEAT-087 residual)"
+    status: proposed
+    release: v3.4.0
+    description: >
+      FEAT-087 added `Advisory::ident_survives_own_edit` and stated its own
+      residual honestly: the FEAT-072 DELTA VIEW — precisely where a consumer
+      reads "this site vanished" — did not carry or disclose the bit, so a
+      reader of the delta page alone could still mis-read a moved key as a
+      removed site. This feature closes that residual, in scry-viz only
+      (`crates/scry-viz/src/lib.rs`); the analyzer bit is untouched.
+
+      WHAT LANDED. (1) `DeltaRow.ident_survives_own_edit`, mirroring the
+      FEAT-077 `build_local` field's conservative per-site semantics: FALSE
+      when ANY advisory at the site, in EITHER run, does not survive an edit
+      to its own function. (2) The `compute_delta` accumulator carries it with
+      the OPPOSITE polarity to `build_local` — conjunction (`&=` seeded
+      `true`), not disjunction — because it is a POSITIVE predicate: one
+      non-surviving advisory poisons the site, and `|=` would over-claim
+      survival for a mixed site. This polarity inversion was the main hazard
+      and is pinned by a dedicated test (see AC). (3) A summary accessor
+      `Delta::identity_moved_not_evidence()`, named after what the observation
+      LICENSES (nothing) rather than the mechanism (DD-022's standing lesson:
+      consumers read mechanism names as stability rankings): it counts rows
+      present in EXACTLY ONE run whose identity does not survive its own edit
+      — the vanishes/appearances that are NOT evidence a site came or went.
+      (4) The delta page renders those rows as a SEPARATE bucket — section
+      "Identity may have moved — not evidence" — plus a summary line, in the
+      same disclosing voice as the FEAT-077 build-local paragraph; the
+      FEAT-072 no-verdict guard (no discharge vocabulary) extends over the new
+      section and is asserted by the new page test. (5) The delta JSON carries
+      `identity_moved_not_evidence`, and the shared feed schema
+      (`GUIDANCE_SCHEMA_VERSION`) is bumped 4 -> 5 with all doc sites moved in
+      lockstep (constant doc, `render_guidance_json` shape doc and version
+      list, `render_delta_json` doc, and the two tests pinning the literal).
+      The guidance feed's advisory shape is UNCHANGED from v4 — v5 exists for
+      the delta feed's new field.
+
+      WHAT DID NOT LAND, stated rather than implied: the delta JSON remains a
+      SUMMARY-ONLY feed (its FEAT-072 shape has no per-row array), so the
+      per-row bit lives on `DeltaRow` (the library API) and on the HTML page,
+      while the JSON carries the count — the same split FEAT-077 shipped for
+      `build_local`. Adding a rows array to the JSON would be a new feature,
+      not this one.
+    tags: [ai-agent, identity, honesty, delta, fix-verify-loop, scry122, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "RED FIRST, all five tests written against a scaffold that seeded the row bit constant `true` (the pre-fix analog) before any accumulation/rendering existed; each failed on its own assertion, not on a compile error: (1) `feat090_delta_rows_differ_on_ident_survives_own_edit` — 'the unnamed (body-shape-hash) tier's delta row must carry ident_survives_own_edit = false' (lib.rs:2840); (2) `feat090_identity_moved_count_licenses_nothing_and_counts_precisely` — 'assertion `left == right` failed: exactly the vanished body-shape-hash site must be counted / left: 0 / right: 1' (lib.rs:2862); (3) `feat090_mixed_site_accumulates_conjunctively` — 'one non-surviving advisory must poison the site: a disjunctive (`|=`) accumulator would report true here' (lib.rs:2921); (4) `feat090_delta_json_carries_identity_moved_count_and_v5_schema` — 'identity_moved_not_evidence is a new delta field — the schema version must be bumped to 5' (lib.rs:2937); (5) `feat090_delta_page_discloses_identity_moved_bucket` — 'the bucket must exist as its own section, headed by what it means' (lib.rs:2960)."
+        - "Given a module holding a named (tier 1) and an unnamed (tier 4) function, When the module is delta'd against itself, Then the two delta rows DIFFER on `ident_survives_own_edit` — the discriminating oracle; a delta in which they agree is a constant, not a bit. The test carries anti-vacuity preconditions asserting the fixture actually reaches both tiers."
+        - "POLARITY, the main hazard: a site with a MIX of surviving and non-surviving advisories (built synthetically — one `site_key`, two advisories disagreeing on the bit) comes out `false`. A disjunctive accumulator cannot pass this test; measured under mutant M1 below."
+        - "The accessor counts what it licenses, precisely: deleting the unnamed function yields `identity_moved_not_evidence() == 1`; the control — deleting a NAMED function ($other) — yields `only_before >= 1` but count 0, so the accessor is not `only_before()` under a new name."
+        - "Delta JSON carries `\"identity_moved_not_evidence\":1` on the fixture (value pinned from the fixture, never read back from the accessor that emitted it) and `\"guidance_schema\":5`; the delta page renders the bucket as its own section 'Identity may have moved — not evidence', names the tier the way the guidance page does ('id moves on own edit'), and still passes the FEAT-072 no-verdict guard (no 'discharg'/'verified fix'/'obligation closed')."
+        - "MUTATION-CHECKED, six mutants, each applied via a script asserting the replacement matched EXACTLY the expected occurrence count (guard against the silent-no-op mutant class that bit this repo twice); baseline 44 pass. M1 accumulator `&=`->`|=` (1 site): kills 4 (rows_differ, count, MIXED-SITE POLARITY, json) — 40 pass. M2 accumulator seed `true`->`false` (1 site): kills 2 (rows_differ, count) — 42 pass. M3 cross-run combiner `&&`->`||` (1 site): kills 2 (count, json) — 42 pass. M4 accessor predicate `!r.ident_survives_own_edit`->`r.ident_survives_own_edit` (applied to the first of exactly 2 textual occurrences; verified by line number 3166 = the accessor, the HTML bucket at 3484 untouched): kills 2 (count, json) — 42 pass. M5 bucket section heading replaced (1 site): kills 1 (page) — 43 pass. M6 `GUIDANCE_SCHEMA_VERSION` regressed 5->4 (1 site): kills 3 (feat090 json + the two updated schema-pin tests) — 41 pass. Every new test dies under at least one mutant; baseline re-verified green (44) after restore."
+      residual: >
+        On a stripped module (standard in release builds) EVERY function is on
+        the body-shape-hash tier — FEAT-087 measured 10,520 of 10,520
+        obligations on scry's own stripped binary — so EVERY gone/new row
+        lands in this bucket and `identity_moved_not_evidence` equals
+        `only_before + only_after`. That is the correct and useful outcome: it
+        tells a consumer the delta cannot support removal claims AT ALL for
+        that module. It is stated on the page itself ("this delta supports no
+        removal claims at all"), not left to be discovered.
+
+        The bucket surfaces `ident_survives_own_edit` alone; it does not
+        restate the FEAT-077 `build_local` disclosure, and the full consumer
+        conjunction (`!id_build_local && ident_survives_own_edit`) is still
+        applied by the CONSUMER, not adjudicated here — no verdict is emitted,
+        consistent with scry#122 remaining open. The delta JSON stays
+        summary-only (no per-row array); the per-row bit is API + HTML.
+    links:
+      - type: traces-to
+        target: REQ-021

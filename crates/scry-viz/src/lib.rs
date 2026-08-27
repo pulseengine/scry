@@ -3512,7 +3512,11 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
         );
         let shown: Vec<&&DeltaRow> = not_evidence.iter().take(SECTION_ROW_CAP).collect();
         if not_evidence.len() > shown.len() {
-            let _ = write!(s, "<p class=\"muted\">Showing the first {}.</p>", shown.len());
+            let _ = write!(
+                s,
+                "<p class=\"muted\">Showing the first {}.</p>",
+                shown.len()
+            );
         }
         s.push_str("<table><tr><th>site</th><th>fn:pc</th><th>fate</th></tr>");
         for r in shown {
