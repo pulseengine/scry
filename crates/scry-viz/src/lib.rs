@@ -312,11 +312,114 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
     s.push_str("</dl></section>");
 }
 
-/// A scope & limitations block. The copy is intentionally a placeholder — the
-/// maintainer writes the precise soundness claims (what scry proves, its
-/// abstract-domain limits, what a gap/advisory does and does NOT assert). We
-/// only lay out the section so the page has a home for it.
-fn render_scope(s: &mut String, _r: &AnalysisResult) {
+/// FEAT-071 (REQ-021): scry's scope as DATA, not paragraphs.
+///
+/// An agent deciding whether to trust a verdict needs the evidence kind behind
+/// each capability and the enumerated not-proven list. Both the dashboard prose
+/// and the guidance feed are rendered from THESE CONSTANTS, so the manifest and
+/// the page cannot drift apart — which is the failure this replaces: the old
+/// block was hand-written prose whose "what scry does NOT prove" list named
+/// only provenance limits (WasmCert not imported, memory-content model) and
+/// omitted every DOMINANT MEASURED one. On a real module that omission covered
+/// 21.5% of advisories and a 0.6% proven-safe rate.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EvidenceKind {
+    /// Rocq, admit-free, CI-gated.
+    Mechanized,
+    /// Exhaustively checked against a concrete oracle on a value grid, NOT
+    /// machine-proven.
+    GammaSwept,
+    /// Cross-checked against a real run, or cryptographically attested.
+    RunnableAttested,
+}
+
+impl EvidenceKind {
+    /// The machine-readable tag carried in the guidance feed.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EvidenceKind::Mechanized => "mechanized",
+            EvidenceKind::GammaSwept => "gamma-swept",
+            EvidenceKind::RunnableAttested => "runnable-attested",
+        }
+    }
+
+    /// The human phrasing shown on the page. Kept ALONGSIDE the machine tag
+    /// rather than replaced by it: `hero_and_scope_copy_finalized` gates that
+    /// the mechanized-vs-gamma-swept distinction stays legible to a reader, and
+    /// that gate is worth keeping. A manifest a human cannot read is a
+    /// different failure from prose a machine cannot read, not a fix for it.
+    pub fn human(self) -> &'static str {
+        match self {
+            EvidenceKind::Mechanized => "Mechanized (Rocq, admit-free, CI-gated)",
+            EvidenceKind::GammaSwept => "γ-sweep-validated (tested, NOT mechanized)",
+            EvidenceKind::RunnableAttested => "Runnable / attested",
+        }
+    }
+}
+
+/// Each capability and the strongest evidence behind it.
+pub const SCOPE_EVIDENCE: &[(&str, EvidenceKind)] = &[
+    (
+        "abstract-domain lattices (interval, octagon, pentagon, float, known-bits, handle-state, segmentation, polyhedra)",
+        EvidenceKind::Mechanized,
+    ),
+    (
+        "i32.add vs the OFFICIAL two's-complement wrapping semantics, wrap case included (WrapAdd.v)",
+        EvidenceKind::Mechanized,
+    ),
+    (
+        "region, call-graph and reachability analyses",
+        EvidenceKind::Mechanized,
+    ),
+    (
+        "float round-to-nearest arithmetic",
+        EvidenceKind::GammaSwept,
+    ),
+    (
+        "known-bits value transfers at w=32/64 (issue #105)",
+        EvidenceKind::GammaSwept,
+    ),
+    (
+        "polyhedra Fourier-Motzkin entailment and hull over-approximation",
+        EvidenceKind::GammaSwept,
+    ),
+    (
+        "shadow-stack bound, cross-checked against a real wasmtime run",
+        EvidenceKind::RunnableAttested,
+    ),
+    (
+        "release artifacts, cosign-signed",
+        EvidenceKind::RunnableAttested,
+    ),
+];
+
+/// What scry does NOT prove. PROVENANCE limits and PRECISION limits both belong
+/// here: the old prose listed only the former, which read far more capable than
+/// the measurements support.
+pub const SCOPE_NOT_PROVEN: &[&str] = &[
+    "The official-semantics proof covers i32.add, not every transfer; scry models the official semantics DIRECTLY and does not yet IMPORT the canonical WasmCert-Coq mechanization.",
+    "An `if`/`else` region is HAVOC'd by design — scry records an honest gap and proves nothing inside it. This is the single largest practical precision limit, not a corner case.",
+    "An operator outside the modelled set scrubs its whole function to top; every trap check downstream degrades to POTENTIAL-TRAP.",
+    "A disequality cannot be represented in an interval, so a `br_if` guard establishing `x != 0` does NOT refine x — the canonical div-by-zero repair is invisible to the analysis (issue #165).",
+    "Linear-memory content is tracked only for singleton in-bounds i32 accesses; a loop-range fill is soundly forgotten, and any call forgets memory content.",
+    "scry ships a DO-330 / ISO 26262 evidence dossier but is NOT itself a qualified tool; this dashboard makes no TQL / TCL claim.",
+];
+
+/// The measured shape of THIS analysis. The scope block used to ignore its
+/// `AnalysisResult` entirely (the parameter was `_r`), so it said the same thing
+/// about every module. These counts are what make the limitations above
+/// concrete for the module in hand.
+pub fn scope_measured(r: &AnalysisResult) -> Vec<(&'static str, usize)> {
+    let n = |code: &str| r.advisories.iter().filter(|a| a.code == code).count();
+    vec![
+        ("advisories", r.advisories.len()),
+        ("proven-safe", n("proven-safe")),
+        ("unmodeled-control-flow", n("unmodeled-control-flow")),
+        ("unsupported-op", n("unsupported-op")),
+    ]
+}
+
+fn render_scope(s: &mut String, r: &AnalysisResult) {
     s.push_str(
         "<section id=\"scope\"><h2>Scope &amp; limitations</h2>\
          <p>scry is a <strong>sound</strong> abstract interpreter: every reported \
@@ -325,34 +428,36 @@ fn render_scope(s: &mut String, _r: &AnalysisResult) {
          <strong>⊤ (\"top\") and POTENTIAL-TRAP mean \"scry could not decide\", never \
          \"safe\"</strong>. An analysis <em>gap</em> records where a domain gave up; \
          it asserts nothing about the code, only that scry was imprecise there.</p>\
-         <h3>Evidence kinds (strongest first)</h3>\
-         <ul>\
-         <li><strong>Mechanized (Rocq, admit-free, CI-gated):</strong> the \
-         abstract-domain lattices and core transfers — interval soundness over ℤ; \
-         <code>i32.add</code> vs the OFFICIAL two's-complement wrapping semantics \
-         including the wrap case (<code>WrapAdd.v</code>); region, call-graph, \
-         reachability, octagon, pentagon, float-lattice, known-bits, handle-state, \
-         linear-memory segmentation, and convex-polyhedra <em>lattice</em> proofs.</li>\
-         <li><strong>γ-sweep-validated (tested, NOT mechanized):</strong> the harder \
-         transfer algorithms — float round-to-nearest arithmetic, known-bits value \
-         transfers at w=32/64 (tracked: issue #105), and the polyhedra \
-         Fourier–Motzkin entailment + hull over-approximation. Exhaustively checked \
-         against a concrete oracle on a value grid, but not machine-proven.</li>\
-         <li><strong>Runnable / attested:</strong> the shadow-stack bound is \
-         cross-checked against a real wasmtime run; releases are cosign-signed.</li>\
-         </ul>\
-         <h3>What scry does NOT (yet) prove / where it is conservative</h3>\
-         <ul>\
-         <li>It models the official Wasm semantics <em>directly</em>; it does not \
-         yet <em>import</em> the canonical WasmCert-Coq mechanization, and the \
-         official-semantics proof so far covers <code>i32.add</code>, not every \
-         transfer.</li>\
-         <li>Linear-memory content is tracked only for singleton in-bounds i32 \
-         accesses; a loop-range fill is soundly forgotten (⊤), and any call forgets \
-         memory content.</li>\
-         <li>scry ships a DO-330 / ISO 26262 evidence <em>dossier</em> but is not \
-         itself a qualified tool — this dashboard makes no TQL / TCL claim.</li>\
-         </ul></section>",
+         <h3>Evidence kinds (strongest first)</h3><ul>",
+    );
+    for kind in [
+        EvidenceKind::Mechanized,
+        EvidenceKind::GammaSwept,
+        EvidenceKind::RunnableAttested,
+    ] {
+        let _ = write!(
+            s,
+            "<li><strong>{}</strong> <code>{}</code><ul>",
+            kind.human(),
+            kind.as_str()
+        );
+        for (name, _) in SCOPE_EVIDENCE.iter().filter(|(_, k)| *k == kind) {
+            let _ = write!(s, "<li>{}</li>", esc(name));
+        }
+        s.push_str("</ul></li>");
+    }
+    s.push_str("</ul><h3>What scry does NOT prove</h3><ul>");
+    for item in SCOPE_NOT_PROVEN {
+        let _ = write!(s, "<li>{}</li>", esc(item));
+    }
+    s.push_str("</ul><h3>Measured on THIS module</h3><ul>");
+    for (label, n) in scope_measured(r) {
+        let _ = write!(s, "<li><code>{label}</code>: {n}</li>");
+    }
+    s.push_str(
+        "</ul><p>These counts are the limitations above, made concrete: a \
+         precision gap is not a defect in the code, and a low proven count is \
+         a statement about scry, not about the module.</p></section>",
     );
 }
 
@@ -1485,13 +1590,20 @@ fn esc(raw: &str) -> String {
 /// tier is the whole population — measured 10,520 of 10,520 obligations on
 /// scry's own binary.
 ///
+/// v6 (FEAT-071) adds `scope`: the evidence kind behind each capability, the
+/// enumerated not-proven list, and the measured shape of THIS analysis. The
+/// page and the feed are rendered from the SAME constants, so a limitation
+/// cannot be stated on one and omitted from the other — which is the drift it
+/// replaces, the old page-only prose having listed provenance limits and named
+/// none of the dominant measured ones.
+///
 /// v5 (FEAT-090, scry#122 item 2 follow-on) adds `identity_moved_not_evidence`
 /// to the DELTA feed ([`render_delta_json`]): the count of sites present in
 /// exactly one run whose identity does not survive its own edit — rows whose
 /// vanish/appear is NOT evidence the site came or went. The guidance feed's
 /// advisory shape is UNCHANGED from v4; the version is shared by both feeds,
 /// so it moves once.
-pub const GUIDANCE_SCHEMA_VERSION: u32 = 5;
+pub const GUIDANCE_SCHEMA_VERSION: u32 = 6;
 
 /// Serialize the actionable findings as a machine-consumable JSON document — the
 /// feed an AI-agent consumer reads instead of scraping the (now capped) HTML.
@@ -1530,6 +1642,37 @@ pub fn render_guidance_json(result: &AnalysisResult) -> String {
         json_esc(&result.invariants.module_sha256),
         json_esc(&result.invariants.schema),
     );
+    // FEAT-071: the scope manifest, emitted from the SAME constants the page
+    // renders from, so the two cannot drift. The old page-only prose listed
+    // provenance limits and omitted every dominant measured one.
+    s.push_str("\"scope\":{\"evidence\":[");
+    for (i, (name, kind)) in SCOPE_EVIDENCE.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let _ = write!(
+            s,
+            "{{\"capability\":\"{}\",\"kind\":\"{}\"}}",
+            json_esc(name),
+            kind.as_str()
+        );
+    }
+    s.push_str("],\"not_proven\":[");
+    for (i, item) in SCOPE_NOT_PROVEN.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let _ = write!(s, "\"{}\"", json_esc(item));
+    }
+    s.push_str("],\"measured\":{");
+    for (i, (label, n)) in scope_measured(result).into_iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let _ = write!(s, "\"{label}\":{n}");
+    }
+    s.push_str("}},");
+
     // advisories
     s.push_str("\"advisories\":[");
     for (i, a) in result.advisories.iter().enumerate() {
@@ -1696,6 +1839,21 @@ mod tests {
     fn analyze_wat(src: &str) -> AnalysisResult {
         let bytes = wat::parse_str(src).expect("assemble wat");
         analyze(bytes, AnalysisConfig::default()).expect("analyze")
+    }
+
+    /// A schema pin as EQUALITY rots on every unrelated bump — three of these
+    /// broke at once when FEAT-071 added `scope`, none of which had anything to
+    /// do with the field they were guarding. As a LOWER BOUND tied to the
+    /// field's presence it still fails if a new field ships WITHOUT a bump,
+    /// which is the property FEAT-068 actually asks for. It is not vacuous:
+    /// the version is parsed from the document, not compared to the constant
+    /// it was rendered from (the class that shipped `scry 0.0.0`, scry#152).
+    fn schema_at_least(json: &str, min: u32) -> bool {
+        json.split("\"guidance_schema\":")
+            .nth(1)
+            .and_then(|t| t.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|d| d.parse::<u32>().ok())
+            .is_some_and(|v| v >= min)
     }
 
     #[test]
@@ -2679,7 +2837,7 @@ mod tests {
         let r = mixed_tier_result();
         let json = render_guidance_json(&r);
         assert!(
-            json.contains("\"guidance_schema\":5"),
+            schema_at_least(&json, 5),
             "the feed must carry an explicit schema version (bumped to 5 by \
              FEAT-090's delta field; the advisory shape itself is v4's)"
         );
@@ -2762,7 +2920,7 @@ mod tests {
         );
         let json = render_guidance_json(&r);
         assert!(
-            json.contains("\"guidance_schema\":5"),
+            schema_at_least(&json, 5),
             "the schema version moves in lockstep with the feeds — 4 added \
              ident_survives_own_edit, 5 added the FEAT-090 delta field"
         );
@@ -2946,7 +3104,7 @@ mod tests {
             &analyze_wat(NAMED_ONLY),
         ));
         assert!(
-            json.contains("\"guidance_schema\":5"),
+            schema_at_least(&json, 5),
             "identity_moved_not_evidence is a new delta field — the schema \
              version must be bumped to 5"
         );
@@ -2982,6 +3140,60 @@ mod tests {
             assert!(
                 !html.contains(banned),
                 "the delta page must not claim {banned:?} while scry#122 is open"
+            );
+        }
+    }
+    /// FEAT-071 (REQ-021): the scope must reach an agent as DATA, and the page
+    /// and the feed must be generated from ONE source so they cannot drift.
+    ///
+    /// The drift this exists to prevent is measured, not hypothetical: the old
+    /// hand-written block listed only PROVENANCE limits (WasmCert not imported,
+    /// memory-content model) and named none of the DOMINANT MEASURED ones. On a
+    /// real module that omission covered 15.6% `unmodeled-control-flow` plus
+    /// 5.9% `unsupported-op`, against a 0.6% proven-safe rate — an agent reading
+    /// it would have formed a materially more optimistic picture than the
+    /// numbers support.
+    #[test]
+    fn feat071_scope_reaches_the_feed_as_data_from_the_same_source_as_the_page() {
+        let r = analyze_wat("(module (func (export \"run\") nop))");
+        let json = render_guidance_json(&r);
+        let html = render_html(&r, "scope");
+
+        assert!(
+            !SCOPE_NOT_PROVEN.is_empty() && !SCOPE_EVIDENCE.is_empty(),
+            "non-vacuity: the manifest must have content to check"
+        );
+        assert!(
+            json.contains("\"scope\""),
+            "the feed must carry a scope manifest, not leave scope to the page"
+        );
+        // ONE SOURCE: every not-proven item must appear in BOTH surfaces. A
+        // sentence present on the page and absent from the feed is exactly the
+        // drift this feature replaces.
+        for item in SCOPE_NOT_PROVEN {
+            let head = &item[..30.min(item.len())];
+            assert!(
+                json.contains(head),
+                "not-proven item missing from the FEED: {head:?}"
+            );
+            assert!(
+                html.contains(head),
+                "not-proven item missing from the PAGE: {head:?}"
+            );
+        }
+        // Every evidence kind must be machine-readable in the feed.
+        for kind in ["mechanized", "gamma-swept", "runnable-attested"] {
+            assert!(
+                json.contains(&format!("\"{kind}\"")),
+                "evidence kind {kind:?} must be a machine-readable tag in the feed"
+            );
+        }
+        // The PRECISION limits specifically — the ones the old prose omitted.
+        for probe in ["if`/`else", "disequality", "outside the modelled set"] {
+            assert!(
+                SCOPE_NOT_PROVEN.iter().any(|i| i.contains(probe)),
+                "the measured precision limit {probe:?} must be enumerated, not \
+                 left to prose"
             );
         }
     }
