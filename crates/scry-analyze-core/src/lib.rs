@@ -73,6 +73,7 @@
 
 extern crate alloc;
 
+use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -1272,6 +1273,37 @@ struct FuncCtx {
     /// this function's walk, drained by the caller in the authoritative pass
     /// (same as `gaps`). One entry per applicable trap condition per div/rem.
     trap_checks: Vec<TrapCheck>,
+    /// FEAT-089: locals known NON-ZERO on the current path — the narrow
+    /// predicate fact an interval cannot hold (`!= 0` is a hole in the middle
+    /// of a range). Established ONLY on the fall-through edge of a
+    /// [`Interp::try_guard_brif`] guard whose taken edge pins the local to
+    /// `== 0` (the canonical `local.get L; i32.eqz; br_if D` div-by-zero
+    /// repair), and consulted ONLY by the div/rem trap check
+    /// ([`classify_div_trap`]) — a targeted fact feeding one decision, not a
+    /// general domain (same shape as FEAT-084's known-bits reduction).
+    ///
+    /// SOUNDNESS — a fact that survives a write is a FALSE PROOF, so the
+    /// invalidation is over-approximated. A fact dies on:
+    ///   * `local.set` / `local.tee` to its local (the only wasm writes to a
+    ///     local), including the tee the guard peephole applies itself;
+    ///   * ANY call (`call` / `call_indirect`): all facts are cleared. Wasm
+    ///     locals are callee-inaccessible, so this is conservative rather
+    ///     than semantically forced — but cheap and safe;
+    ///   * every region boundary: cleared on leaving a `block`, at the start
+    ///     of EVERY `loop` fixpoint pass (a back-edge must never carry a
+    ///     fact) and on leaving the loop, and on entering a `havoc_region`
+    ///     (`if` / unmodelled shapes — the body is not interpreted);
+    ///   * any degrade ([`Self::scrub_to_top`]).
+    ///
+    /// [`Label`]/`BreakState` deliberately carry NO facts, so a state merged
+    /// in from a branch edge can never contribute one; combined with the
+    /// region-boundary clearing, a join can only ever MEET facts (drop them),
+    /// never union them. A fact therefore survives only straight-line
+    /// interpret_op-processed ops (none of which write locals except the two
+    /// killers above) and a plain `br_if` FALL-THROUGH (path narrowing —
+    /// br_if writes nothing, and its taken edge goes through a fact-free
+    /// label).
+    nonzero_locals: BTreeSet<u32>,
 }
 
 impl FuncCtx {
@@ -1285,6 +1317,7 @@ impl FuncCtx {
             degraded: false,
             gaps: Vec::new(),
             trap_checks: Vec::new(),
+            nonzero_locals: BTreeSet::new(),
         }
     }
 
@@ -1309,6 +1342,8 @@ impl FuncCtx {
         // FEAT-058: a degrade means we can no longer track control flow, so any
         // subsequent store could land anywhere — forget all memory content.
         self.mem = scry_segment::top();
+        // FEAT-089: predicate facts degrade with everything else.
+        self.nonzero_locals.clear();
         self.degraded = true;
     }
 }
@@ -2513,7 +2548,7 @@ pub fn analyze(
         compute_handle_findings(&defined_funcs, &import_func_meta, import_func_count);
     // FEAT-059: synthesise the sound findings into ranked remediation guidance
     // (pure synthesis over the results above; borrows before they are moved).
-    let mut advisories = compute_advisories(
+    let (mut advisories, advisory_id_codes) = compute_advisories(
         &gaps,
         &trap_checks,
         &handle_findings,
@@ -2522,7 +2557,12 @@ pub fn analyze(
     );
     // FEAT-064: give every advisory an identity that survives the next edit, so
     // a consumer comparing two runs can tell DISCHARGED from MOVED.
-    let func_identities = stamp_obligation_ids(&mut advisories, &defined_funcs, &function_meta);
+    let func_identities = stamp_obligation_ids(
+        &mut advisories,
+        &advisory_id_codes,
+        &defined_funcs,
+        &function_meta,
+    );
 
     Ok(AnalysisResult {
         invariants,
@@ -3360,9 +3400,16 @@ fn is_module_scoped(code: &str) -> bool {
 /// build-local, yet body-independent, so it DOES survive its own edit.
 fn stamp_obligation_ids(
     advisories: &mut [Advisory],
+    id_codes: &[Option<&'static str>],
     defined_funcs: &[DefinedFunc<'_>],
     function_meta: &[FunctionMeta],
 ) -> Vec<FuncIdentity> {
+    // FEAT-089: `id_codes` is index-parallel to `advisories` (built together
+    // in `compute_advisories`); `Some(code)` overrides `Advisory::code` as the
+    // obligation-identity input, so a `proven-safe` advisory keeps the id of
+    // the obligation it discharges. A `None`/missing entry falls back to the
+    // advisory's own code — the pre-FEAT-089 behaviour.
+    debug_assert_eq!(advisories.len(), id_codes.len());
     for a in advisories.iter_mut().filter(|a| is_module_scoped(&a.code)) {
         a.obligation_id = obligation_id_of("<module>", "", "<module>", 0, &a.code);
         a.site_key = site_key_of("<module>", "", "<module>", 0);
@@ -3421,9 +3468,10 @@ fn stamp_obligation_ids(
             body_shape_hash: body_hash,
         });
         let keys = structural_keys(&f.ops);
-        for a in advisories
+        for (i, a) in advisories
             .iter_mut()
-            .filter(|a| a.func_index == f.abs_index && !is_module_scoped(&a.code))
+            .enumerate()
+            .filter(|(_, a)| a.func_index == f.abs_index && !is_module_scoped(&a.code))
         {
             if let Some((path, ordinal)) = keys.get(a.pc as usize) {
                 let kind = f
@@ -3431,7 +3479,9 @@ fn stamp_obligation_ids(
                     .get(a.pc as usize)
                     .map(op_report_name)
                     .unwrap_or_else(|| a.code.clone());
-                a.obligation_id = obligation_id_of(&ident, path, &kind, *ordinal, &a.code);
+                let id_code = id_codes.get(i).copied().flatten();
+                a.obligation_id =
+                    obligation_id_of(&ident, path, &kind, *ordinal, id_code.unwrap_or(&a.code));
                 a.site_key = site_key_of(&ident, path, &kind, *ordinal);
                 a.group_key = group_key_of(&ident, path, &kind);
                 a.id_build_local = build_local;
@@ -3571,8 +3621,11 @@ impl VerifyReport {
 /// `before` run, (b) every regression of a previously PROVEN-SAFE site, and
 /// (c) every obligation of the `after` run at a site with no prior advisory
 /// (`introduced`). Matching is by [`Advisory::site_key`], NEVER by
-/// `obligation_id` — the id embeds the advisory code, which changes on the
-/// very open→safe transition being detected.
+/// `obligation_id` — several obligations share a site, and while FEAT-089
+/// made a trap obligation's id survive its own open→proven flip (a
+/// `proven-safe` advisory is keyed by the obligation code it discharges),
+/// every OTHER advisory's id still embeds its surfaced code, so the site is
+/// the one join key that is stable across every transition.
 ///
 /// `Discharged` is a certainty claim, guarded like the analyzer guards
 /// PROVEN-SAFE. It requires ALL of:
@@ -4119,14 +4172,25 @@ pub fn verify_against(before: &AnalysisResult, after: &AnalysisResult) -> Verify
     VerifyReport { verdicts }
 }
 
+/// Returns the advisories PLUS a parallel per-advisory IDENTITY code
+/// (FEAT-089): `Some(code)` where the advisory's identity must be keyed by an
+/// obligation code that differs from its surfaced `code`, `None` to key by
+/// `Advisory::code` itself. Today only the `proven-safe` advisories need this:
+/// their identity is the OBLIGATION they discharge (`div-by-zero` /
+/// `signed-overflow` / `out-of-bounds`), not the verdict — so the obligation's
+/// `obligation_id` is STABLE across the open→proven flip, which is what lets
+/// an adjudicator address "the div-by-zero obligation at this site" before AND
+/// after a fix. The vectors are index-parallel by construction; every `push`
+/// to one pushes to the other.
 fn compute_advisories(
     gaps: &[Gap],
     trap_checks: &[TrapCheck],
     handle_findings: &[HandleFinding],
     stack_usage: &StackUsage,
     memory_size_bytes: u64,
-) -> Vec<Advisory> {
+) -> (Vec<Advisory>, Vec<Option<&'static str>>) {
     let mut out: Vec<Advisory> = Vec::new();
+    let mut id_codes: Vec<Option<&'static str>> = Vec::new();
 
     // (a) DefiniteFault — handle-lifetime bugs scry PROVED.
     for h in handle_findings {
@@ -4162,6 +4226,7 @@ fn compute_advisories(
             id_build_local: false,
             ident_survives_own_edit: true,
         });
+        id_codes.push(None);
     }
 
     // (b) UnprovenObligation / (d) LeverageableFact — from trap verdicts.
@@ -4206,6 +4271,8 @@ fn compute_advisories(
             id_build_local: false,
             ident_survives_own_edit: true,
                 });
+                // The surfaced code IS the obligation code here.
+                id_codes.push(None);
             }
             TrapVerdict::ProvenSafe => {
                 let trap = match t.kind {
@@ -4237,6 +4304,14 @@ fn compute_advisories(
             id_build_local: false,
             ident_survives_own_edit: true,
                 });
+                // FEAT-089: the identity of a proven-safe fact is the
+                // OBLIGATION it discharges, so the id survives the verdict
+                // flip ("changes the verdict, never the identity").
+                id_codes.push(Some(match t.kind {
+                    TrapKind::DivByZero => "div-by-zero",
+                    TrapKind::SignedOverflow => "signed-overflow",
+                    TrapKind::OutOfBounds => "out-of-bounds",
+                }));
             }
         }
     }
@@ -4282,6 +4357,7 @@ fn compute_advisories(
             id_build_local: false,
             ident_survives_own_edit: true,
         });
+        id_codes.push(None);
     }
 
     // (b′) UnprovenObligation — an unbounded worst-case shadow stack.
@@ -4305,10 +4381,14 @@ fn compute_advisories(
             id_build_local: false,
             ident_survives_own_edit: true,
         });
+        id_codes.push(None);
     }
 
-    out.sort_by_key(|a| (a.class.rank(), a.func_index, a.pc));
-    out
+    // Sort advisories and identity codes TOGETHER — the two vectors are
+    // index-parallel and a lone `out.sort` would silently re-key identities.
+    let mut pairs: Vec<(Advisory, Option<&'static str>)> = out.into_iter().zip(id_codes).collect();
+    pairs.sort_by_key(|(a, _)| (a.class.rank(), a.func_index, a.pc));
+    pairs.into_iter().unzip()
 }
 
 /// Pop two companion operands, apply a binary transfer when both are modelled
@@ -4996,6 +5076,17 @@ impl Interp<'_, '_> {
             }
 
             // ── Straight-line operator (interpret_op) ───────────────
+            // FEAT-089 look-behind: is the top of stack the freshly-read value
+            // of a local known non-zero on this path? Sound because whenever
+            // `ops[pc-1]` is a `local.get`, control reached `pc` ONLY by
+            // executing it straight-line (`pc += 1`): every jump into `pc`
+            // lands after a `block`/`loop`/`end`/`br_if` — never after a
+            // `local.get` — and `local.get` writes nothing, so the fact that
+            // held at `pc-1` still holds at `pc`. Consulted only by the
+            // div/rem trap check; recomputed fresh for every op (no staleness).
+            let divisor_from_nonzero_local = pc > 0
+                && matches!(&self.ops[pc - 1], Operator::LocalGet { local_index }
+                    if ctx.nonzero_locals.contains(local_index));
             let stop = matches!(
                 interpret_op(
                     &self.ops[pc],
@@ -5007,6 +5098,7 @@ impl Interp<'_, '_> {
                     self.module_ctx,
                     self.call_graph,
                     self.depth,
+                    divisor_from_nonzero_local,
                 )?,
                 StepOutcome::Stop
             );
@@ -5138,6 +5230,10 @@ impl Interp<'_, '_> {
         if is_tee {
             // Consume the tee'd value and apply the assignment this peephole
             // is skipping; forget the local's relations (see the doc comment).
+            // FEAT-089: the tee is a WRITE — the local's non-zero fact dies
+            // here (the qualifying fall-through below may re-establish it,
+            // and then it speaks about the freshly-assigned value).
+            ctx.nonzero_locals.remove(&local);
             let _ = ctx.operand_stack.pop();
             ctx.locals[local as usize] = AbstractValue::I32Interval(iv);
             // Apply the octagon side of the assignment this peephole skips.
@@ -5163,6 +5259,16 @@ impl Interp<'_, '_> {
 
         // Not-taken edge (guard false) → fall through.
         ctx.locals[local as usize] = AbstractValue::I32Interval(not_taken_iv);
+        // FEAT-089: a guard whose TAKEN edge pins the local to `== 0`
+        // (`i32.eqz; br_if` or `i32.const 0; i32.eq; br_if`) licenses
+        // `local != 0` on this fall-through edge — the disequality the
+        // interval lattice cannot hold (`refine_interval` returns `iv`
+        // untouched for exactly this case). Carry it as a narrow predicate
+        // fact for the div/rem trap check. The dual `Ne` shape needs no fact:
+        // its fall-through pins the interval to `[0,0]` above.
+        if matches!(op, GuardOp::Eq) && c == 0 {
+            ctx.nonzero_locals.insert(local);
+        }
         Some(next)
     }
 
@@ -5274,6 +5380,13 @@ impl Interp<'_, '_> {
                 // Dead code follows; leave locals as a sound over-approx.
             }
         }
+        // FEAT-089: non-zero facts never cross a region boundary outward. The
+        // post-block state may be a JOIN with break edges whose paths did not
+        // establish the fact (labels carry no facts), so the only sound merge
+        // is to drop them all. Conservative for the pure fall-through case
+        // too — a deliberate simplicity-over-precision trade: the invariant
+        // "no fact survives an `end`" is auditable at a glance.
+        ctx.nonzero_locals.clear();
         Ok(Flow::Fall)
     }
 
@@ -5327,6 +5440,12 @@ impl Interp<'_, '_> {
             ctx.octagon = header_oct.clone();
             ctx.mem = header_mem.clone();
             ctx.operand_stack = saved_stack.clone();
+            // FEAT-089: a loop pass starts from `entry ⊔ back-edges`, and a
+            // back-edge must NEVER carry a non-zero fact into the next
+            // iteration — nor may a pre-loop fact leak into the body (the
+            // header covers back-edge states too). Cleared at EVERY pass
+            // start (widening, narrowing, and final emission pass alike).
+            ctx.nonzero_locals.clear();
             labels.push(Label { breaks: None });
             // Suppress point emission until the header has converged; the
             // final pass below emits the fixpoint state.
@@ -5387,6 +5506,12 @@ impl Interp<'_, '_> {
             ctx.octagon = header_oct.clone();
             ctx.mem = header_mem.clone();
             ctx.operand_stack = saved_stack.clone();
+            // FEAT-089: a loop pass starts from `entry ⊔ back-edges`, and a
+            // back-edge must NEVER carry a non-zero fact into the next
+            // iteration — nor may a pre-loop fact leak into the body (the
+            // header covers back-edge states too). Cleared at EVERY pass
+            // start (widening, narrowing, and final emission pass alike).
+            ctx.nonzero_locals.clear();
             labels.push(Label { breaks: None });
             let _ = self.seq(start, end, ctx, labels, false)?;
             let label = labels.pop().expect("pushed above");
@@ -5420,6 +5545,8 @@ impl Interp<'_, '_> {
         ctx.octagon = header_oct.clone();
         ctx.mem = header_mem.clone();
         ctx.operand_stack = saved_stack.clone();
+        // FEAT-089: same clear as every other pass start (see above).
+        ctx.nonzero_locals.clear();
         labels.push(Label { breaks: None });
         let final_flow = self.seq(start, end, ctx, labels, emit)?;
         let final_label = labels.pop().expect("pushed above");
@@ -5445,6 +5572,9 @@ impl Interp<'_, '_> {
         ctx.octagon = post_oct;
         ctx.mem = post_mem;
         ctx.operand_stack = saved_stack;
+        // FEAT-089: the post-loop state may join several exit paths; no
+        // non-zero fact crosses the region boundary outward.
+        ctx.nonzero_locals.clear();
         Ok(())
     }
 
@@ -5455,6 +5585,10 @@ impl Interp<'_, '_> {
         if matches!(self.ops[opener], Operator::If { .. }) {
             let _ = ctx.operand_stack.pop();
         }
+        // FEAT-089: the region body is not interpreted, so any write inside it
+        // is invisible to the per-op fact killers — drop EVERY non-zero fact,
+        // not just the write-set's (over-approximate the invalidation).
+        ctx.nonzero_locals.clear();
         let written = region_write_set(self.ops, opener + 1, end);
         // FEAT-040 / FEAT-043 / scry#121: an unmodelled control-flow region is
         // ALWAYS worth a gap. `havoc_region` does not interpret the body at all,
@@ -6227,6 +6361,7 @@ fn interpret_op(
     module_ctx: &ModuleCtx<'_>,
     call_graph: &mut Vec<CallEdge>,
     depth: u32,
+    divisor_from_nonzero_local: bool,
 ) -> Result<StepOutcome, AnalyzeError> {
     let default_region = module_ctx.default_region;
     if ctx.degraded {
@@ -6292,6 +6427,9 @@ fn interpret_op(
             ctx.operand_stack.push(v);
         }
         Operator::LocalSet { local_index } => {
+            // FEAT-089: a write kills the local's non-zero fact — a fact that
+            // survives a write is a false proof.
+            ctx.nonzero_locals.remove(local_index);
             let v = ctx.operand_stack.pop().ok_or_else(|| {
                 AnalyzeError::Internal(format!(
                     "func {func_index} pc {pc}: local.set on empty stack"
@@ -6307,6 +6445,8 @@ fn interpret_op(
             *slot = v;
         }
         Operator::LocalTee { local_index } => {
+            // FEAT-089: a tee is a write exactly like a set.
+            ctx.nonzero_locals.remove(local_index);
             let v = ctx.operand_stack.last().map(clone_value).ok_or_else(|| {
                 AnalyzeError::Internal(format!(
                     "func {func_index} pc {pc}: local.tee on empty stack"
@@ -6440,6 +6580,11 @@ fn interpret_op(
         }
         // ── v0.4 call-graph (FEAT-006) + v0.5 summaries (FEAT-007) ──
         Operator::Call { function_index } => {
+            // FEAT-089: clear ALL non-zero facts across a call. Wasm locals
+            // are callee-inaccessible, so this is conservative rather than
+            // semantically forced — but over-approximating invalidation is
+            // sound and under-approximating it is a false proof (AC3).
+            ctx.nonzero_locals.clear();
             handle_call(
                 ctx,
                 func_index,
@@ -6457,6 +6602,8 @@ fn interpret_op(
             table_index,
             ..
         } => {
+            // FEAT-089: same conservative clear as for `call` above.
+            ctx.nonzero_locals.clear();
             handle_call_indirect(
                 ctx,
                 func_index,
@@ -6553,7 +6700,15 @@ fn interpret_op(
         | Operator::I64RemS
         | Operator::I64RemU => {
             let (name, width, is_div_s) = div_op_info(op).expect("div op");
-            classify_div_trap(ctx, func_index, pc, name, width, is_div_s);
+            classify_div_trap(
+                ctx,
+                func_index,
+                pc,
+                name,
+                width,
+                is_div_s,
+                divisor_from_nonzero_local,
+            );
         }
         other => {
             // Anything outside the supported set: emit a fallback
@@ -6850,6 +7005,16 @@ fn is_memory_access(op: &Operator<'_>) -> bool {
 /// operand excludes nothing, so it falls to `PotentialTrap` — the sound
 /// default. Remainder ops never trap on overflow, so `is_div_s` is false for
 /// them and no `SignedOverflow` verdict is produced.
+///
+/// FEAT-089: `divisor_from_nonzero_local` is the caller's (i.e. [`Interp::seq`]'s)
+/// look-behind — true iff the op immediately before this div is `local.get L`
+/// with `L ∈ ctx.nonzero_locals`, in which case the value on top of the stack
+/// IS local `L`'s current value and is known non-zero even though its interval
+/// carries no hole. It clears ONLY the div-by-zero obligation, and only for
+/// the 32-bit ops (the fact is established by an i32 guard; a valid module
+/// cannot feed an i32 local to an i64 div, but the width gate makes the claim
+/// independent of validation). It is deliberately NOT consulted for the
+/// signed-overflow obligation: `!= 0` excludes neither `INT_MIN` nor `-1`.
 fn classify_div_trap(
     ctx: &mut FuncCtx,
     func_index: u32,
@@ -6857,6 +7022,7 @@ fn classify_div_trap(
     op_name: &str,
     width: u32,
     is_div_s: bool,
+    divisor_from_nonzero_local: bool,
 ) {
     // Pop divisor (top) then dividend (below). Defensive on a short stack:
     // a missing operand is treated as ⊤ (→ PotentialTrap).
@@ -6865,7 +7031,7 @@ fn classify_div_trap(
     let div_iv = div_operand_interval(divisor.as_ref(), width);
     let dvd_iv = div_operand_interval(dividend.as_ref(), width);
 
-    let dbz = if interval_excludes(div_iv, 0) {
+    let dbz = if interval_excludes(div_iv, 0) || (divisor_from_nonzero_local && width == 32) {
         TrapVerdict::ProvenSafe
     } else {
         TrapVerdict::PotentialTrap
@@ -11753,6 +11919,287 @@ mod tests {
         );
     }
 
+    // ─────────────── FEAT-089 (REQ-021): non-zero facts ───────────────
+
+    /// FEAT-089 helper: the single `DivByZero` trap check of a one-div
+    /// fixture, with non-vacuity built in — panics if the fixture never
+    /// reached a div (a claim about an empty set is not a claim).
+    fn the_div_by_zero_check(r: &AnalysisResult) -> &TrapCheck {
+        let v: alloc::vec::Vec<&TrapCheck> = r
+            .trap_checks
+            .iter()
+            .filter(|t| t.kind == TrapKind::DivByZero)
+            .collect();
+        assert_eq!(
+            v.len(),
+            1,
+            "fixture must reach exactly one classified div/rem; got {v:?}"
+        );
+        v[0]
+    }
+
+    /// FEAT-089 AC1 + AC2 (primary): the canonical div-by-zero repair —
+    /// `br_if` on `i32.eqz` — establishes `divisor != 0` on the FALL-THROUGH
+    /// edge, and the div/rem trap check must consult that fact and report
+    /// PROVEN-SAFE for the divisor-zero obligation. Differential against the
+    /// unguarded twin (the FEAT-064 AC3 BEFORE fixture) so the test cannot
+    /// pass vacuously: the guard, and nothing else, is what flips the verdict.
+    #[test]
+    fn feat089_a_eqz_guard_fallthrough_proves_div_by_zero_safe() {
+        const UNGUARDED: &str = "(module (func $d (export \"d\") (param i32) (result i32) (local $r i32) \
+             block i32.const 10 local.get 0 i32.div_s local.set $r end \
+             local.get $r))";
+        const GUARDED: &str = "(module (func $d (export \"d\") (param i32) (result i32) (local $r i32) \
+             block local.get 0 i32.eqz br_if 0 \
+             i32.const 10 local.get 0 i32.div_s local.set $r end \
+             local.get $r))";
+
+        // Control / non-vacuity: without the guard the obligation stands.
+        let before = analyze_default(UNGUARDED);
+        assert_eq!(
+            the_div_by_zero_check(&before).verdict,
+            TrapVerdict::PotentialTrap,
+            "precondition: the unguarded twin must raise the obligation"
+        );
+        assert!(
+            before.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "precondition: the unguarded twin must raise a div-by-zero advisory"
+        );
+
+        // The fix: the fall-through of `local.get 0; i32.eqz; br_if 0`
+        // licenses `local 0 != 0`, so the div is proven safe.
+        let after = analyze_default(GUARDED);
+        assert_eq!(
+            the_div_by_zero_check(&after).verdict,
+            TrapVerdict::ProvenSafe,
+            "the eqz-guard fall-through licenses divisor != 0; the trap check \
+             must consult the non-zero fact"
+        );
+        assert!(
+            !after.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "the guarded site must no longer raise div-by-zero; got {:?}",
+            after
+                .advisories
+                .iter()
+                .map(|a| &a.code)
+                .collect::<alloc::vec::Vec<_>>()
+        );
+        assert!(
+            after
+                .advisories
+                .iter()
+                .any(|a| a.code == "proven-safe" && a.detail.contains("divide-by-zero")),
+            "the proof must surface as a LeverageableFact advisory"
+        );
+    }
+
+    /// FEAT-089 AC4: `!= 0` says nothing about `INT_MIN / -1`. At a site where
+    /// BOTH obligations stand (⊤ dividend, ⊤ divisor), the non-zero fact must
+    /// clear the divisor-zero obligation ONLY — the signed-overflow obligation
+    /// at the same pc must be UNAFFECTED. Clearing both is over-claiming.
+    #[test]
+    fn feat089_a_signed_overflow_is_unaffected_by_the_nonzero_fact() {
+        let r = analyze_default(
+            "(module (func $q (export \"q\") (param i32 i32) (result i32) (local $r i32) \
+               block local.get 1 i32.eqz br_if 0 \
+               local.get 0 local.get 1 i32.div_s local.set $r end \
+               local.get $r))",
+        );
+        // Non-vacuity: both obligations must exist at the SAME div site.
+        let dbz = the_div_by_zero_check(&r);
+        let so = r
+            .trap_checks
+            .iter()
+            .find(|t| t.kind == TrapKind::SignedOverflow)
+            .expect("i32.div_s must also be classified for signed overflow");
+        assert_eq!(
+            (dbz.func_index, dbz.pc),
+            (so.func_index, so.pc),
+            "the two obligations under test must be at one site"
+        );
+        assert_eq!(
+            dbz.verdict,
+            TrapVerdict::ProvenSafe,
+            "divisor-zero: cleared by the guard's non-zero fact"
+        );
+        assert_eq!(
+            so.verdict,
+            TrapVerdict::PotentialTrap,
+            "signed overflow: `!= 0` excludes neither INT_MIN nor -1 — this \
+             obligation must STAND"
+        );
+        assert!(
+            r.advisories.iter().any(|a| a.code == "signed-overflow"),
+            "the standing obligation must still surface as an advisory"
+        );
+        assert!(
+            !r.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "the cleared obligation must not"
+        );
+    }
+
+    /// FEAT-089 AC3 (soundness, adversarial): a `local.set` to the guarded
+    /// local between the guard and the div must KILL the fact. The written
+    /// value is a ⊤ param, so nothing else proves safety — a ProvenSafe here
+    /// would be a FALSE PROOF (call with param1 = 0).
+    #[test]
+    fn feat089_s_local_set_after_the_guard_kills_the_fact() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local $r i32) \
+               block local.get 0 i32.eqz br_if 0 \
+               local.get 1 local.set 0 \
+               i32.const 10 local.get 0 i32.div_s local.set $r end \
+               local.get $r))",
+        );
+        assert_eq!(
+            the_div_by_zero_check(&r).verdict,
+            TrapVerdict::PotentialTrap,
+            "a non-zero fact must not survive a write to its local"
+        );
+        assert!(
+            r.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "the obligation must stand as an advisory"
+        );
+    }
+
+    /// FEAT-089 AC3 (soundness, adversarial): same for `local.tee` — it is a
+    /// write exactly like `local.set` (runtime counterexample: param1 = 0).
+    #[test]
+    fn feat089_s_local_tee_after_the_guard_kills_the_fact() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local $r i32) \
+               block local.get 0 i32.eqz br_if 0 \
+               local.get 1 local.tee 0 local.set $r \
+               i32.const 10 local.get 0 i32.div_s local.set $r end \
+               local.get $r))",
+        );
+        assert_eq!(
+            the_div_by_zero_check(&r).verdict,
+            TrapVerdict::PotentialTrap,
+            "a non-zero fact must not survive a `local.tee` write to its local"
+        );
+        assert!(
+            r.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "the obligation must stand as an advisory"
+        );
+    }
+
+    /// FEAT-089 AC3 (soundness, adversarial): a call between the guard and the
+    /// div kills the fact. Wasm locals are callee-inaccessible, so this is
+    /// deliberately CONSERVATIVE rather than forced by the semantics — but the
+    /// AC names it, over-approximating invalidation is sound, and the cheap
+    /// direction is the safe one. This test PINS the conservative choice.
+    #[test]
+    fn feat089_s_a_call_after_the_guard_kills_the_fact() {
+        let r = analyze_default(
+            "(module (func $noop) (func (export \"f\") (param i32) (result i32) (local $r i32) \
+               block local.get 0 i32.eqz br_if 0 \
+               call $noop \
+               i32.const 10 local.get 0 i32.div_s local.set $r end \
+               local.get $r))",
+        );
+        assert_eq!(
+            the_div_by_zero_check(&r).verdict,
+            TrapVerdict::PotentialTrap,
+            "the non-zero fact must be dropped (conservatively) across a call"
+        );
+        assert!(
+            r.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "the obligation must stand as an advisory"
+        );
+    }
+
+    /// FEAT-089 AC3 (soundness, adversarial): a fact established OUTSIDE a
+    /// loop must not reach a div INSIDE it — the back-edge re-enters the
+    /// region after a write. Runtime counterexample with param = 2:
+    /// iteration 1 divides 10/2 and decrements local 0 to 1 ($r=5, loop),
+    /// iteration 2 divides 10/1 and decrements to 0 ($r=10, loop),
+    /// iteration 3 divides 10/0 — TRAP. Any ProvenSafe here is a false proof.
+    #[test]
+    fn feat089_s_a_loop_back_edge_kills_the_fact() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) (local $r i32) \
+               block local.get 0 i32.eqz br_if 0 \
+               loop \
+                 i32.const 10 local.get 0 i32.div_s local.set $r \
+                 local.get 0 i32.const 1 i32.sub local.set 0 \
+                 local.get $r br_if 0 \
+               end end \
+               local.get $r))",
+        );
+        assert_eq!(
+            the_div_by_zero_check(&r).verdict,
+            TrapVerdict::PotentialTrap,
+            "a pre-loop non-zero fact must not survive into the loop body"
+        );
+        assert!(
+            r.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "the obligation must stand as an advisory"
+        );
+    }
+
+    /// FEAT-089 AC3 (soundness, adversarial): a join where one predecessor
+    /// LACKS the fact must lose it — facts meet (intersect) at merges, never
+    /// union. Path A (`local.get 1 br_if 0`) skips the guard and reaches the
+    /// div with local 0 unconstrained; path B falls through the guard with the
+    /// fact. Runtime counterexample: param0 = 0, param1 = 1 takes path A
+    /// straight into 10/0 — TRAP.
+    #[test]
+    fn feat089_s_a_join_with_an_unguarded_predecessor_kills_the_fact() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local $r i32) \
+               block \
+                 block \
+                   local.get 1 br_if 0 \
+                   local.get 0 i32.eqz br_if 1 \
+                 end \
+                 i32.const 10 local.get 0 i32.div_s local.set $r \
+               end \
+               local.get $r))",
+        );
+        assert_eq!(
+            the_div_by_zero_check(&r).verdict,
+            TrapVerdict::PotentialTrap,
+            "a fact held on only ONE join predecessor must not survive the merge"
+        );
+        assert!(
+            r.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "the obligation must stand as an advisory"
+        );
+    }
+
+    /// FEAT-089 AC3 (soundness, adversarial): a function that degrades to ⊤
+    /// (unsupported op — `i32.rotl` — after the guard) must lose every fact
+    /// with the rest of its state; the degraded-path div verdict stays
+    /// PotentialTrap.
+    #[test]
+    fn feat089_s_a_degrade_after_the_guard_kills_the_fact() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local $r i32) \
+               block local.get 0 i32.eqz br_if 0 \
+               local.get 1 i32.const 1 i32.rotl local.set $r \
+               i32.const 10 local.get 0 i32.div_s local.set $r end \
+               local.get $r))",
+        );
+        // Non-vacuity: the fixture must actually have degraded.
+        assert!(
+            r.gaps
+                .iter()
+                .any(|g| g.op.to_ascii_lowercase().contains("rotl")),
+            "precondition: the fixture must degrade on i32.rotl; gaps: {:?}",
+            r.gaps
+        );
+        assert_eq!(
+            the_div_by_zero_check(&r).verdict,
+            TrapVerdict::PotentialTrap,
+            "a degraded function retains no facts"
+        );
+        assert!(
+            r.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "the obligation must stand as an advisory"
+        );
+    }
+
     /// FEAT-092 (scry#126): `TrapCheck::op` is documented as "the operator name
     /// (e.g. `i32.div_s`)" — wasm text format. MEASURED on a real module
     /// (scry's own scry_mcdc.wasm, identical stripped and unstripped): 2,800 of
@@ -11967,11 +12414,19 @@ mod tests {
         assert_eq!(rep.exit_code(), 0);
     }
 
-    /// FEAT-065 AC2/AC3/AC6: the fix-invisible case (the feat064 AC3 fixture —
-    /// a GENUINE br_if fix scry cannot see, FEAT-089) must come back
+    /// FEAT-065 AC2/AC3/AC6: the fix-invisible case must come back
     /// `still-open-after-edit`, while an obligation in a function the edit did
     /// NOT touch stays `still-open-untouched`. The discriminator is the body
     /// shape hash (AC3): a body that did not change cannot contain a fix.
+    ///
+    /// FIXTURE NOTE (FEAT-089): this test originally used the canonical
+    /// `local.get L; i32.eqz; br_if` repair — which FEAT-089 made VISIBLE, so
+    /// it no longer exercises the invisible path. The fix here is the
+    /// operand-REVERSED guard `(i32.eq (i32.const 0) (local.get L))` —
+    /// semantically the identical repair, but the guard recogniser matches
+    /// only the `local.get`-first idiom, so the obligation genuinely persists.
+    /// If a later feature recognises this shape too, this fixture must move to
+    /// a still-invisible one again.
     #[test]
     fn feat065_ac6_fix_invisible_is_still_open_after_edit_not_untouched() {
         const BEFORE: &str = "(module \
@@ -11981,7 +12436,7 @@ mod tests {
              (func $u (param i32) (result i32) i32.const 20 local.get 0 i32.div_s))";
         const AFTER: &str = "(module \
              (func $d (export \"d\") (param i32) (result i32) (local $r i32) \
-               block local.get 0 i32.eqz br_if 0 \
+               block i32.const 0 local.get 0 i32.eq br_if 0 \
                i32.const 10 local.get 0 i32.div_s local.set $r end \
                local.get $r) \
              (func $u (param i32) (result i32) i32.const 20 local.get 0 i32.div_s))";
