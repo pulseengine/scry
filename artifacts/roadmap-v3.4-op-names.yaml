@@ -1,0 +1,55 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-092
+    type: feature
+    title: "v3.4 — One operator, one name: stop leaking Rust identifiers into the operator ranking (scry#126)"
+    status: proposed
+    release: v3.4.0
+    description: >
+      `TrapCheck::op` is documented as "the operator name (e.g. `i32.div_s`)" —
+      wasm text format. MEASURED on scry's own scry_mcdc.wasm: 2,800 of 10,520
+      advisories instead carried a RUST ENUM IDENTIFIER — `I64Store`,
+      `I32Load8U`, `I32Store8`, `MemoryCopy`, `F64Load` … The numbers are
+      IDENTICAL on the stripped and unstripped module, so this is not an
+      artifact of how the module was built.
+
+      MECHANISM. `op_report_name` falls back to `format!("{op:?}")` for any
+      operator `op_name` has no arm for, and among memory operators `op_name`
+      covered exactly two: `I32Load` and `I32Store`. Every other load/store
+      therefore rendered as its Rust variant name.
+
+      WHY THIS IS WORSE THAN UNIFORMLY WRONG, and why it belongs to scry#126's
+      operator ranking rather than to cosmetics: the SAME operator carried TWO
+      names at once. The non-degraded path labels the access from a literal
+      (`i64.store`, 287 sites); the degraded path calls `op_report_name`
+      (`I64Store`, 1,008 sites). Both are `out-of-bounds` advisories. A
+      consumer ranking operators by frequency sees ONE operator as TWO rows and
+      under-counts the top entry by ~4.5x — `i64.store` is really 1,295 sites.
+
+      THE FIX IS NAMING ONLY, and that is pinned rather than asserted: after
+      the change every advisory-code count on the real module is byte-identical
+      — `out-of-bounds` 8,162 -> 8,162, proven-safe OOB 55 -> 55, every code
+      equal across all 10,520 advisories — while leaked identifiers drop
+      2,800 -> 71.
+    tags: [consumer, naming, operator-ranking, issue-driven, scry126, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a module using `i64.store`, `i32.load8_u` and `i32.store8`, When trap checks are stamped, Then no `TrapCheck::op` begins with an ASCII uppercase letter and each contains a `.`. RED FIRST: failed with `leaked: [\"I32Load8U\", \"I32Store8\"]`, after the non-vacuity assertion (>= 3 trap checks) had already passed — so the red was the contract, not an empty fixture."
+        - "Given the same fixture, When the fix is applied, Then the VERDICTS are unchanged — every trap check remains PotentialTrap. Pinned in the test so a future edit cannot alter what scry proves while claiming to rename."
+        - "MEASURED end-to-end on scry_mcdc.wasm: leaked Rust identifiers 2,800 -> 71, AND every advisory-code count identical (out-of-bounds 8,162 -> 8,162; proven-safe OOB 55 -> 55; all codes equal). The naming-only claim is a measurement, not an argument."
+        - "MUTATION-CHECKED: deleting the `i32.load8_u` arm (asserted to match exactly one site before applying) turns the test red naming exactly `I32Load8U`; restoring it is green."
+        - "NOT COVERED, stated rather than implied: 71 advisories still render a Rust identifier. All 71 are `unsupported-op` on i64/i32 arithmetic and comparison operators (`I64GtS`, `I64Add`, `I32Rotl`, …) that scry genuinely does not model, and each carries a SINGLE name — so the ranking-splitting defect does not apply to them. Naming that family is a separate mechanical slice that would also serve scry#126's fallback ranking."
+      residual: >
+        This fixes the NAME, not the coverage. The reason `i64.store` appeared
+        1,008 times via the degraded path is that those functions had already
+        been scrubbed by an unsupported operator upstream — the fix makes the
+        ranking countable, it does not make those accesses analysable. What the
+        corrected ranking now shows honestly is how much of the out-of-bounds
+        population comes from degraded functions.
+
+        The 71 remaining Rust identifiers are listed above and are deliberately
+        out of scope for this slice.
+    links:
+      - type: traces-to
+        target: REQ-017

@@ -7480,6 +7480,41 @@ fn op_name(op: &Operator<'_>) -> &'static str {
         Operator::GlobalSet { .. } => "global.set",
         Operator::I32Load { .. } => "i32.load",
         Operator::I32Store { .. } => "i32.store",
+        // FEAT-092 (scry#126): `op_name` covered only i32.load/i32.store among
+        // memory ops, so `op_report_name` fell through to the `{:?}` Debug
+        // fallback for every other one and leaked a RUST ENUM IDENTIFIER into
+        // consumer-facing text — measured 2,800 of 10,520 advisories on
+        // scry_mcdc.wasm. The same operator then carried TWO names (the
+        // non-degraded path said `i64.store`, the degraded path `I64Store`),
+        // splitting one operator into two rows in an operator ranking.
+        Operator::I64Load { .. } => "i64.load",
+        Operator::I64Store { .. } => "i64.store",
+        Operator::F32Load { .. } => "f32.load",
+        Operator::F32Store { .. } => "f32.store",
+        Operator::F64Load { .. } => "f64.load",
+        Operator::F64Store { .. } => "f64.store",
+        Operator::I32Load8S { .. } => "i32.load8_s",
+        Operator::I32Load8U { .. } => "i32.load8_u",
+        Operator::I32Load16S { .. } => "i32.load16_s",
+        Operator::I32Load16U { .. } => "i32.load16_u",
+        Operator::I32Store8 { .. } => "i32.store8",
+        Operator::I32Store16 { .. } => "i32.store16",
+        Operator::I64Load8S { .. } => "i64.load8_s",
+        Operator::I64Load8U { .. } => "i64.load8_u",
+        Operator::I64Load16S { .. } => "i64.load16_s",
+        Operator::I64Load16U { .. } => "i64.load16_u",
+        Operator::I64Load32S { .. } => "i64.load32_s",
+        Operator::I64Load32U { .. } => "i64.load32_u",
+        Operator::I64Store8 { .. } => "i64.store8",
+        Operator::I64Store16 { .. } => "i64.store16",
+        Operator::I64Store32 { .. } => "i64.store32",
+        Operator::MemoryCopy { .. } => "memory.copy",
+        Operator::MemoryFill { .. } => "memory.fill",
+        Operator::MemoryInit { .. } => "memory.init",
+        Operator::DataDrop { .. } => "data.drop",
+        Operator::I32WrapI64 => "i32.wrap_i64",
+        Operator::I64ExtendI32S => "i64.extend_i32_s",
+        Operator::I64ExtendI32U => "i64.extend_i32_u",
         Operator::MemorySize { .. } => "memory.size",
         Operator::MemoryGrow { .. } => "memory.grow",
         Operator::I32DivS => "i32.div_s",
@@ -10974,6 +11009,72 @@ mod tests {
             !ids_before.is_empty() && ids_before.is_subset(&ids_after),
             "every pre-fix obligation id must still be addressable after the fix \
              (before={ids_before:?} after={ids_after:?})"
+        );
+    }
+
+    /// FEAT-092 (scry#126): `TrapCheck::op` is documented as "the operator name
+    /// (e.g. `i32.div_s`)" — wasm text format. MEASURED on a real module
+    /// (scry's own scry_mcdc.wasm, identical stripped and unstripped): 2,800 of
+    /// 10,520 advisories instead carried a RUST ENUM IDENTIFIER — `I64Store`,
+    /// `I32Load8U`, `I32Store8`, `MemoryCopy`, … — because `op_report_name`
+    /// falls back to `{:?}` for any operator `op_name` has no arm for, and
+    /// among memory ops `op_name` covered only `I32Load` and `I32Store`.
+    ///
+    /// Worse than uniformly wrong: the SAME operator got BOTH names. The
+    /// non-degraded path labels it `i64.store` (287 sites) while the degraded
+    /// path produced `I64Store` (1,008). A consumer ranking operators by
+    /// frequency (scry#126) sees one operator as two and under-counts the top
+    /// entry by ~4.5x.
+    ///
+    /// This is a NAMING fix only — the verdict multiset is pinned below so a
+    /// future edit cannot change what scry proves while claiming to rename.
+    #[test]
+    fn feat092_a_memory_operator_is_never_reported_by_its_rust_identifier() {
+        let r = analyze_default(
+            "(module (memory 1) (func $f (export \"f\") (param i32) \
+               local.get 0 i64.const 7 i64.store \
+               local.get 0 i32.load8_u drop \
+               local.get 0 i32.const 3 i32.store8))",
+        );
+        // Non-vacuity: the fixture must actually reach the operators in
+        // question, or "no Rust identifiers" is a claim about an empty set.
+        assert!(
+            r.trap_checks.len() >= 3,
+            "fixture must raise trap checks for the three memory ops; got {:?}",
+            r.trap_checks
+                .iter()
+                .map(|t| &t.op)
+                .collect::<alloc::vec::Vec<_>>()
+        );
+        let leaked: alloc::vec::Vec<&str> = r
+            .trap_checks
+            .iter()
+            .map(|t| t.op.as_str())
+            .filter(|n| n.starts_with(|c: char| c.is_ascii_uppercase()))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "TrapCheck::op must be the wasm text-format name, never a Rust \
+             enum identifier; leaked: {leaked:?}"
+        );
+        for t in &r.trap_checks {
+            assert!(
+                t.op.contains('.') && t.op.chars().all(|c| !c.is_ascii_uppercase()),
+                "not a wasm text-format operator name: {:?}",
+                t.op
+            );
+        }
+        // NAMING ONLY: pin the verdicts so a rename cannot quietly move what
+        // scry proves. All three accesses are unproven here.
+        let potential = r
+            .trap_checks
+            .iter()
+            .filter(|t| t.verdict == TrapVerdict::PotentialTrap)
+            .count();
+        assert_eq!(
+            potential,
+            r.trap_checks.len(),
+            "this fixture proves nothing safe; a naming change must not alter that"
         );
     }
 }
