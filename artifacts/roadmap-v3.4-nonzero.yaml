@@ -3,7 +3,7 @@ artifacts:
   - id: FEAT-089
     type: feature
     title: "v3.4 — A div-by-zero fix must be VISIBLE: non-zero facts a disequality guard establishes"
-    status: proposed
+    status: accepted
     release: v3.4.0
     description: >
       Found by closing FEAT-064 AC3. The canonical repair for a div-by-zero —
