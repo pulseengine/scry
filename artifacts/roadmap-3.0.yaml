@@ -1223,6 +1223,21 @@ artifacts:
       The `verify` tool follows FEAT-065 into v3.4.0 with REQ-021 — exposing a
       refuted adjudicator over MCP would put a wrong verdict directly into an
       agent's tool loop, which is the single worst place for it to land.
+
+      RELEASE-MACHINERY NOTE, verified 2026-08-27 and NOT introduced by this
+      feature: `cargo package -p scry-sai-mcp` fails its verify step against
+      the crates.io `scry-sai-core` 3.2.7, which predates the `Query` API
+      (FEAT-067, #188). MEASURED that `scry-sai-viz` ON MAIN fails identically
+      and for the same reason — it uses FEAT-065's `VerifyReport`, also absent
+      from 3.2.7. So this is a PRE-EXISTING MID-CYCLE condition affecting every
+      crate that consumes an unreleased scry-sai-core API, and it resolves at
+      release time via the version bump plus leaf-before-core publish order.
+      The consequence worth writing down: `cargo package` is NOT a valid
+      pre-release check mid-cycle. It will fail for a correct tree, so a
+      release runner who reaches for it as a smoke test gets a red that means
+      nothing. The publish path already handles the ordering (scripts/
+      publish.rs); nothing needs fixing, but nothing should be diagnosed from
+      that failure either.
     tags: [ai-agent, mcp, interop, v3.3]
     fields:
       phase: phase-3
