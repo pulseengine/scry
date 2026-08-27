@@ -1102,6 +1102,33 @@ artifacts:
       `id(a) == id(b)` implies a and b denote the same structural site. The
       converse does NOT hold (a rewritten function legitimately produces new
       IDs) and must not be claimed.
+
+      RELEASE-ORDERING INVERSION, found 2026-08-27 and structural rather than a
+      matter of remaining work. This feature is scoped to v3.3.0, and its AC1
+      is satisfiable ONLY via FEAT-077 and FEAT-087 — both scoped to v3.4.0,
+      both already `accepted` and shipped. REQ-020 inherits the same inversion
+      through its trace to this feature.
+      CONSEQUENCE: v3.3.0 CANNOT BE CUT BEFORE v3.4.0. No amount of work on
+      v3.3.0's other items changes that; the dependency runs the wrong way
+      across the release boundary. Anyone reading `v3.3.0: 5 proposed` will
+      assume five pieces of work remain, when two of them are ordering.
+      HOW IT HAPPENED, worth recording because it was not carelessness: v3.3.0
+      was planned before the identity problem was understood. FEAT-064 was
+      scoped there; adversarial review then FALSIFIED its central property
+      (scry#123), and the repair — two-tier identity, then the second identity
+      bit — was designed and shipped in v3.4.0. The plan did not follow the
+      discovery.
+      THE OPTIONS, none taken unilaterally because re-scoping a release is a
+      planning decision:
+        (a) move FEAT-064 and REQ-020 to v3.4.0, where their satisfiability
+            actually arrived — smallest change, makes both releases honest;
+        (b) leave the scoping and accept that v3.3.0 ships after v3.4.0,
+            recording the order explicitly so the numbering is not read as
+            sequence;
+        (c) re-cut v3.3.0 around only what does not depend on v3.4.0 —
+            FEAT-066/067/069 — and move the identity items out.
+      (a) is the recommendation: it is the smallest edit and it puts each
+      artifact in the release that actually delivers it.
     tags: [ai-agent, identity, fix-verify-loop, v3.3]
     fields:
       phase: phase-3
