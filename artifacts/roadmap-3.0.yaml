@@ -1254,7 +1254,12 @@ artifacts:
     fields:
       phase: phase-3
       acceptance-criteria:
-        - "Given the manifest, When an agent reads it, Then every domain carries an evidence kind and the not-proven list is enumerated rather than prose — and claim-check gates it against the same source as the README claims."
+        - "Given the guidance feed, When an agent reads it, Then `scope` carries every capability with a machine-readable evidence kind (`mechanized` / `gamma-swept` / `runnable-attested`) and the not-proven list ENUMERATED rather than prose. RED FIRST: failed with `the feed must carry a scope manifest, not leave scope to the page`, after the non-vacuity assertion on the manifest constants had already passed."
+        - "SINGLE SOURCE, so page and feed cannot drift: both are rendered from the same `SCOPE_EVIDENCE` / `SCOPE_NOT_PROVEN` constants, and the oracle requires every not-proven item to appear in BOTH surfaces. MUTATION-CHECKED: emitting empty strings in the FEED while the page still lists them (asserted a single matching line before applying) kills the test with `not-proven item missing from the FEED`."
+        - "THE DRIFT THIS REPLACES IS MEASURED, not hypothetical. The previous block was hand-written prose whose not-proven list named only PROVENANCE limits (WasmCert not imported, memory-content model, not a qualified tool) and NONE of the dominant practical ones. Measured on a real module: `unmodeled-control-flow` 15.6% and `unsupported-op` 5.9% of advisories, against a proven-safe rate of 0.6%. An agent reading it would have formed a materially more optimistic picture than the numbers support. The enumerated list now names the if/else region havoc, the unsupported-op function scrub, and the disequality limit (issue #165)."
+        - "Given the scope block, When rendered, Then it reports the MEASURED shape of THIS analysis. The function previously ignored its `AnalysisResult` entirely (the parameter was `_r`), so it said the same thing about every module."
+        - "Human legibility is NOT traded for machine readability: the pre-existing `hero_and_scope_copy_finalized` gate still passes unchanged, because each evidence kind renders its human phrasing AND its machine tag. A manifest a human cannot read is a different failure from prose a machine cannot read, not a fix for it."
+        - "Schema bumped 5 -> 6. Three sibling tests pinned the version by EQUALITY and broke at once on a bump unrelated to the field each guarded; they now assert a LOWER BOUND parsed from the document, which still fails if a new field ships without a bump. MUTATION-CHECKED: regressing the constant to 4 kills exactly those 3."
     links:
       - type: traces-to
         target: REQ-017
