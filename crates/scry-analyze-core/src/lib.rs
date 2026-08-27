@@ -12084,6 +12084,32 @@ mod tests {
         );
     }
 
+    /// FEAT-089 AC3 (soundness, adversarial): only a guard whose taken edge
+    /// pins the local to `== 0` establishes the fact — `!= c` for any other
+    /// constant is a different hole and licenses nothing about zero.
+    #[test]
+    fn feat089_s_a_guard_against_a_nonzero_constant_licenses_nothing() {
+        // Fall-through of `local.get 0; i32.const 5; i32.eq; br_if` licenses
+        // `x != 5` — which says NOTHING about zero (runtime counterexample:
+        // param = 0 falls through straight into 10/0). Pins the `c == 0`
+        // condition on fact establishment.
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) (local $r i32) \
+               block local.get 0 i32.const 5 i32.eq br_if 0 \
+               i32.const 10 local.get 0 i32.div_s local.set $r end \
+               local.get $r))",
+        );
+        assert_eq!(
+            the_div_by_zero_check(&r).verdict,
+            TrapVerdict::PotentialTrap,
+            "a disequality against 5 must not become a non-zero fact"
+        );
+        assert!(
+            r.advisories.iter().any(|a| a.code == "div-by-zero"),
+            "the obligation must stand as an advisory"
+        );
+    }
+
     /// FEAT-089 AC3 (soundness, adversarial): a call between the guard and the
     /// div kills the fact. Wasm locals are callee-inaccessible, so this is
     /// deliberately CONSERVATIVE rather than forced by the semantics — but the
