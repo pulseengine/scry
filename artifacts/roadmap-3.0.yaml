@@ -322,6 +322,30 @@ artifacts:
       DO NOT promote this requirement on FEAT-065's acceptance. What would
       discharge it: FEAT-089 landing, then a re-measurement showing a genuine
       fix reaching `discharged` on a shape an agent would actually write.
+
+      RE-MEASURED 2026-08-27 WITH FEAT-089 IN PLACE, which is exactly what the
+      note above said would discharge this requirement. IT DOES NOT. Measured
+      on the FEAT-064 AC3 fixture pair (a genuine, semantics-preserving
+      br_if-guard repair):
+        div-by-zero  before=1  after=0   <- FEAT-089 works; the fix IS visible
+        proven-safe  before=1  after=2   <- the guard licenses the fact
+        verify_against verdict: `uncertain`, NOT `discharged`
+      So the PRECISION obstacle is removed and a SECOND one is now exposed, and
+      it is FEAT-065's own design: `discharged` requires term (5), the function's
+      operator SHAPE unchanged, and adding a guard changes the shape.
+      THE TENSION IS REAL, not an oversight. Term (5) exists because AC10's
+      cardinality-preserving delete+insert satisfies every other term and would
+      be a FALSE DISCHARGE without it — the defect that withdrew PR #120. So the
+      conjunct that prevents a false discharge also blocks every genuine repair
+      that adds a guard. A shape HASH cannot distinguish `a guard was inserted`
+      from `a same-kind operator was swapped`.
+      WHAT WOULD ACTUALLY DISCHARGE THIS, restated from measurement rather than
+      from hope: a shape comparison finer than a hash — one that can witness
+      `the operator multiset grew by a guard idiom, and no operator of the
+      adjudicated kind was deleted` — or a sixth term that corroborates the
+      open->safe transition by CONTENT rather than by structure (DD-022: the
+      keys are a good ADDRESS and a bad PROOF). Neither exists. Do not promote
+      REQ-021 on FEAT-089's acceptance either.
     tags: [ai-agent, oracle, fix-verify-loop, gate, adversarial, v3.4]
     fields:
       priority: must
