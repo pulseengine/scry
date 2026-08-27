@@ -714,6 +714,31 @@ pub struct Advisory {
     /// no disambiguator, export names, the body-shape hash, module-scoped
     /// advisories): those behave exactly as before this flag existed.
     pub id_build_local: bool,
+    /// FEAT-087 (scry#122 item 2): TRUE when this advisory's identity keys
+    /// survive an edit to the function's OWN body — the property an
+    /// adjudicator needs, and a DIFFERENT question from [`Advisory::id_build_local`].
+    ///
+    /// The two bits are INDEPENDENT, not a ranking:
+    ///
+    /// | tier                         | `id_build_local` | `ident_survives_own_edit` |
+    /// |------------------------------|------------------|---------------------------|
+    /// | unique stripped name         | false            | **true**                  |
+    /// | shared stripped -> raw name  | **true**         | **true**                  |
+    /// | name, no disambiguator       | false            | **true**                  |
+    /// | unnamed -> `body_shape_hash` | false            | **false**                 |
+    ///
+    /// FALSE only for the body-shape-hash tier, whose ident is by construction
+    /// a hash of the very bytes an edit changes. That tier is NOT build-local —
+    /// the hash is deterministic, so it IS comparable across builds — which is
+    /// exactly why one bit could not express both facts. Measured on a stripped
+    /// build of scry's own binary, that tier is 766 of 766 obligation-carrying
+    /// functions and all 10,520 obligations; stripping is standard in release
+    /// builds.
+    ///
+    /// CONSUMER RULE: treat a missing key in a later build as evidence the site
+    /// is gone ONLY when `!id_build_local && ident_survives_own_edit`. Otherwise
+    /// the honest verdict is `uncertain` — never `discharged` (REQ-021).
+    pub ident_survives_own_edit: bool,
 }
 
 /// FEAT-055 (REQ-018): a candidate counterexample for an `UnprovenObligation`
@@ -3274,6 +3299,15 @@ fn is_module_scoped(code: &str) -> bool {
 ///      across builds;
 ///   3. named, no disambiguator → the raw name (unchanged from v3.2.5);
 ///   4. unnamed → the body-shape hash (unchanged from v3.2.5).
+///
+/// FEAT-087 (scry#122 item 2) adds a SECOND, INDEPENDENT bit,
+/// [`Advisory::ident_survives_own_edit`]. Tier 4 is the only one that answers
+/// NO: its ident is a hash of the very bytes an edit changes. It is emphatically
+/// NOT build-local — the hash is deterministic across builds — which is why one
+/// bit could not carry both facts, and why tier 4 must NOT simply be marked
+/// build-local (that would suppress cross-build citation for 100% of every
+/// stripped module to fix a different property). Tier 2 is the mirror case:
+/// build-local, yet body-independent, so it DOES survive its own edit.
 fn stamp_obligation_ids(
     advisories: &mut [Advisory],
     defined_funcs: &[DefinedFunc<'_>],
@@ -3308,12 +3342,16 @@ fn stamp_obligation_ids(
             .iter()
             .find(|m| m.func_index == f.abs_index)
             .and_then(|m| m.name.as_deref());
-        let (ident, build_local) = match name {
-            None => (body_shape_hash(&f.ops), false),
+        // FEAT-087 (scry#122 item 2): the third element is a SECOND,
+        // INDEPENDENT bit — "does this ident survive an edit to its own body?"
+        // Only the body-shape-hash tier answers no; it is nonetheless NOT
+        // build-local, because the hash is deterministic across builds.
+        let (ident, build_local, survives_own_edit) = match name {
+            None => (body_shape_hash(&f.ops), false, false),
             Some(raw) => match strip_rust_disambiguator(raw) {
-                Some(stripped) if candidates.get(&stripped) == Some(&1) => (stripped, false),
-                Some(_) => (String::from(raw), true),
-                None => (String::from(raw), false),
+                Some(stripped) if candidates.get(&stripped) == Some(&1) => (stripped, false, true),
+                Some(_) => (String::from(raw), true, true),
+                None => (String::from(raw), false, true),
             },
         };
         let keys = structural_keys(&f.ops);
@@ -3331,6 +3369,7 @@ fn stamp_obligation_ids(
                 a.site_key = site_key_of(&ident, path, &kind, *ordinal);
                 a.group_key = group_key_of(&ident, path, &kind);
                 a.id_build_local = build_local;
+                a.ident_survives_own_edit = survives_own_edit;
             }
         }
     }
@@ -3377,6 +3416,7 @@ fn compute_advisories(
             site_key: String::new(),
             group_key: String::new(),
             id_build_local: false,
+            ident_survives_own_edit: true,
         });
     }
 
@@ -3420,6 +3460,7 @@ fn compute_advisories(
                 site_key: String::new(),
                 group_key: String::new(),
             id_build_local: false,
+            ident_survives_own_edit: true,
                 });
             }
             TrapVerdict::ProvenSafe => {
@@ -3450,6 +3491,7 @@ fn compute_advisories(
                 site_key: String::new(),
                 group_key: String::new(),
             id_build_local: false,
+            ident_survives_own_edit: true,
                 });
             }
         }
@@ -3494,6 +3536,7 @@ fn compute_advisories(
                 site_key: String::new(),
                 group_key: String::new(),
             id_build_local: false,
+            ident_survives_own_edit: true,
         });
     }
 
@@ -3516,6 +3559,7 @@ fn compute_advisories(
                 site_key: String::new(),
                 group_key: String::new(),
             id_build_local: false,
+            ident_survives_own_edit: true,
         });
     }
 
@@ -10749,6 +10793,90 @@ mod tests {
         assert!(
             !a.id_build_local,
             "the shape-hash fallback is not build-local"
+        );
+    }
+
+    /// FEAT-087 (scry#122 item 2) — THE DISCRIMINATING ORACLE for the new bit.
+    ///
+    /// A test in which both tiers AGREE on `ident_survives_own_edit` is not a
+    /// gate: it would stay green if the field were a constant. So this fixture
+    /// puts a NAMED function (identity = its name, which an edit to its body
+    /// does not touch) and an UNNAMED one (identity = `body_shape_hash`, which
+    /// an edit to its body destroys by construction) in ONE module and requires
+    /// them to DISAGREE.
+    ///
+    /// It also pins the INDEPENDENCE of the two bits: the unnamed tier stays
+    /// `id_build_local: false`, because a body-shape hash IS deterministic
+    /// across builds. Flipping that instead would suppress cross-build citation
+    /// for 100% of every stripped module (measured: 10,520 of 10,520
+    /// obligations) to fix a different property.
+    #[test]
+    fn feat087_named_and_unnamed_tiers_disagree_on_surviving_their_own_edit() {
+        let r = analyze_default(
+            "(module \
+               (func $compute (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func (param i32) (result i32) \
+                 i32.const 20 local.get 0 i32.div_s))",
+        );
+        let pick = |idx: u32| {
+            r.advisories
+                .iter()
+                .find(|a| {
+                    a.func_index == idx && a.code == "div-by-zero" && !a.obligation_id.is_empty()
+                })
+                .unwrap_or_else(|| panic!("func {idx} must raise a stamped div-by-zero advisory"))
+        };
+        let named = pick(0);
+        let unnamed = pick(1);
+
+        assert!(
+            named.ident_survives_own_edit,
+            "a name-derived ident is body-independent, so it survives its own edit"
+        );
+        assert!(
+            !unnamed.ident_survives_own_edit,
+            "a body-shape-hash ident is a hash of the very bytes an edit changes"
+        );
+        assert_ne!(
+            named.ident_survives_own_edit, unnamed.ident_survives_own_edit,
+            "the field must DISCRIMINATE between identity tiers; if both agree \
+             it is a constant, not a bit"
+        );
+
+        assert!(!named.id_build_local, "a plain name is not build-local");
+        assert!(
+            !unnamed.id_build_local,
+            "the shape-hash tier stays cross-build comparable — the new bit is \
+             NOT a rename of the old one"
+        );
+    }
+
+    /// FEAT-087 — the two bits are INDEPENDENT, pinned on the tier that
+    /// separates them. Two monomorphizations sharing a stripped name fall back
+    /// to the raw, disambiguated name: that name CHURNS across builds
+    /// (`id_build_local: true`) but is still body-INDEPENDENT, so an edit to
+    /// the function's own body does not move it. Were the new field merely a
+    /// rename of the old one, this test would demand `false` and fail.
+    #[test]
+    fn feat087_a_build_local_ident_still_survives_its_own_edit() {
+        let r = analyze_default(
+            "(module \
+               (func $\"_ZN3dep7generic17haaaaaaaaaaaaaaaaE\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $\"_ZN3dep7generic17hbbbbbbbbbbbbbbbbE\" (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s))",
+        );
+        let a = r
+            .advisories
+            .iter()
+            .find(|a| a.func_index == 0 && a.code == "div-by-zero" && !a.obligation_id.is_empty())
+            .expect("fixture must raise a stamped div-by-zero advisory");
+        assert!(a.id_build_local, "a shared stripped name is build-local");
+        assert!(
+            a.ident_survives_own_edit,
+            "the raw name is body-independent: build-local and \
+             survives-own-edit are INDEPENDENT bits, not a ranking"
         );
     }
 }

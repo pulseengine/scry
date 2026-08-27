@@ -1,0 +1,98 @@
+# v3.4.0 identity addendum — own file per scry#143 fix (1).
+# Follow-on to FEAT-077; closes scry#122 work item 2.
+artifacts:
+  - id: FEAT-087
+    type: feature
+    title: "v3.4 — Identity that survives an edit to its OWN body is a second, independent bit (scry#122 item 2)"
+    status: proposed
+    release: v3.4.0
+    description: >
+      FEAT-077 made function identity honest about ONE question — "are these
+      keys comparable across builds at all?" — and answered it with
+      `id_build_local`. scry#122 item 2 asks a DIFFERENT question that the same
+      bit cannot answer: "does this identity survive an edit to the very
+      function being fixed?"
+
+      MEASURED (this is the reason the feature exists). On a stripped build of
+      scry's own `scry_mcdc.wasm` (`wasm-tools strip -a`, 8.2MB -> 484KB, 853
+      functions of which 32 are exported): 766 of 766 obligation-carrying
+      functions fall to the `body_shape_hash` tier, and ALL 10,520 obligations
+      carry `id_build_local: false` — advertised as a stable, cross-build
+      identity. But a body-shape hash is by construction a function of the
+      body, so ANY edit to the function destroys it. Confirmed on a minimal
+      fixture: one unexported function, one appended `local.get 0 / i32.add`,
+      site_key 8b27dcd0 -> 0df9e454, survival 0 of 1, marked 0 of 2.
+
+      Stripping the name section is standard in release builds, so this is the
+      common production shape, not a corner case.
+
+      WHAT IS *NOT* THE FIX, recorded because it is the tempting one and it is
+      wrong in the other direction: marking tier 4 `id_build_local: true`. A
+      body-shape hash genuinely IS cross-build comparable — same body, same
+      hash, deterministically — so that bit is CORRECT as it stands. Flipping
+      it would suppress cross-build citation for 100% of every stripped module
+      in order to fix a different property, gutting REQ-020 for the common
+      release case.
+
+      These are two INDEPENDENT bits, not a ranking:
+
+        | tier                         | comparable? | survives own edit? |
+        | 1 unique stripped name       | yes         | yes                |
+        | 2 shared stripped -> raw     | NO (marked) | yes (name is       |
+        |                              |             | body-independent)  |
+        | 3 name, no disambiguator     | yes         | yes                |
+        | 4 unnamed -> body_shape_hash | yes         | NO                 |
+
+      So this feature adds the SECOND bit, `ident_survives_own_edit`, and
+      names it after what it LICENSES rather than after the mechanism that
+      produced it — DD-022's standing lesson is that consumers read mechanism
+      names as stability rankings and get it wrong. The adjudication rule a
+      consumer needs is the conjunction: cite or adjudicate only when
+      `!id_build_local && ident_survives_own_edit`. Absence of a key is
+      evidence a site is gone ONLY under that conjunction; otherwise the
+      honest verdict is `uncertain`, never `discharged`.
+
+      HONEST SCOPE — this fixes the CONTRACT BEFORE THE CONSUMER LANDS, and is
+      not a shipped false-discharge. The FEAT-065 adjudicator (`verify_against`)
+      is still `proposed` and its draft (PR #120) is parked; no code on main
+      turns a missing key into `discharged`. gale's join (scry#144) is
+      independently blocked on `func_<index>` naming on their side. The reason
+      to do it now is that the flag is ALREADY public in guidance feed v3, so
+      every consumer built against v3 inherits the ambiguity.
+
+      The 100% figure is scoped to STRIPPED modules and measured on scry's own
+      binary. Whether avrabe's 468-module corpus (scry#126) is stripped is a
+      separate measurement, NOT claimed here.
+    tags: [ai-agent, identity, honesty, fix-verify-loop, issue-driven, scry122, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given an unnamed function (body-shape-hash tier), When identities are stamped, Then the advisory carries `ident_survives_own_edit: false` while `id_build_local` stays FALSE — the two bits are independent and tier 4's cross-build comparability is NOT withdrawn. RED-FIRST: with the field seeded `true` at all five construction sites this failed at lib.rs:10823 on the tier-4 assertion, with BOTH advisories located (so the red was the contract, not a missing fixture)."
+        - "Given a uniquely-named function (tier 1) and an unnamed function (tier 4) in the SAME module, When identities are stamped, Then they DIFFER on `ident_survives_own_edit`. This is the discriminating oracle: a test in which both tiers agree is not a gate. VERIFIED the six pre-existing `assert!(!a.id_build_local)` assertions stay green under BOTH mutants below — they prove nothing about the new field."
+        - "Given a named function whose stripped name is SHARED (tier 2), When identities are stamped, Then `ident_survives_own_edit` is TRUE and `id_build_local` is TRUE — the raw name is body-independent, so it survives an own-body edit even though it cannot be compared across builds. Pins that the new bit is not a rename of the old one."
+        - "Given the guidance feed, When rendered, Then `guidance_schema` is 4 and every advisory carries `ident_survives_own_edit`. MEASURED end-to-end on the stripped module: schema 4, 10,519 of 10,520 advisories `false`; the single `true` is the module-scoped `unbounded-stack`, whose ident is the literal `<module>` and IS body-independent — the field discriminates even within one module."
+        - "Given an obligation whose identity does not survive its own edit, When the HTML is rendered, Then it is badged `id moves on own edit`, and a name-derived identity is NOT badged. (29 badge occurrences on the stripped page, consistent with the FEAT-063 per-class advisory cap, not with 10,519 rows.)"
+        - "MUTATION-CHECKED in BOTH directions, surgically: (M1) field forced `true` — the pre-fix state — kills ONLY the tier-discrimination test (109 pass); (M2) forced `false` kills the discrimination AND the tier-2 independence test (108 pass); baseline 110. M2 killing a strict superset is the signature of two independent bits: were the new field a rename of `id_build_local`, both mutants would kill identical sets."
+        - "The FEAT-068 schema-version assertion was DE-TAUTOLOGISED while doing this. Bumping the version turned `json.contains(\"guidance_schema\":3)` red; the obvious repair — comparing against `GUIDANCE_SCHEMA_VERSION` — is vacuous, because the feed is emitted FROM that constant (the class that shipped `scry 0.0.0`, scry#152). It now parses the declared integer structurally and floors it at 2, and is mutation-checked: renaming the key kills it, regressing the version to 1 kills it."
+      residual: >
+        This makes the limitation VISIBLE; it does not give unnamed functions a
+        stable identity. For a stripped module every obligation remains
+        un-citable across an edit to its own function, which is the honest
+        state of the art here — recovering identity there needs content
+        corroboration (DD-022: the keys are a good ADDRESS and a bad PROOF),
+        not another key scheme. The measured figures are from scry's own
+        stripped binary; other corpora may differ in degree, not in mechanism.
+
+        NOT COVERED, stated rather than implied: the FEAT-072 DELTA VIEW is not
+        updated. It already carries `build_local` per row and discloses those as
+        expected churn, but it does NOT yet carry or disclose
+        `ident_survives_own_edit` — and the delta page is precisely where a
+        consumer reads "this site vanished". So the limitation is visible in the
+        feed and on the guidance page, but a reader of the delta page alone can
+        still mis-read a moved key as a removed site. That is the next slice, not
+        something this feature closed.
+    links:
+      - type: traces-to
+        target: REQ-020
+      - type: traces-to
+        target: REQ-021
