@@ -55,6 +55,9 @@ const CRATES_TO_PUBLISH: &[(&str, &str)] = &[
     // Depends on scry-sai-core — publish last. The `scry-viz` binary/library
     // (FEAT-024) consumes the analyzer library to render an AnalysisResult.
     ("scry-viz", "scry-sai-viz"),
+    // Depends on scry-sai-core — publish after it. The `scry-mcp` MCP server
+    // (FEAT-066) exposes analyze/query over JSON-RPC stdio to AI agents.
+    ("scry-mcp", "scry-sai-mcp"),
 ];
 
 struct Krate {
