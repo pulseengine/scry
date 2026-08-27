@@ -4,7 +4,7 @@ artifacts:
   - id: FEAT-090
     type: feature
     title: "v3.4 — The delta view carries the second identity bit: a vanish on the body-shape-hash tier is told apart from evidence (FEAT-087 residual)"
-    status: proposed
+    status: accepted
     release: v3.4.0
     description: >
       FEAT-087 added `Advisory::ident_survives_own_edit` and stated its own
