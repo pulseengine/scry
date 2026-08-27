@@ -1,0 +1,157 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-091
+    type: feature
+    title: "v3.4 — Connect the code side to the artifact side: commit traceability, gated forward-only (scry#161)"
+    status: proposed
+    release: v3.4.0
+    description: >
+      scry#161 measured that rivet's commit-to-artifact traceability shipped
+      unconfigured, so the V-model's artifact side and the code side were never
+      connected. Enabling it is a config block; the value is the `broken_refs`
+      counter, which catches a commit naming an artifact id that does not
+      resolve — exactly how PR #159 merged referencing FEAT-086 before the
+      artifact existed (scry#160), found by grepping rather than by a gate.
+
+      TWO MEASUREMENTS CORRECT #161's PREMISE, and both changed the design.
+
+      (1) #161 reports "zero of 125 commits carry an artifact trailer". With a
+      `Verifies` mapping configured, rivet instead reports `linked: 4`,
+      `broken_refs: 4` AND `malformed_refs: 4` — the SAME four commits inflating
+      three counters at once. None of them carry a trailer. All four are the
+      ordinary prose line `Verified: bazel build //:scry green + wasm-tools
+      validate ok.`, which rivet's FUZZY trailer-key matcher reads as a
+      malformed `Verifies:`. Five commits in this history carry such a line.
+      Measured by A/B: with `Verifies` mapped the three counters read 4/4/4;
+      with it unmapped they read 0/0/0 and orphans rises 81 -> 85.
+
+      So the honest baseline is `linked: 0, orphans: 85, broken_refs: 0` — and
+      `linked: 4` was never real. The trailer mapping is therefore kept to
+      `Refs: traces-to` alone. That is a finding, not laziness: a gate that
+      fails on a normal English sentence gets switched off, and `Verified:` is
+      an entirely natural thing to write in a commit body. Reported upstream;
+      widen the mapping when the matcher stops guessing.
+
+      (2) `rivet commits --strict` cannot be the gate. It also promotes the
+      repo-wide unimplemented-artifacts warning, which reports `Artifact
+      coverage: 1/257 (0.4%)` — a condition NO pull request can satisfy.
+      Measured: a range with one correctly-linked commit and zero orphans and
+      zero broken refs still exits 1 under `--strict`. A gate no PR can pass is
+      not a gate. `tools/check-commit-trailers.py` therefore reads the JSON
+      summary and fails on only the three counters a PR is responsible for —
+      `orphans`, `broken_refs`, `malformed_refs` — and deliberately ignores
+      `unimplemented` and `artifact_coverage`.
+
+      FORWARD-ONLY BY CONSTRUCTION: the gate is scoped to `origin/main..HEAD`,
+      so the 85 pre-existing orphans never enter it and no history rewrite is
+      needed. `traced-paths: [crates/]` scopes it to the code side, which is
+      what #161 measured as disconnected; artifact-only commits are not orphans.
+      It runs as its OWN CI job so a traceability failure is legible in the
+      checks list rather than buried behind artifact validation.
+    tags: [traceability, v-model, gate, issue-driven, scry161, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a commit touching `crates/` with NO artifact trailer, When the gate runs over its range, Then it FAILS with `orphans=1`. VERIFIED end-to-end on the real repo, exit 1."
+        - "Given the same commit carrying `Refs: REQ-005`, When the gate runs, Then it PASSES — `linked: 1, orphans: 0, broken_refs: 0`, exit 0. This is the direction `--strict` could not satisfy, and is why the gate is not `--strict`."
+        - "Given a commit whose trailer names an artifact that does NOT exist (`Refs: FEAT-99999` — the scry#160 defect), When the gate runs, Then it FAILS with `broken_refs=1` and a message naming that defect. VERIFIED end-to-end, exit 1."
+        - "Given rivet exits non-zero because a reference is broken, When the gate runs, Then it still PARSES the JSON summary and reports WHICH counter failed. Fixed after first measurement: bailing on the exit code alone degraded an informative failure to `rivet exited 1`."
+        - "Given rivet is missing or produces no parseable summary, When the gate runs, Then it FAILS CLOSED — a gate that skips on a missing tool reports green while checking nothing (scry#141)."
+        - "SELF-TESTED, run BEFORE the real check in CI: 6 cases over the pure `verdict()` function, including that `linked` and `exempt` NEVER fail the gate and that a missing counter key reads 0."
+      residual: >
+        The 85 historical orphan commits stay orphans, deliberately: linking
+        them would mean rewriting history or fabricating after-the-fact
+        attributions, and neither is worth it. `rivet commits` without a range
+        still reports them, and that number is the honest record of when the
+        connection started, not a defect to be driven to zero.
+
+        The mapping carries ONE trailer key while rivet's matcher is fuzzy, so
+        `Satisfies`/`Verifies` are unavailable and everything routes through
+        `traces-to`. That is a real loss of expressiveness accepted to keep the
+        gate trustworthy. `Fixes:` was also found once as prose in history and
+        is likewise unmapped.
+
+        This gate does NOT check that the linked artifact is the RIGHT one — a
+        commit can satisfy it with any resolving id. It catches unlinked and
+        dangling, not mis-attributed.
+    links:
+      - type: traces-to
+        target: REQ-005
+
+  - id: FEAT-093
+    type: feature
+    title: "v3.4 — The required-check set cannot silently rot back to scry#130"
+    status: proposed
+    release: v3.4.0
+    description: >
+      scry#130 was enforced on 2026-08-27: the ruleset
+      `temper-default-branch-protection` now requires all ten jobs of ci.yml.
+      Verified in BOTH directions, which is what distinguishes a gate from a
+      setting — every open PR flipped to `mergeStateStatus=BLOCKED` on apply,
+      and PR #164 merged `CLEAN` once its ten checks passed.
+
+      A setting that was wrong for months can be wrong again, and would be
+      invisible: CI still runs, PRs still go green, and nothing announces that
+      a job stopped being enforced. Three concrete ways it rots:
+
+        1. A JOB IS ADDED and never required — scry#130 returning one job at a
+           time, with no symptom at all.
+        2. A JOB IS RENAMED — the stale context can never report, so every PR
+           deadlocks. The opposite failure, equally silent until it bites.
+        3. THE RULESET IS RESET — its name says `temper-`, i.e. something else
+           may regenerate it. `required_status_checks` would simply vanish.
+
+      THE DEADLOCK RULE, which is why this is not set-equality. A check may be
+      required only if it reports on EVERY pull request. `rivet-delta.yml` is
+      PATH-FILTERED (`artifacts/**`, `rivet.yaml`, …) so `Rivet artifact delta`
+      does not run on a code-only PR; requiring it would block such PRs
+      forever. The gate therefore fails if a path-filtered or `if:`-conditional
+      job is ever required, and carries the exclusion WITH its reason so the
+      exclusion is auditable rather than folklore.
+
+      NEW JOBS ARE NOT FAILURES. A job added in the current PR does not exist
+      on main and cannot be required yet — requiring it would deadlock every
+      other open PR. The gate reads ci.yml from BOTH `origin/main` and the PR,
+      and reports such jobs as PENDING with the instruction to add them after
+      merge. Without this the gate would fail on the very PR that introduces it.
+    tags: [release-machinery, gate, drift, scry130, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a job that exists on main and runs on every PR but is absent from the required set, When the gate runs, Then it FAILS naming that job. MUTATION-CHECKED AGAINST THE LIVE RULESET: `Format` was removed from the real required set (asserted 10 -> 9 before applying), the gate failed with `job 'Format' exists on main and runs on every PR, but is NOT required`, and restoring returned it to 10 contexts and exit 0."
+        - "Given a path-filtered or `if:`-conditional job that IS required, When the gate runs, Then it FAILS — such a check never reports on some PRs and deadlocks them. Self-tested."
+        - "Given a required context matching no job in either ci.yml or rivet-delta.yml, When the gate runs, Then it FAILS — a renamed or deleted job leaves a context that can never report."
+        - "Given the ruleset has no `required_status_checks` rule at all, When the gate runs, Then it FAILS explicitly as scry#130 recurring, rather than passing because there is nothing to compare."
+        - "Given a job introduced by the CURRENT PR, When the gate runs, Then it is reported PENDING and does NOT fail. Verified on this PR itself, which introduces two such jobs and still exits 0."
+        - "CORRECTED AFTER A BROKEN BUILD, recorded rather than quietly fixed. The first version ran the LIVE-ruleset check in CI under `permissions: administration: read`. That is NOT a grantable Actions scope, and a workflow requesting it is REJECTED WHOLESALE: the CI run completed as `failure` with ZERO jobs and no log, which reads like a queue outage rather than a syntax error. It was diagnosed only by noticing the PR showed 1 registered check instead of 12. A workflow GITHUB_TOKEN cannot read rulesets at all, so the original design could never have worked in CI."
+        - "Given CI, When the gate runs, Then it uses `--against-file` against `.github/required-checks.txt` with no API call. This catches the rot WE cause in our own PRs: a job added or renamed without updating the file. MUTATION-CHECKED: deleting `Clippy` from the file fails with `job Clippy exists on main and runs on every PR, but is NOT required`."
+        - "Given admin credentials, When the gate runs in its default LIVE mode, Then it additionally cross-checks the file against the real ruleset, because CI gates on the file and a drifted file means CI is gating on a fiction. MUTATION-CHECKED: the same deletion fails LIVE mode with a DIFFERENT and correct message, `Clippy is required LIVE but missing from .github/required-checks.txt`."
+        - "Given the ruleset cannot be read in LIVE mode, When the gate runs, Then it FAILS CLOSED pointing at `--against-file` for CI. Inability to check is not evidence of correctness (scry#141)."
+        - "SELF-TESTED, run BEFORE the real check in CI: 6 cases over the pure `verdict()` function covering all four failure directions plus the pending case."
+      residual: >
+        A RULESET RESET IS STILL NOT CAUGHT BY CI, and cannot be: GITHUB_TOKEN
+        cannot read rulesets, so no workflow job can see the live setting. CI
+        gates on the checked-in file; the live cross-check runs only where admin
+        credentials exist (locally, or a credentialed schedule that does not yet
+        exist). So "something regenerates temper-default-branch-protection and
+        required_status_checks vanishes" is caught the next time the live mode is
+        run by hand, NOT automatically. Closing that needs a PAT secret, which is
+        a repo-owner decision this feature should not assume.
+
+        The gate reads the ruleset by hard-coded id (16891064). If the ruleset
+        is deleted and recreated rather than edited, the id changes and the
+        gate fails closed — noisy, but in the safe direction.
+
+        A job RENAMED in a PR shows as PENDING at PR time (the old name still
+        exists on main, still required, still reporting) and only fails after
+        the rename merges. That ordering is correct but means a rename costs
+        one red build on main. Renaming a required job is a two-step operation:
+        add the new name, require it, then drop the old one.
+
+        This checks that the required SET tracks the jobs. It does not check
+        that each job is a MEANINGFUL gate — `check-gate-coverage.py` covers
+        the crate dimension, and nothing covers "this job asserts something
+        real", which remains a human judgement.
+    links:
+      - type: traces-to
+        target: REQ-005

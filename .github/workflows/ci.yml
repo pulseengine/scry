@@ -19,9 +19,21 @@ name: CI
 #   * Bazel build of the composed component (//:scry).
 #   * wasm-tools validate on the built bazel-bin/scry.wasm.
 #
-# Required-status-check names that temper's branch protection
-# expects: `Format`, `Clippy`, `Test` — all three are real Cargo
-# gates as of FEAT-001 AC#3.
+# Required status checks (scry#130, enforced 2026-08-27). The ruleset
+# `temper-default-branch-protection` now requires ALL TEN jobs of this
+# workflow before a PR can merge: Format, Clippy, Test, Bazel build
+# (//:scry), MC/DC (witness), cargo-deny, Doc claims (claim-check),
+# Rivet artifact validation, WIT round-trip, AADL model (spar parse).
+# Until then it required NOTHING — this comment claimed three were
+# required and none were, so "merged green" rested on whoever merged
+# remembering to look.
+#
+# `Rivet artifact delta` is deliberately NOT required: it lives in
+# rivet-delta.yml, which is PATH-FILTERED (artifacts/**, rivet.yaml, …).
+# A required check that never reports on a code-only PR blocks that PR
+# forever. Any job added here is required only once its name exists on
+# every PR — add it to the ruleset AFTER it has merged to main, never
+# before, or every open PR deadlocks.
 
 on:
   push:
@@ -238,6 +250,74 @@ jobs:
         run: |
           python3 tools/check-undeveloped-goals.py --self-test
           python3 tools/check-undeveloped-goals.py
+
+  # scry#161: the V-model's artifact side and the code side were never
+  # connected -- rivet ships commit-to-artifact traceability and it shipped
+  # here unconfigured, so `Broken refs` read 0 for want of any reference to
+  # check. That counter is exactly what would have caught PR #159 merging with
+  # a commit naming FEAT-086 before the artifact existed (#160).
+  #
+  # Its own job, not a step on the rivet job, so a traceability failure is
+  # legible in the checks list rather than buried behind artifact validation.
+  #
+  # FORWARD-ONLY: scoped to origin/main..HEAD, so the 85 pre-existing orphan
+  # commits never enter the gate. NOT `rivet commits --strict`, which also
+  # promotes the repo-wide unimplemented-artifacts warning (Artifact coverage:
+  # 1/257) that no pull request can satisfy.
+  commit-traceability:
+    name: Commit traceability (rivet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # origin/main..HEAD cannot resolve on a shallow clone.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install rivet-cli
+        run: cargo install --locked --git https://github.com/pulseengine/rivet rivet-cli
+      - name: Guard — every code commit links an artifact that RESOLVES
+        run: |
+          python3 tools/check-commit-trailers.py --self-test
+          python3 tools/check-commit-trailers.py
+
+  # scry#130 follow-up. The required-check setting was fixed on 2026-08-27;
+  # this exists so it cannot silently rot back. Three ways it rots: a job is
+  # ADDED and never required (scry#130 returning one job at a time, invisible
+  # because the PR still goes green); a job is RENAMED (the stale context can
+  # never report, so every PR deadlocks); or the ruleset is RESET — it is named
+  # `temper-default-branch-protection`, so something else may regenerate it.
+  #
+  # Needs `administration: read` to see the ruleset, and full history to read
+  # ci.yml as it exists on main — a job new in THIS PR is reported as pending,
+  # not failed, because requiring it before it merges deadlocks every other
+  # open PR.
+  required-checks-drift:
+    name: Required checks track CI jobs (scry#130)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install pyyaml
+      # --against-file, NOT the live ruleset: a workflow's GITHUB_TOKEN cannot
+      # read rulesets (`administration` is not a grantable Actions scope, and a
+      # workflow requesting it is rejected wholesale — the run fails with zero
+      # jobs and no log, which reads like an outage rather than a syntax
+      # error). So CI gates on .github/required-checks.txt, which catches the
+      # rot WE cause: a job added or renamed without updating the file. A
+      # ruleset RESET is invisible to anything in-repo and needs the live mode,
+      # run with admin credentials.
+      - name: Guard — every requirable CI job is in required-checks.txt
+        run: |
+          python3 tools/check-required-checks.py --self-test
+          python3 tools/check-required-checks.py --against-file
 
   # A README is a claim about the system — the same species as a requirement,
   # gated the same way. `claim-check` re-derives every load-bearing doc claim

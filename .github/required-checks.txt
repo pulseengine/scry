@@ -1,0 +1,22 @@
+# scry#130. The status checks main REQUIRES, as a checked-in file so CI can
+# gate on it — GITHUB_TOKEN cannot read rulesets (`administration` is not a
+# grantable Actions scope), so a CI job cannot query the live setting.
+#
+# tools/check-required-checks.py --against-file  (CI: no API, catches a job
+#   added or renamed without updating this file)
+# tools/check-required-checks.py                 (admin creds: compares this
+#   file to the LIVE ruleset, catches a reset or an out-of-band edit)
+#
+# Generated from ruleset 16891064 on 2026-08-27. Path-filtered jobs must
+# NEVER appear here: 'Rivet artifact delta' lives in rivet-delta.yml and does
+# not run on a code-only PR, so requiring it deadlocks such PRs forever.
+AADL model (spar parse)
+Bazel build (//:scry)
+cargo-deny (licenses, advisories, bans)
+Clippy
+Doc claims (claim-check)
+Format
+MC/DC (witness)
+Rivet artifact validation
+Test
+WIT round-trip (wasm-tools)
