@@ -1257,7 +1257,7 @@ artifacts:
   - id: FEAT-071
     type: feature
     title: "v3.3 — Machine-readable capability manifest (the Scope block as data)"
-    status: proposed
+    status: accepted
     release: v3.3.0
     description: >
       The v3.2.2 dashboard states scry's scope in prose: what is mechanized vs
