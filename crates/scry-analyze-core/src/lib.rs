@@ -3317,6 +3317,10 @@ fn stamp_obligation_ids(
         a.obligation_id = obligation_id_of("<module>", "", "<module>", 0, &a.code);
         a.site_key = site_key_of("<module>", "", "<module>", 0);
         a.group_key = group_key_of("<module>", "", "<module>");
+        // FEAT-087: set DELIBERATELY, not left to the construction-site
+        // default. A module-scoped advisory's ident is the literal `<module>`,
+        // which is body-independent, so it survives an edit to any function.
+        a.ident_survives_own_edit = true;
     }
     // FEAT-077: a stripped name may serve as the identity ONLY when unique in
     // the module. Count every named function's CANDIDATE — stripped when the
@@ -10877,6 +10881,24 @@ mod tests {
             a.ident_survives_own_edit,
             "the raw name is body-independent: build-local and \
              survives-own-edit are INDEPENDENT bits, not a ranking"
+        );
+    }
+
+    /// FEAT-087: a module-scoped advisory (`unbounded-stack`) is identified by
+    /// the literal `<module>`, which no function body feeds — so it survives an
+    /// edit to its own module. Pinned as a GATE rather than left to the
+    /// construction-site default, so the value is a decision and not a seed.
+    #[test]
+    fn feat087_a_module_scoped_ident_survives_any_edit() {
+        let r = analyze_default("(module (func $recurse (result i32) call $recurse))");
+        let a = r
+            .advisories
+            .iter()
+            .find(|a| a.code == "unbounded-stack")
+            .expect("a recursive module must raise unbounded-stack");
+        assert!(
+            a.ident_survives_own_edit,
+            "the `<module>` ident is body-independent"
         );
     }
 }
