@@ -848,6 +848,67 @@ impl AdvisoryClass {
     }
 }
 
+/// FEAT-067 (REQ-017, REQ-020): a filter surface so a consumer ASKS instead of
+/// scraping. The bounded slice of the FEAT-056 queryable-CPG idea — filtering
+/// over the existing result, with no new graph substrate and no query language.
+///
+/// Every field is an independent constraint and they are ANDed. `None` means
+/// "unconstrained", so `Query::default()` selects everything — the identity of
+/// a conjunction, not a special case.
+///
+/// `op` and `gap_kind` are NOT fields of [`Advisory`]; they are joined from the
+/// gap and trap-check records at the same `(func_index, pc)`. That join is why
+/// this is a query surface rather than a filter over one vector.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Query {
+    /// Advisory class (`DefiniteFault` / `UnprovenObligation` / ...).
+    pub class: Option<AdvisoryClass>,
+    /// Advisory code, e.g. `div-by-zero`.
+    pub code: Option<String>,
+    /// Absolute function index.
+    pub func_index: Option<u32>,
+    /// Operator name in wasm text format, e.g. `i32.load`. FEAT-092 made these
+    /// consistent; before it, 2,800 of 10,520 were Rust enum identifiers.
+    pub op: Option<String>,
+    /// Gap kind, joined from the gap record at the same site.
+    pub gap_kind: Option<GapKind>,
+}
+
+impl AnalysisResult {
+    /// FEAT-067: the advisories matching EVERY constraint set on `q`, in result
+    /// order, each carrying its stable obligation identity (REQ-020).
+    pub fn query(&self, q: &Query) -> Vec<&Advisory> {
+        self.advisories
+            .iter()
+            .filter(|a| {
+                // Each `Some` is a constraint; `None` imposes none. `all` over
+                // an empty constraint set is TRUE, which is why
+                // `Query::default()` selects everything without a special case.
+                q.class.is_none_or(|c| a.class == c)
+                    && q.code.as_deref().is_none_or(|c| a.code == c)
+                    && q.func_index.is_none_or(|f| a.func_index == f)
+                    // `op` and `gap_kind` are joined from the records that DO
+                    // carry them, at the same site. An advisory with no such
+                    // record cannot satisfy the constraint, so it is excluded
+                    // rather than admitted — a filter must never widen.
+                    && q.op.as_deref().is_none_or(|want| {
+                        self.gaps
+                            .iter()
+                            .any(|g| g.func_index == a.func_index && g.pc == a.pc && g.op == want)
+                            || self.trap_checks.iter().any(|t| {
+                                t.func_index == a.func_index && t.pc == a.pc && t.op == want
+                            })
+                    })
+                    && q.gap_kind.is_none_or(|want| {
+                        self.gaps.iter().any(|g| {
+                            g.func_index == a.func_index && g.pc == a.pc && g.kind == want
+                        })
+                    })
+            })
+            .collect()
+    }
+}
+
 /// FEAT-045 (REQ-014, MF-006): a runtime-trap classification for one
 /// division/remainder operator. scry's first runtime-error verdict — the
 /// Astrée/Polyspace-style "PROVEN-SAFE vs POTENTIAL-TRAP" judgement, derived
@@ -13046,5 +13107,132 @@ mod tests {
             ps[0].site_key, ps[1].site_key,
             "site_key excludes the code, so both facts share a site"
         );
+    }
+    /// FEAT-067 AC1: a consumer filters by class / code / function / operator /
+    /// gap kind and receives ONLY the matching records, each carrying its stable
+    /// obligation identity (REQ-020).
+    #[test]
+    fn feat067_ac1_filters_select_only_matching_records_with_their_ids() {
+        // Two functions: one divides (div-by-zero + signed-overflow + a
+        // proven-safe), one uses an unmodelled op (a gap).
+        let r = analyze_default(
+            "(module (memory 1) \
+               (func $a (export \"a\") (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $b (export \"b\") (param i32) \
+                 local.get 0 i32.const 3 i32.store8))",
+        );
+        assert!(
+            r.advisories.len() >= 3,
+            "non-vacuity: fixture must raise several advisories; got {}",
+            r.advisories.len()
+        );
+
+        // everything
+        let all = r.query(&Query::default());
+        assert_eq!(
+            all.len(),
+            r.advisories.len(),
+            "an unconstrained query is the identity of a conjunction: it selects all"
+        );
+
+        // by code
+        let dbz = r.query(&Query {
+            code: Some("div-by-zero".into()),
+            ..Query::default()
+        });
+        assert!(!dbz.is_empty(), "fixture must contain a div-by-zero");
+        assert!(
+            dbz.iter().all(|a| a.code == "div-by-zero"),
+            "a code filter must return ONLY that code"
+        );
+        assert!(
+            dbz.iter().all(|a| !a.obligation_id.is_empty()),
+            "every returned record carries its stable obligation id (REQ-020)"
+        );
+
+        // by class
+        let unproven = r.query(&Query {
+            class: Some(AdvisoryClass::UnprovenObligation),
+            ..Query::default()
+        });
+        assert!(
+            !unproven.is_empty(),
+            "fixture must contain an UnprovenObligation"
+        );
+        assert!(
+            unproven
+                .iter()
+                .all(|a| a.class == AdvisoryClass::UnprovenObligation)
+        );
+
+        // by function — and it must EXCLUDE the other function
+        let f0 = r.query(&Query {
+            func_index: Some(0),
+            ..Query::default()
+        });
+        assert!(!f0.is_empty(), "function 0 must have advisories");
+        assert!(
+            f0.iter().all(|a| a.func_index == 0),
+            "func filter must exclude func 1"
+        );
+        assert!(
+            r.advisories.iter().any(|a| a.func_index != 0),
+            "non-vacuity: the fixture must have advisories OUTSIDE function 0, \
+             else 'excludes the other function' is untested"
+        );
+
+        // CONJUNCTIVE: both constraints must hold
+        let both = r.query(&Query {
+            code: Some("div-by-zero".into()),
+            func_index: Some(0),
+            ..Query::default()
+        });
+        assert!(
+            both.iter()
+                .all(|a| a.code == "div-by-zero" && a.func_index == 0)
+        );
+        let impossible = r.query(&Query {
+            code: Some("div-by-zero".into()),
+            func_index: Some(9999),
+            ..Query::default()
+        });
+        assert!(
+            impossible.is_empty(),
+            "constraints are ANDed: an unsatisfiable pair selects nothing"
+        );
+    }
+
+    /// FEAT-067: `op` and `gap_kind` are not Advisory fields — they are joined
+    /// from the gap/trap-check record at the same `(func_index, pc)`. That join
+    /// is the part that can be wrong, so it is tested separately.
+    #[test]
+    fn feat067_op_and_gap_kind_are_joined_from_the_site() {
+        let r = analyze_default(
+            "(module (memory 1) (func $b (export \"b\") (param i32) \
+               local.get 0 i32.const 3 i32.store8))",
+        );
+        let ops: alloc::collections::BTreeSet<&str> =
+            r.gaps.iter().map(|g| g.op.as_str()).collect();
+        assert!(
+            !ops.is_empty(),
+            "non-vacuity: the fixture must produce gaps to join against"
+        );
+        let some_op = ops.iter().next().unwrap().to_string();
+        let by_op = r.query(&Query {
+            op: Some(some_op.clone()),
+            ..Query::default()
+        });
+        assert!(
+            !by_op.is_empty(),
+            "an operator present in the gap records must select its advisories: {some_op:?} \
+             among {ops:?}"
+        );
+        // a wasm-format name that is NOT in this module selects nothing
+        let none = r.query(&Query {
+            op: Some("f64.sqrt".into()),
+            ..Query::default()
+        });
+        assert!(none.is_empty(), "an absent operator selects nothing");
     }
 }

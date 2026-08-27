@@ -1252,7 +1252,7 @@ artifacts:
     fields:
       phase: phase-3
       acceptance-criteria:
-        - "Given an AnalysisResult, When a consumer filters by advisory class / gap kind / operator / function, Then it receives only the matching records with their stable obligation IDs."
+        - "Given an AnalysisResult, When a consumer filters by advisory class / gap kind / operator / function, Then it receives only the matching records with their stable obligation IDs. IMPLEMENTED 2026-08-27 as `AnalysisResult::query(&Query)`. Every field of `Query` is an independent constraint and they are ANDed; `None` is unconstrained, so `Query::default()` selects everything — the identity of a conjunction rather than a special case. `op` and `gap_kind` are NOT Advisory fields: they are JOINED from the gap and trap-check records at the same `(func_index, pc)`, and an advisory with no such record is EXCLUDED rather than admitted, because a filter must never widen. RED-FIRST against a stub returning empty: failed on `an unconstrained query is the identity of a conjunction: it selects all`, after the non-vacuity assertions had passed. MUTATION-CHECKED THREE WAYS, each asserted to apply to exactly one site AND to compile: dropping the code constraint kills the code test; making the op join always match kills `an absent operator selects nothing`; ANDing changed to ORing kills two tests including `func filter must exclude func 1`. The second mutant had to be redone — the first attempt produced invalid Rust and never ran, which is not a surviving mutant but an unmeasured one."
     links:
       - type: traces-to
         target: REQ-017
