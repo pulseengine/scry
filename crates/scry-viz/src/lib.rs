@@ -1484,20 +1484,29 @@ fn esc(raw: &str) -> String {
 /// honest verdict is `uncertain`, never `discharged`. On a STRIPPED module this
 /// tier is the whole population — measured 10,520 of 10,520 obligations on
 /// scry's own binary.
-pub const GUIDANCE_SCHEMA_VERSION: u32 = 4;
+///
+/// v5 (FEAT-090, scry#122 item 2 follow-on) adds `identity_moved_not_evidence`
+/// to the DELTA feed ([`render_delta_json`]): the count of sites present in
+/// exactly one run whose identity does not survive its own edit — rows whose
+/// vanish/appear is NOT evidence the site came or went. The guidance feed's
+/// advisory shape is UNCHANGED from v4; the version is shared by both feeds,
+/// so it moves once.
+pub const GUIDANCE_SCHEMA_VERSION: u32 = 5;
 
 /// Serialize the actionable findings as a machine-consumable JSON document — the
 /// feed an AI-agent consumer reads instead of scraping the (now capped) HTML.
 ///
 /// Shape: a top-level object
-/// `{ "guidance_schema": 4, "module_sha256": "…", "schema": "…",
+/// `{ "guidance_schema": 5, "module_sha256": "…", "schema": "…",
 ///    "advisories": [ … ], "trap_checks": [ … ] }`.
 ///
 /// FEAT-068: `guidance_schema` is an explicit integer version. v1 (the v3.2.2
 /// feed) had none, so a consumer could not tell a field's ABSENCE from an old
 /// producer. v2 adds the version and the three FEAT-064/DD-021 identity keys;
 /// v3 (FEAT-077) adds `id_build_local`; v4 (FEAT-087) adds
-/// `ident_survives_own_edit`. Absence of `guidance_schema` means
+/// `ident_survives_own_edit`; v5 (FEAT-090) adds `identity_moved_not_evidence`
+/// to the DELTA feed only — this feed's advisory shape is unchanged from v4.
+/// Absence of `guidance_schema` means
 /// v1; a consumer requiring identity must check for it rather than assume.
 ///
 /// Each advisory is
@@ -2670,8 +2679,9 @@ mod tests {
         let r = mixed_tier_result();
         let json = render_guidance_json(&r);
         assert!(
-            json.contains("\"guidance_schema\":4"),
-            "the feed must carry an explicit schema version (bumped to 4 by FEAT-087)"
+            json.contains("\"guidance_schema\":5"),
+            "the feed must carry an explicit schema version (bumped to 5 by \
+             FEAT-090's delta field; the advisory shape itself is v4's)"
         );
         assert!(
             json.contains("\"id_build_local\":true"),
@@ -2752,8 +2762,9 @@ mod tests {
         );
         let json = render_guidance_json(&r);
         assert!(
-            json.contains("\"guidance_schema\":4"),
-            "ident_survives_own_edit is a new field — the schema version must be bumped"
+            json.contains("\"guidance_schema\":5"),
+            "the schema version moves in lockstep with the feeds — 4 added \
+             ident_survives_own_edit, 5 added the FEAT-090 delta field"
         );
         assert!(
             json.contains("\"ident_survives_own_edit\":true"),
@@ -2792,6 +2803,187 @@ mod tests {
             !render_html(&named, "named").contains("id moves on own edit"),
             "a name-derived identity must NOT be badged"
         );
+    }
+
+    // ── FEAT-090 (scry#122 item 2): the delta view carries the second bit ───
+
+    /// A named (tier 1, identity survives its own edit) plus an unnamed
+    /// (tier 4, body-shape hash — identity moves on its own edit) function.
+    const NAMED_PLUS_UNNAMED: &str = "(module \
+        (func $compute (param i32) (result i32) \
+          i32.const 10 local.get 0 i32.div_s) \
+        (func (param i32) (result i32) \
+          i32.const 20 local.get 0 i32.div_s))";
+
+    /// The same module with the unnamed function removed.
+    const NAMED_ONLY: &str = "(module \
+        (func $compute (param i32) (result i32) \
+          i32.const 10 local.get 0 i32.div_s))";
+
+    /// FEAT-090: the delta compares runs BY identity, and a body-shape-hash
+    /// identity moves on ANY edit to its own function — so the delta page is
+    /// exactly where that limitation would be misread as a removal. This is
+    /// the discriminating oracle: a delta holding BOTH a surviving and a
+    /// non-surviving row, asserted to DIFFER on the new field. A delta in
+    /// which the two agree is a constant, not a bit.
+    #[test]
+    fn feat090_delta_rows_differ_on_ident_survives_own_edit() {
+        let r = analyze_wat(NAMED_PLUS_UNNAMED);
+        // Anti-vacuity preconditions: the fixture must actually reach both
+        // tiers, or every assertion below passes without testing anything.
+        assert!(
+            r.advisories
+                .iter()
+                .any(|a| !a.site_key.is_empty() && a.ident_survives_own_edit),
+            "fixture must produce a site whose identity survives its own edit"
+        );
+        assert!(
+            r.advisories
+                .iter()
+                .any(|a| !a.site_key.is_empty() && !a.ident_survives_own_edit),
+            "fixture must produce a site whose identity moves on its own edit"
+        );
+        let d = compute_delta(&r, &r);
+        assert!(
+            d.rows.iter().any(|row| row.ident_survives_own_edit),
+            "the named tier's delta row must carry ident_survives_own_edit = true"
+        );
+        assert!(
+            d.rows.iter().any(|row| !row.ident_survives_own_edit),
+            "the unnamed (body-shape-hash) tier's delta row must carry \
+             ident_survives_own_edit = false"
+        );
+    }
+
+    /// FEAT-090: `identity_moved_not_evidence` counts ONLY the rows present in
+    /// exactly one run whose identity does not survive its own edit. A
+    /// vanished row with a name-derived identity must NOT count — otherwise
+    /// the accessor is `only_before()` under a new name — and neither must a
+    /// row present in both runs.
+    #[test]
+    fn feat090_identity_moved_count_licenses_nothing_and_counts_precisely() {
+        // before: named + unnamed; after: the unnamed function deleted. Its
+        // site is "gone" — but its identity moves on its own edit, so that
+        // vanish licenses no removal claim, and the count must say so.
+        let d = compute_delta(&analyze_wat(NAMED_PLUS_UNNAMED), &analyze_wat(NAMED_ONLY));
+        assert!(
+            d.only_before() >= 1,
+            "precondition: deleting the unnamed function must vanish a site"
+        );
+        assert_eq!(
+            d.identity_moved_not_evidence(),
+            1,
+            "exactly the vanished body-shape-hash site must be counted"
+        );
+        // Control: a vanished NAMED site (identity survives its own edit) is
+        // real evidence-grade churn and must NOT be counted.
+        let two_named = analyze_wat(
+            "(module \
+               (func $compute (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func $other (param i32) (result i32) \
+                 i32.const 20 local.get 0 i32.div_s))",
+        );
+        let d2 = compute_delta(&two_named, &analyze_wat(NAMED_ONLY));
+        assert!(
+            d2.only_before() >= 1,
+            "precondition: deleting $other must vanish a site"
+        );
+        assert_eq!(
+            d2.identity_moved_not_evidence(),
+            0,
+            "a vanished name-derived identity survives its own edit and must \
+             not land in the not-evidence bucket"
+        );
+    }
+
+    /// FEAT-090 polarity: `ident_survives_own_edit` is a POSITIVE predicate,
+    /// so it must accumulate CONJUNCTIVELY (`&=`) — one non-surviving advisory
+    /// poisons the site. Accumulating with `|=` the way the negative-polarity
+    /// `build_local` does would report a mixed site as surviving, which
+    /// over-claims. The mix is built synthetically (one `site_key`, two
+    /// advisories disagreeing on the bit) so the wrong polarity cannot pass.
+    #[test]
+    fn feat090_mixed_site_accumulates_conjunctively() {
+        let mut r = analyze_wat("(module (func (export \"run\") nop))");
+        let mk = |survives: bool, pc: u32| scry_analyze_core::Advisory {
+            func_index: 0,
+            pc,
+            class: AdvisoryClass::UnprovenObligation,
+            code: "div-by-zero".into(),
+            detail: "divisor may be zero".into(),
+            suggested_action: "guard it".into(),
+            verification: "re-run scry".into(),
+            counterexample: None,
+            obligation_id: format!("ob-{pc}"),
+            site_key: "site-mixed".into(),
+            group_key: "grp-mixed".into(),
+            id_build_local: false,
+            ident_survives_own_edit: survives,
+        };
+        r.advisories.push(mk(true, 1));
+        r.advisories.push(mk(false, 2));
+        let d = compute_delta(&r, &r);
+        let row = d
+            .rows
+            .iter()
+            .find(|row| row.site_key == "site-mixed")
+            .expect("the synthetic site must appear in the delta");
+        assert!(
+            !row.ident_survives_own_edit,
+            "one non-surviving advisory must poison the site: a disjunctive \
+             (`|=`) accumulator would report true here"
+        );
+    }
+
+    /// FEAT-090: the machine feed must carry the summary count, and the
+    /// schema version must say the field exists (FEAT-068 discipline: a
+    /// consumer must be able to tell an old producer from a zero count).
+    #[test]
+    fn feat090_delta_json_carries_identity_moved_count_and_v5_schema() {
+        let json = render_delta_json(&compute_delta(
+            &analyze_wat(NAMED_PLUS_UNNAMED),
+            &analyze_wat(NAMED_ONLY),
+        ));
+        assert!(
+            json.contains("\"guidance_schema\":5"),
+            "identity_moved_not_evidence is a new delta field — the schema \
+             version must be bumped to 5"
+        );
+        // The expected value is pinned from the FIXTURE (exactly one unnamed
+        // site vanished), never read back from the accessor that emitted it.
+        assert!(
+            json.contains("\"identity_moved_not_evidence\":1"),
+            "the delta feed must carry the not-evidence count; got: {json}"
+        );
+    }
+
+    /// FEAT-090: the delta PAGE must disclose the bucket in prose — a reader
+    /// of the page alone (FEAT-087's declared residual) must be told that a
+    /// vanish on the body-shape-hash tier is not evidence the site went away.
+    #[test]
+    fn feat090_delta_page_discloses_identity_moved_bucket() {
+        let html = render_delta_html(
+            &compute_delta(&analyze_wat(NAMED_PLUS_UNNAMED), &analyze_wat(NAMED_ONLY)),
+            "t",
+        )
+        .to_lowercase();
+        assert!(
+            html.contains("identity may have moved — not evidence"),
+            "the bucket must exist as its own section, headed by what it means"
+        );
+        assert!(
+            html.contains("id moves on own edit"),
+            "the page must name the tier the way the guidance page does"
+        );
+        // The new section must not smuggle in verdict vocabulary — the
+        // FEAT-072 no-verdict guard extends to it.
+        for banned in ["discharg", "verified fix", "obligation closed"] {
+            assert!(
+                !html.contains(banned),
+                "the delta page must not claim {banned:?} while scry#122 is open"
+            );
+        }
     }
 }
 
@@ -2865,6 +3057,19 @@ pub struct DeltaRow {
     /// builds, so its appearance/disappearance here is NOT evidence a site
     /// came or went: a churned raw name presents exactly the same way.
     pub build_local: bool,
+    /// FEAT-090 (scry#122 item 2): FALSE when any advisory at this site, in
+    /// EITHER run, has an identity that does NOT survive an edit to its own
+    /// function (`Advisory::ident_survives_own_edit == false` — the unnamed
+    /// body-shape-hash tier). A `false` row present in only one run is NOT
+    /// evidence the site came or went: any edit to the function moves its
+    /// keys and presents exactly the same way.
+    ///
+    /// POLARITY — this is a POSITIVE predicate, so unlike `build_local`
+    /// (negative, accumulated with `|=`) it accumulates CONJUNCTIVELY: one
+    /// non-surviving advisory poisons the row. That is the conservative
+    /// direction — the row claims survival only when EVERY advisory backing
+    /// it does.
+    pub ident_survives_own_edit: bool,
 }
 
 impl DeltaRow {
@@ -2943,6 +3148,24 @@ impl Delta {
     pub fn build_local_sites(&self) -> usize {
         self.rows.iter().filter(|r| r.build_local).count()
     }
+    /// FEAT-090 (scry#122 item 2): rows present in EXACTLY ONE run whose
+    /// identity does NOT survive an edit to its own function — rows where the
+    /// appearance/disappearance is NOT evidence the site came or went,
+    /// because an edit to the function moves its keys and presents the same
+    /// way. Named after what the observation LICENSES (nothing), not after
+    /// the mechanism that produced it (DD-022's standing lesson: consumers
+    /// read mechanism names as stability rankings).
+    ///
+    /// On a fully STRIPPED module (standard in release builds) every
+    /// function is on the body-shape-hash tier, so EVERY vanished/new row
+    /// lands here — the correct outcome: it says the delta cannot support
+    /// removal claims at all for that module.
+    pub fn identity_moved_not_evidence(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| !r.in_both() && !r.ident_survives_own_edit)
+            .count()
+    }
     /// The rows a future adjudicator (REQ-021) could act on soundly TODAY:
     /// present in both runs, obligation set changed, and provably alias-free.
     /// Reported as a COUNT OF CANDIDATES, never as discharges.
@@ -2972,10 +3195,11 @@ pub fn compute_delta(before: &AnalysisResult, after: &AnalysisResult) -> Delta {
         m
     }
     // site_key -> (group_key, func_index, pc, sorted distinct codes,
-    //              any advisory here build-local (FEAT-077))
+    //              any advisory here build-local (FEAT-077),
+    //              EVERY advisory here survives its own edit (FEAT-090))
     #[allow(clippy::type_complexity)]
-    fn sites(r: &AnalysisResult) -> BTreeMap<&str, (&str, u32, u32, BTreeSet<&str>, bool)> {
-        let mut m: BTreeMap<&str, (&str, u32, u32, BTreeSet<&str>, bool)> = BTreeMap::new();
+    fn sites(r: &AnalysisResult) -> BTreeMap<&str, (&str, u32, u32, BTreeSet<&str>, bool, bool)> {
+        let mut m: BTreeMap<&str, (&str, u32, u32, BTreeSet<&str>, bool, bool)> = BTreeMap::new();
         for a in r.advisories.iter().filter(|a| !a.site_key.is_empty()) {
             let e = m.entry(a.site_key.as_str()).or_insert((
                 a.group_key.as_str(),
@@ -2983,9 +3207,16 @@ pub fn compute_delta(before: &AnalysisResult, after: &AnalysisResult) -> Delta {
                 a.pc,
                 BTreeSet::new(),
                 false,
+                true,
             ));
             e.3.insert(a.code.as_str());
             e.4 |= a.id_build_local;
+            // FEAT-090: OPPOSITE polarity to `id_build_local`, deliberately.
+            // `ident_survives_own_edit` is a POSITIVE predicate, so the
+            // conservative accumulator is conjunction: one non-surviving
+            // advisory poisons the site. `|=` here would over-claim survival
+            // for a mixed site.
+            e.5 &= a.ident_survives_own_edit;
         }
         m
     }
@@ -3030,6 +3261,13 @@ pub fn compute_delta(before: &AnalysisResult, after: &AnalysisResult) -> Delta {
             // FEAT-077: build-local in EITHER run poisons cross-run
             // comparability of the row, so either flag marks it.
             build_local: b.map(|x| x.4).unwrap_or(false) || a.map(|x| x.4).unwrap_or(false),
+            // FEAT-090: a non-surviving advisory in EITHER run poisons the
+            // row. An ABSENT run contributes the conjunction's neutral
+            // element (true) — it has no advisories to poison with, and
+            // whether the absence itself is evidence is exactly what the
+            // present run's bit decides.
+            ident_survives_own_edit: b.map(|x| x.5).unwrap_or(true)
+                && a.map(|x| x.5).unwrap_or(true),
         });
     }
 
@@ -3109,6 +3347,8 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
          <dt class=\"warn\">…ordinal donation not excluded</dt><dd class=\"warn\">{}</dd>\
          <dt>only in before (site gone)</dt><dd>{}</dd>\
          <dt>only in after (site new)</dt><dd>{}</dd>\
+         <dt class=\"warn\">…of the gone/new, id moves on own edit (not evidence)</dt>\
+         <dd class=\"warn\">{}</dd>\
          <dt>obligation set changed</dt><dd>{}</dd>\
          <dt>…of those, ordinal-stable</dt><dd>{}</dd>",
         esc(&d.sha_before),
@@ -3122,6 +3362,7 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
         d.not_excluded(),
         d.only_before(),
         d.only_after(),
+        d.identity_moved_not_evidence(),
         d.changed(),
         d.ordinal_stable_changes(),
     );
@@ -3230,6 +3471,74 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
     }
     s.push_str("</section>");
 
+    // FEAT-090 (scry#122 item 2): the gone/new rows whose identity does NOT
+    // survive an edit to its own function get their OWN section, not a column:
+    // "gone" in the table above and "gone, but not evidence" are different
+    // claims, and a consumer reading the delta for removals must meet the
+    // distinction head-on, exactly as the build-local paragraph above does for
+    // cross-build churn.
+    s.push_str("<section><h2>Identity may have moved — not evidence</h2>");
+    let not_evidence: Vec<&DeltaRow> = d
+        .rows
+        .iter()
+        .filter(|r| !r.in_both() && !r.ident_survives_own_edit)
+        .collect();
+    if not_evidence.is_empty() {
+        s.push_str(
+            "<p class=\"empty\">Every site listed as gone or new carries an \
+             identity that survives an edit to its own function — none of the \
+             vanishes/appearances above is dismissible as identity churn on \
+             this axis.</p>",
+        );
+    } else {
+        let _ = write!(
+            s,
+            "<p><strong>{}</strong> of the {} gone/new site(s) carry an \
+             identity that does <strong>not</strong> survive an edit to its \
+             own function (badged <em>id moves on own edit</em> on the \
+             guidance page: the function is unnamed, so its identity is a \
+             hash of its own body). For these rows a missing or new key is \
+             <strong>not evidence the site came or went</strong> — any edit \
+             to the function moves its keys and presents exactly the same \
+             way. The honest reading for them is <em>uncertain</em> \
+             (scry#122).</p>\
+             <p class=\"muted\">On a fully stripped module — standard in \
+             release builds — every function is on that tier, so EVERY \
+             gone/new row lands here and this delta supports no removal \
+             claims at all. That is the correct outcome, stated rather than \
+             discovered.</p>",
+            not_evidence.len(),
+            d.only_before() + d.only_after(),
+        );
+        let shown: Vec<&&DeltaRow> = not_evidence.iter().take(SECTION_ROW_CAP).collect();
+        if not_evidence.len() > shown.len() {
+            let _ = write!(s, "<p class=\"muted\">Showing the first {}.</p>", shown.len());
+        }
+        s.push_str("<table><tr><th>site</th><th>fn:pc</th><th>fate</th></tr>");
+        for r in shown {
+            let ftxt = if r.codes_after.is_empty() {
+                "gone — not evidence"
+            } else {
+                "new — not evidence"
+            };
+            let pcs = match (r.pc_before, r.pc_after) {
+                (Some(b), _) => format!("fn{}:{}", r.func_index, b),
+                (_, Some(a)) => format!("fn{}:{}", r.func_index, a),
+                (None, None) => "—".to_string(),
+            };
+            let _ = write!(
+                s,
+                "<tr><td><code>{}</code></td><td><code>{}</code></td>\
+                 <td class=\"warn\">{}</td></tr>",
+                esc(&r.site_key),
+                esc(&pcs),
+                ftxt,
+            );
+        }
+        s.push_str("</table>");
+    }
+    s.push_str("</section>");
+
     s.push_str(
         "<footer>Rendered by scry-viz · a comparison of two analyses by stable \
         identity. No verdict is asserted; see scry#122. MIT OR Apache-2.0.</footer>",
@@ -3240,6 +3549,13 @@ pub fn render_delta_html(d: &Delta, title: &str) -> String {
 
 /// FEAT-072: the delta as a machine-consumable summary — what the FEAT-073
 /// harness aggregates across a run of commits.
+///
+/// FEAT-090 (schema v5) adds `identity_moved_not_evidence`: of the
+/// `only_before`/`only_after` rows, how many carry an identity that does not
+/// survive an edit to its own function — rows whose vanish/appear is NOT
+/// evidence the site came or went. When it equals `only_before + only_after`
+/// the delta supports NO removal claims at all (the whole-population case on a
+/// stripped module).
 pub fn render_delta_json(d: &Delta) -> String {
     let mut s = String::with_capacity(1024);
     let _ = write!(
@@ -3249,6 +3565,7 @@ pub fn render_delta_json(d: &Delta) -> String {
          \"module_sha256_before\":\"{}\",\"module_sha256_after\":\"{}\",\
          \"sites_before\":{},\"sites_after\":{},\
          \"build_local_sites\":{},\
+         \"identity_moved_not_evidence\":{},\
          \"ordinal_stable\":{},\"not_excluded\":{},\
          \"only_before\":{},\"only_after\":{},\
          \"changed\":{},\"unchanged\":{},\"ordinal_stable_changes\":{}}}",
@@ -3258,6 +3575,7 @@ pub fn render_delta_json(d: &Delta) -> String {
         d.sites_before(),
         d.sites_after(),
         d.build_local_sites(),
+        d.identity_moved_not_evidence(),
         d.ordinal_stable(),
         d.not_excluded(),
         d.only_before(),
