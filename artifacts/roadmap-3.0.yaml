@@ -1240,7 +1240,7 @@ artifacts:
   - id: FEAT-067
     type: feature
     title: "v3.3 — Query filters over AnalysisResult (FEAT-056 lite)"
-    status: proposed
+    status: accepted
     release: v3.3.0
     description: >
       A filter/selection surface so a consumer asks instead of scrapes —
