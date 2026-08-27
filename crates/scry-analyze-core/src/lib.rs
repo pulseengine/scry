@@ -13001,4 +13001,50 @@ mod tests {
         );
         assert!(!rep.gate_pass());
     }
+    /// FEAT-064 AC5, the half that was never tested. AC5 states a GENERAL
+    /// property — "one operator raising several obligations gets DISTINCT ids;
+    /// the site alone is not a discriminator" — and
+    /// `feat064_two_obligations_at_one_pc_get_distinct_ids` verified it for
+    /// OPEN obligations only. Measured 2026-08-27: NONE of the five FEAT-064
+    /// tests referenced `proven-safe` or `LeverageableFact`, and the identical
+    /// property was BROKEN for them through the whole FEAT-064/077/087 identity
+    /// arc — two facts at one pc (`i32.div_s` proving both divide-by-zero-safe
+    /// AND INT_MIN/-1-overflow-safe) shared a single `obligation_id`.
+    ///
+    /// FEAT-089 repaired the mechanism (`id_codes` keys a proven-safe advisory
+    /// by the obligation code it discharges) but left no oracle. This is it: a
+    /// change to that keying must not silently restore the collision.
+    #[test]
+    fn feat064_ac5_two_proven_safe_facts_at_one_pc_get_distinct_ids() {
+        // Both operands constant: div-by-zero AND signed-overflow are both
+        // provable, so one pc yields two LeverageableFact advisories.
+        let r = analyze_default(
+            "(module (func $d (export \"d\") (result i32) \
+               i32.const 10 i32.const 2 i32.div_s))",
+        );
+        let ps: alloc::vec::Vec<&Advisory> = r
+            .advisories
+            .iter()
+            .filter(|a| a.code == "proven-safe" && !a.obligation_id.is_empty())
+            .collect();
+        // Non-vacuity: without two facts at one pc there is nothing to collide.
+        assert_eq!(
+            ps.len(),
+            2,
+            "fixture must yield TWO proven-safe facts at one pc; got {:?}",
+            ps.iter().map(|a| &a.detail).collect::<alloc::vec::Vec<_>>()
+        );
+        assert_eq!(ps[0].pc, ps[1].pc, "precondition: both facts share a pc");
+        assert_ne!(
+            ps[0].obligation_id, ps[1].obligation_id,
+            "two DISTINCT proven-safe facts at one pc must have distinct ids; \
+             the site alone is not a discriminator (FEAT-064 AC5), and this \
+             held for open obligations while silently failing here"
+        );
+        // The site key SHOULD match — it deliberately excludes the code.
+        assert_eq!(
+            ps[0].site_key, ps[1].site_key,
+            "site_key excludes the code, so both facts share a site"
+        );
+    }
 }
