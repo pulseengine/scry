@@ -7,16 +7,19 @@
 # tools/check-required-checks.py                 (admin creds: compares this
 #   file to the LIVE ruleset, catches a reset or an out-of-band edit)
 #
-# Generated from ruleset 16891064 on 2026-08-27. Path-filtered jobs must
+# Generated from ruleset 16891064 on 2026-08-27; extended to 12 when Path-filtered jobs must
 # NEVER appear here: 'Rivet artifact delta' lives in rivet-delta.yml and does
 # not run on a code-only PR, so requiring it deadlocks such PRs forever.
+# FEAT-091/FEAT-093 landed (#167) and their jobs became requirable.
 AADL model (spar parse)
 Bazel build (//:scry)
-cargo-deny (licenses, advisories, bans)
 Clippy
+Commit traceability (rivet)
 Doc claims (claim-check)
 Format
 MC/DC (witness)
+Required checks track CI jobs (scry#130)
 Rivet artifact validation
 Test
 WIT round-trip (wasm-tools)
+cargo-deny (licenses, advisories, bans)

@@ -34,6 +34,17 @@ name: CI
 # forever. Any job added here is required only once its name exists on
 # every PR — add it to the ruleset AFTER it has merged to main, never
 # before, or every open PR deadlocks.
+#
+# AND THAT IS NOT SUFFICIENT, learned by doing it: a PR opened BEFORE
+# the job existed still does not have it, so it can never report and is
+# blocked forever. When #167 added two jobs and they were required, PRs
+# #168 and #169 each showed 11 checks with 0 of the 2 new ones -- both
+# would have deadlocked. The complete procedure is:
+#   1. merge the PR that adds the job
+#   2. add the context to the ruleset AND to required-checks.txt,
+#      ruleset FIRST (CI gates on the file, so a file ahead of the
+#      ruleset means CI is gating on a fiction)
+#   3. REBASE EVERY OPEN PR, or it can never satisfy the new check
 
 on:
   push:
