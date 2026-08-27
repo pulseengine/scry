@@ -4,7 +4,7 @@ artifacts:
   - id: FEAT-087
     type: feature
     title: "v3.4 — Identity that survives an edit to its OWN body is a second, independent bit (scry#122 item 2)"
-    status: proposed
+    status: accepted
     release: v3.4.0
     description: >
       FEAT-077 made function identity honest about ONE question — "are these
