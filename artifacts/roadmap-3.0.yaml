@@ -1172,7 +1172,7 @@ artifacts:
     fields:
       phase: phase-3
       acceptance-criteria:
-        - "Given guidance.json, When a consumer reads it, Then every advisory carries a stable obligation ID and the document declares its schema version and module hash. VERIFIED on a real feed: guidance_schema=3, module_sha256 present, and every advisory carries obligation_id / site_key / group_key / id_build_local."
+        - "Given guidance.json, When a consumer reads it, Then every advisory carries a stable obligation ID and the document declares its schema version and module hash. VERIFIED on a real feed: module_sha256 present, and every advisory carries obligation_id / site_key / group_key / id_build_local. The requirement is that the feed DECLARES a version, not that the version equals any particular number: it read 3 when this was written and reads 4 since FEAT-087. The oracle parses the declared integer structurally rather than comparing it to GUIDANCE_SCHEMA_VERSION, which would be tautological."
         - "VERSION DRIFT, recorded rather than hidden: this feature shipped the feed at schema 2; FEAT-082 then added `id_build_local` and bumped it to 3. The AC requires the document to DECLARE its version, not to be any particular one, so it is satisfied — but the feature title said `v2` while the artifact said `3`, which is exactly the drift claims.yaml exists to catch and which no predicate covered here."
     links:
       - type: traces-to
@@ -1561,7 +1561,7 @@ artifacts:
   - id: FEAT-077
     type: feature
     title: "v3.4 — Two-tier function identity: unique stripped name, else raw name marked build-local (scry#123)"
-    status: implemented
+    status: accepted
     release: v3.4.0
     description: >
       The repair for the MEASURED identity-churn defect (scry#123, FEAT-073's
@@ -1602,7 +1602,7 @@ artifacts:
         - "Given a stripped name that collides with another function's PLAIN name (`foo17h…E` vs `foo`), When identities are stamped, Then the disambiguated function falls back to its raw name marked build-local and the plain-named function keeps its stable identity — uniqueness is counted over stripped AND plain candidates."
         - "Given a name whose suffix is a NEAR MISS (uppercase hex, or 15 digits), When identities are stamped, Then nothing is stripped: the id tracks the raw name exactly as in v3.2.5 and is not marked. MUTATION-CHECKED: widening the shape to accept uppercase hex turns exactly this test red."
         - "Given a plain name (`compute`) or an unnamed function (body-shape-hash fallback), When identities are stamped, Then the obligation id is BYTE-IDENTICAL to v3.2.5 — pinned against constants (dd7c4231ce161f87 / 4f61c85b63648dc7) captured from the unmodified code on main (5cd2a89) before the change."
-        - "Given the guidance feed, When rendered, Then `guidance_schema` is 3 and every advisory carries `id_build_local` — a consumer can tell a stable id from a build-local one without parsing the id (FEAT-068 versioning discipline). The delta view carries the flag per row plus a summary count, and its page discloses that a build-local site vanishing/appearing between builds is expected churn."
+        - "Given the guidance feed, When rendered, Then `guidance_schema` is AT LEAST 3 — exactly 3 when this shipped, 4 since FEAT-087 added the second identity bit — and every advisory carries `id_build_local` — a consumer can tell a stable id from a build-local one without parsing the id (FEAT-068 versioning discipline). The delta view carries the flag per row plus a summary count, and its page discloses that a build-local site vanishing/appearing between builds is expected churn."
         - "MUTATION-CHECKED, five mutants all killed by exactly the intended tests and nothing else: (M1) stripping disabled -> 3 core tests red; (M2) uniqueness check dropped -> the two collision tests red; (M3) uppercase hex accepted -> the exact-shape test red; (M4) marking suppressed -> 2 core + all 3 viz tests red; (M5) everything marked -> 5 core + 3 viz tests red."
       residual: >
         Build-local identities remain build-local: for the ~37.8% of functions

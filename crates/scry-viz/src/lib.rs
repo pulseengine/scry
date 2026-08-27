@@ -916,6 +916,19 @@ fn render_advisory_row(s: &mut String, a: &scry_analyze_core::Advisory) {
                  build-local id</span> "
             );
         }
+        // FEAT-087 (scry#122 item 2): the OTHER identity limitation, and the one
+        // that bites when reading a FIX — an ident that does not survive an edit
+        // to its own function body. Independent of build-local.
+        if !a.ident_survives_own_edit {
+            let _ = write!(
+                s,
+                "<span class=\"badge\" title=\"this function has no name, so its \
+                 identity is a hash of its own body — ANY edit to this function \
+                 moves the id. A later build missing this id is NOT evidence the \
+                 obligation was discharged (scry#122)\">\
+                 id moves on own edit</span> "
+            );
+        }
     }
     let _ = write!(
         s,
@@ -1460,25 +1473,38 @@ fn esc(raw: &str) -> String {
 /// another function, so the raw, disambiguated — and churning — name is
 /// hashed). A consumer diffing two runs must skip such advisories rather than
 /// read the churn as discharged/new obligations.
-pub const GUIDANCE_SCHEMA_VERSION: u32 = 3;
+///
+/// v4 (FEAT-087, scry#122 item 2) adds `ident_survives_own_edit`, a SECOND and
+/// INDEPENDENT identity bit: `false` means the function is unnamed, so its
+/// identity is a hash of its own body and ANY edit to that function moves the
+/// keys. Such an advisory is still cross-build comparable (`id_build_local` is
+/// `false` — the hash is deterministic), which is exactly why one bit could not
+/// carry both facts. A consumer may read a missing key as evidence the site is
+/// gone ONLY when `!id_build_local && ident_survives_own_edit`; otherwise the
+/// honest verdict is `uncertain`, never `discharged`. On a STRIPPED module this
+/// tier is the whole population — measured 10,520 of 10,520 obligations on
+/// scry's own binary.
+pub const GUIDANCE_SCHEMA_VERSION: u32 = 4;
 
 /// Serialize the actionable findings as a machine-consumable JSON document — the
 /// feed an AI-agent consumer reads instead of scraping the (now capped) HTML.
 ///
 /// Shape: a top-level object
-/// `{ "guidance_schema": 3, "module_sha256": "…", "schema": "…",
+/// `{ "guidance_schema": 4, "module_sha256": "…", "schema": "…",
 ///    "advisories": [ … ], "trap_checks": [ … ] }`.
 ///
 /// FEAT-068: `guidance_schema` is an explicit integer version. v1 (the v3.2.2
 /// feed) had none, so a consumer could not tell a field's ABSENCE from an old
 /// producer. v2 adds the version and the three FEAT-064/DD-021 identity keys;
-/// v3 (FEAT-077) adds `id_build_local`. Absence of `guidance_schema` means
+/// v3 (FEAT-077) adds `id_build_local`; v4 (FEAT-087) adds
+/// `ident_survives_own_edit`. Absence of `guidance_schema` means
 /// v1; a consumer requiring identity must check for it rather than assume.
 ///
 /// Each advisory is
 /// `{ "func_index", "pc", "class", "code", "detail", "suggested_action",
 ///    "verification", "obligation_id", "site_key", "group_key",
-///    "id_build_local", "counterexample"? }`, mirroring the [`Advisory`] fields
+///    "id_build_local", "ident_survives_own_edit", "counterexample"? }`,
+///    mirroring the [`Advisory`] fields
 /// (`class` uses the machine-stable name, e.g. `"unproven-obligation"`). Each
 /// trap check is `{ "func_index", "pc", "op", "kind", "verdict" }`.
 ///
@@ -1506,7 +1532,7 @@ pub fn render_guidance_json(result: &AnalysisResult) -> String {
             "{{\"func_index\":{},\"pc\":{},\"class\":\"{}\",\"code\":\"{}\",\
              \"detail\":\"{}\",\"suggested_action\":\"{}\",\"verification\":\"{}\",\
              \"obligation_id\":\"{}\",\"site_key\":\"{}\",\"group_key\":\"{}\",\
-             \"id_build_local\":{}",
+             \"id_build_local\":{},\"ident_survives_own_edit\":{}",
             a.func_index,
             a.pc,
             advisory_class_name(a.class),
@@ -1518,6 +1544,7 @@ pub fn render_guidance_json(result: &AnalysisResult) -> String {
             json_esc(&a.site_key),
             json_esc(&a.group_key),
             a.id_build_local,
+            a.ident_survives_own_edit,
         );
         if let Some(cx) = &a.counterexample {
             let _ = write!(
@@ -2205,6 +2232,7 @@ mod tests {
             site_key: format!("site-{i:04x}"),
             group_key: format!("grp-{:04x}", i / 4),
             id_build_local: false,
+            ident_survives_own_edit: true,
         };
         for i in 0..(ADVISORY_PER_CLASS_CAP as u32 + 25) {
             r.advisories.push(mk(i));
@@ -2310,8 +2338,23 @@ mod tests {
         );
         let json = render_guidance_json(&r);
         assert!(
-            json.contains("\"guidance_schema\":3"),
-            "v2 feed must declare its version"
+            json.contains("\"guidance_schema\":"),
+            "v2+ feed must declare its version"
+        );
+        // Read the version STRUCTURALLY rather than comparing against
+        // GUIDANCE_SCHEMA_VERSION: the feed is emitted FROM that constant, so
+        // asserting equality with it is tautological and cannot fail (the
+        // vacuous-oracle class that shipped `scry 0.0.0`, scry#152). The
+        // meaningful pin on the current value lives in the FEAT-087 v4 test.
+        let declared: u32 = json
+            .split("\"guidance_schema\":")
+            .nth(1)
+            .and_then(|t| t.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|d| d.parse().ok())
+            .expect("schema version must be an integer");
+        assert!(
+            declared >= 2,
+            "the versioned feed starts at v2 — v1 was the unversioned v3.2.2 feed"
         );
         for k in ["obligation_id", "site_key", "group_key"] {
             assert!(json.contains(&format!("\"{k}\":\"")), "feed must carry {k}");
@@ -2623,12 +2666,12 @@ mod tests {
     /// say the field exists (FEAT-068: absence of a field from an old producer
     /// must be distinguishable).
     #[test]
-    fn guidance_json_carries_id_build_local_and_v3_schema() {
+    fn guidance_json_carries_id_build_local_and_a_versioned_schema() {
         let r = mixed_tier_result();
         let json = render_guidance_json(&r);
         assert!(
-            json.contains("\"guidance_schema\":3"),
-            "id_build_local is a new field — the schema version must be bumped"
+            json.contains("\"guidance_schema\":4"),
+            "the feed must carry an explicit schema version (bumped to 4 by FEAT-087)"
         );
         assert!(
             json.contains("\"id_build_local\":true"),
@@ -2693,6 +2736,61 @@ mod tests {
         assert!(
             html.contains("build-local"),
             "the delta page must disclose that some identities are build-local"
+        );
+    }
+    /// FEAT-087 (scry#122 item 2): the feed must carry the SECOND identity bit,
+    /// and carry it as a BIT — both values observable in ONE document, or a
+    /// consumer cannot tell a computed field from a constant.
+    #[test]
+    fn guidance_json_carries_ident_survives_own_edit_and_v4_schema() {
+        let r = analyze_wat(
+            "(module \
+               (func $compute (param i32) (result i32) \
+                 i32.const 10 local.get 0 i32.div_s) \
+               (func (param i32) (result i32) \
+                 i32.const 20 local.get 0 i32.div_s))",
+        );
+        let json = render_guidance_json(&r);
+        assert!(
+            json.contains("\"guidance_schema\":4"),
+            "ident_survives_own_edit is a new field — the schema version must be bumped"
+        );
+        assert!(
+            json.contains("\"ident_survives_own_edit\":true"),
+            "the named tier must be reported as surviving an edit to its own body"
+        );
+        assert!(
+            json.contains("\"ident_survives_own_edit\":false"),
+            "the unnamed (body-shape-hash) tier must be reported as NOT surviving it"
+        );
+    }
+
+    /// FEAT-087: the HTML must disclose the limitation to a human reader too,
+    /// and must NOT stamp it on an identity that does survive its own edit.
+    #[test]
+    fn guidance_html_marks_only_idents_that_move_on_their_own_edit() {
+        let unnamed = analyze_wat(
+            "(module (func (param i32) (result i32) \
+               i32.const 10 local.get 0 i32.div_s))",
+        );
+        assert!(
+            unnamed
+                .advisories
+                .iter()
+                .any(|a| !a.obligation_id.is_empty() && !a.ident_survives_own_edit),
+            "precondition: an unnamed function must land on the body-shape-hash tier"
+        );
+        assert!(
+            render_html(&unnamed, "unnamed").contains("id moves on own edit"),
+            "the limitation must be visible on the page, not only in the feed"
+        );
+        let named = analyze_wat(
+            "(module (func $compute (param i32) (result i32) \
+               i32.const 10 local.get 0 i32.div_s))",
+        );
+        assert!(
+            !render_html(&named, "named").contains("id moves on own edit"),
+            "a name-derived identity must NOT be badged"
         );
     }
 }
