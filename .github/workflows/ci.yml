@@ -125,7 +125,7 @@ jobs:
       # and drifted independently, so the guard below now checks BOTH.
       - name: cargo clippy — analyzer core, viz, and the domain crates
         run: |
-          cargo clippy -p scry-sai-core -p scry-sai-viz -p scry-sai-interval \
+          cargo clippy -p scry-sai-core -p scry-sai-viz -p scry-sai-mcp -p scry-sai-interval \
                        -p scry-sai-bits -p scry-sai-float -p scry-sai-handle \
                        -p scry-sai-pentagon -p scry-sai-segment -p scry-sai-poly \
                        --all-targets -- -D warnings
@@ -227,7 +227,7 @@ jobs:
           python3 tools/check-gate-coverage.py
       - name: cargo test — analyzer core, viz, and the domain crates
         run: |
-          cargo test -p scry-sai-core -p scry-sai-viz -p scry-sai-interval \
+          cargo test -p scry-sai-core -p scry-sai-viz -p scry-sai-mcp -p scry-sai-interval \
                      -p scry-sai-bits -p scry-sai-float -p scry-sai-handle \
                      -p scry-sai-pentagon -p scry-sai-segment -p scry-sai-poly \
                      -- --nocapture

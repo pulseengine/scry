@@ -95,20 +95,20 @@ claims:
         max: 0
 
   # ── Published-crate count ─────────────────────────────────────────────────
-  # "12 pure scry-sai-* crates". Re-counted from the publish manifest; add a
-  # 13th crate and forget the README → 13 > 12 → red.
-  - id: CRATES-12
+  # "13 pure scry-sai-* crates". Re-counted from the publish manifest; add a
+  # 14th crate and forget the README → 14 > 13 → red.
+  - id: CRATES-13
     doc: README.md
-    text: "12 pure"
+    text: "13 pure"
     evidence:
       - kind: count-max
         pattern: '"scry-sai-[a-z]+"'
         glob: ['scripts/publish.rs']
-        max: 12
-      - kind: count-min       # pin exact: a REMOVED crate also makes "12" stale
+        max: 13
+      - kind: count-min       # pin exact: a REMOVED crate also makes "13" stale
         pattern: '"scry-sai-[a-z]+"'
         glob: ['scripts/publish.rs']
-        min: 12
+        min: 13
 
   # ── i32.add vs OFFICIAL wrapping semantics (the differentiator) ────────────
   # The README's scoped soundness claim rests on WrapAdd.v existing. If the proof

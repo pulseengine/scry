@@ -1,0 +1,33 @@
+[package]
+name = "scry-sai-mcp"
+description = "MCP (Model Context Protocol) server exposing the scry sound abstract interpreter to AI agents: `analyze` (module → structured summary) and `query` (FEAT-067 filters) as MCP tools over JSON-RPC 2.0 on stdio. Structured results only — never HTML, never a multi-MB dump (FEAT-066, TE-011 structured-primary)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["wasm", "static-analysis", "mcp", "verification", "ai"]
+categories = ["development-tools", "wasm"]
+
+[lib]
+name = "scry_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "scry-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# The analyzer library — same single-dependency pattern as scry-viz: a plain
+# `std` host tool consuming the published `AnalysisResult` plain-Rust types.
+scry-sai-core = { path = "../scry-analyze-core", version = "3.2.7" }
+# Hand-rolled JSON-RPC 2.0 (DELIBERATE — no MCP SDK dependency): MCP's stdio
+# transport is newline-delimited JSON-RPC and the server needs exactly three
+# methods (initialize / tools/list / tools/call). serde_json covers that; an
+# SDK would add a dependency tree that has to clear cargo-deny and buys
+# nothing here.
+serde_json = { workspace = true }
+# Accept both `.wat` text and `.wasm` binary module paths (assembled
+# in-process) — same input contract as the scry-viz CLI.
+wat = { workspace = true }

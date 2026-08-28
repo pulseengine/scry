@@ -61,14 +61,15 @@ deductive-proof and bounded-model-checking layers do not staff.
 ## status
 
 <!-- claim id=version: "scry-sai-core" crates.io max_version == workspace version -->
-<!-- claim id=crates: publish.rs lists 12 scry-sai-* crates -->
+<!-- claim id=crates: publish.rs lists 13 scry-sai-* crates -->
 <!-- claim id=admit-free: 0 Admitted/admit/Axiom across proofs/rocq/*.v -->
 **v3.2.7 shipped** — the full v0.1 → v3.2 arc is done; scry is a working **sound
-abstract interpreter**, not a scaffold. Shipped and on crates.io: **12 pure
+abstract interpreter**, not a scaffold. Shipped and on crates.io: **13 pure
 `scry-sai-*` crates** (10 abstract domains — interval, region-memory, call-graph
 + reachability, octagon, pentagon, known-bits/congruence, IEEE-754 float,
 Component-Model handle-state, linear-memory segmentation, convex polyhedra —
-plus the analyzer core and the viz) driving `analyze()` over parsed Wasm; a host
+plus the analyzer core, the viz, and the `scry-mcp` MCP server) driving
+`analyze()` over parsed Wasm; a host
 wasmtime harness; runtime-trap classification (PROVEN-SAFE vs POTENTIAL-TRAP);
 ranked remediation guidance + a structured `guidance.json`; and a GitHub Pages
 [verification dashboard](https://pulseengine.github.io/scry).
