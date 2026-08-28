@@ -1743,6 +1743,46 @@ artifacts:
       acceptance-criteria:
         - "Given the ASPICE V-model, When `rivet validate` runs, Then every sw-req derives from a system-req (← stakeholder-req) and is verified by at least one sw-verification, and every system-req by a sys-verification — the right side of the V is closed."
         - "Given each sw-verification, When read, Then its description names a verification measure that actually exists in the repo (a test function, a proofs/rocq/*.v file, the MC/DC gate, or a host test) and genuinely discharges the linked sw-req — no fabricated evidence."
+      residual: >
+        SCOPE IS STATED BY ENUMERATION AND NOT BY EXCLUSION, which is why this
+        residual exists at all -- it was written on 2026-08-28, long after the
+        feature was accepted with no residual at all.
+
+        The V-model this feature built covers SYS.1 -> SYS.2 -> SWE.1 with SYS.5
+        and SWE.6 verification. It does NOT model SWE.2 (software architectural
+        design), SWE.3 (software detailed design) or SWE.4 (unit verification).
+        MEASURED 2026-08-28: zero artifacts of type sw-arch-component,
+        sw-detail-design or unit-verification exist anywhere under artifacts/,
+        and zero textual occurrences of those type names.
+
+        That is deliberate. Design intent already lives in the dev REQ/FEAT/DD
+        spine; a parallel ASPICE architecture and detailed-design decomposition
+        would restate the crate structure without adding evidence, and a
+        unit-verification artifact per detail-design element would be fabricated
+        traceability. This feature's own governing principle is "no fabricated
+        DAL", and it applies to process levels exactly as to integrity levels.
+        The right response to an empty level is to say it is empty, not to fill
+        it.
+
+        THE COST, AND WHY IT COULD MISLEAD AN ASSESSOR. The aspice preset is
+        EMBEDDED and a project cannot subset its rules, so `rivet coverage`
+        emits rules for levels scry does not model and renders an EMPTY
+        population as SUCCESS -- four rules at 100.0% over 0/0
+        (swe2-allocated-from-swe1, swe3-refines-swe2, swe4-verifies-swe3,
+        swe3-has-verification), plus the summary line
+        `V-closure: sw-detail-design (all 2 rules) 100.0% [0/0]`. Read row by
+        row, four of seventeen rules report success for work that was never
+        done. This is scry#117's class -- an accurate metric over the wrong
+        population -- appearing in the traceability report rather than in a gate.
+
+        The weighted overall does NOT inherit the defect: it is 119/135 = 88.1%
+        and an empty rule contributes 0 to both numerator and denominator, so
+        `rivet coverage --fail-under` keys off an honest number. VERIFIED in
+        both directions: --fail-under 88.2 exits 1, --fail-under 88.0 exits 0.
+        So the aggregate is safe to gate on and the per-row display is not.
+
+        The 0/0 -> 100% rendering is rivet's, not scry's, and scry cannot opt
+        out of the rules; reported upstream rather than worked around here.
     links:
       - type: satisfies
         target: REQ-005

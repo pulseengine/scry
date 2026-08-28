@@ -1,0 +1,89 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-097
+    type: feature
+    title: "v3.4 — The ASPICE V-model says which levels it does NOT model, and four vacuous 100%s stop reading as success"
+    status: accepted
+    release: v3.4.0
+    description: >
+      `rivet coverage` reports seventeen rules. FOUR of them report 100.0% over
+      an EMPTY population: swe2-allocated-from-swe1 (sw-arch-component),
+      swe3-refines-swe2 and swe3-has-verification (sw-detail-design), and
+      swe4-verifies-swe3 (unit-verification). The summary carries it too, as
+      `V-closure: sw-detail-design (all 2 rules) 100.0% [0/0]`.
+
+      MEASURED: zero artifacts of those three types exist anywhere under
+      artifacts/, and zero textual occurrences of the type names — so this is
+      not a vocabulary artifact of the kind that produced the false scry#113
+      claim. Four of seventeen rows announce success for work never done.
+
+      FEAT-033 built this V-model and stated its scope BY ENUMERATION —
+      "stakeholder-req (SYS.1) -> system-req (SYS.2) -> sw-req (SWE.1), with
+      SYS.5 and SWE.6 verification". It never stated what it OMITS, and its
+      residual was empty. An enumerated scope reads as complete to anyone who
+      does not already know which rungs an ASPICE V has.
+
+      THE OMISSION IS CORRECT AND STAYS. Design intent already lives in the dev
+      REQ/FEAT/DD spine; an ASPICE architecture and detailed-design
+      decomposition would restate the crate structure without adding evidence,
+      and a unit-verification artifact per absent detail-design element would be
+      fabricated traceability. FEAT-033's governing principle is "no fabricated
+      DAL" and it applies to process levels exactly as to integrity levels. The
+      right response to an empty level is to say it is empty.
+
+      WHOSE DEFECT IS WHICH, discriminated before building. The `aspice` preset
+      is EMBEDDED and a project cannot subset its rules, so scry cannot decline
+      the four rules; the 0/0 -> 100% RENDERING is rivet's and is reported
+      upstream. What is scry's is the undeclared scope, and that is what this
+      feature fixes. The weighted overall is NOT affected — 119/135 = 88.1%,
+      an empty rule adding 0 to both sides — so `rivet coverage --fail-under`
+      keys off an honest number and needs no parser.
+
+      NO SIXTH GATE. The rule already exists: FEAT-088's
+      `check-undeveloped-goals.py` enforces "an absent thing must be DECLARED
+      and JUSTIFIED" over safety goals. Empty coverage rules are a second
+      population under the same rule, so the tool was extended rather than
+      duplicated — two pure functions and eleven self-test cases against a
+      declaration file, versus a new 250-line tool with the same shape.
+    tags: [traceability, aspice, v-model, gate, honesty, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a coverage rule whose population is EMPTY and whose source type is not declared, When the gate runs, Then it FAILS naming the rule and the type. MUTATION-CHECKED against real data: removing `unit-verification` from the declaration file exits 1 naming `swe4-verifies-swe3 at 100% over 0/0`."
+        - "Given a declared type whose population is NOT empty, When the gate runs, Then it FAILS as a STALE entry. This is the direction that stops the file becoming an append-only suppression list. MUTATION-CHECKED: declaring `safety-goal` (5 rows) exits 1."
+        - "Given a declaration with no reason, When the gate runs, Then it FAILS — an unjustified declaration is what a forgotten gap looks like once somebody notices the number. This is FEAT-088's rule 2, which is the rule that matters. MUTATION-CHECKED: a reasonless entry exits 1 with the file and line."
+        - "Given the declaration file is missing, or `rivet coverage` fails, or it returns no rules, When the gate runs, Then it FAILS CLOSED. Inability to check is not evidence of correctness (scry#141). MUTATION-CHECKED: deleting the file exits 1."
+        - "THE CASE THAT JUSTIFIES BUILDING IT AT ALL. Given a future rivet upgrade introduces a rule over a level scry never populates, When the gate runs, Then it FAILS rather than adding a fifth silent 100%. The schema is pinned at aspice@0.2.0, so this is a real future event and not a hypothetical. MUTATION-CHECKED by injecting a synthetic `swe5-new-rule` at 0/0 over an undeclared type: exit 1 naming it."
+        - "Given a type that has one EMPTY rule and one POPULATED rule, When the gate runs, Then it is NOT treated as empty and no declaration is demanded. The naive `any(total == 0)` reading would wrongly demand one. Self-tested."
+        - "Given FEAT-033, When read, Then its residual states which ASPICE levels are unmodelled, why, and what it costs in the coverage report — where before it had NO residual at all. The V-model file states scope by exclusion as well as by enumeration."
+        - "SELF-TESTED, run BEFORE the real check in CI: 17 cases, up from 6 — the original 6 over safety goals, 7 over `check_coverage()` in both directions, and 4 over the declaration-file parser including that a reason containing a colon survives."
+        - "Given the required-check set, When this lands, Then it is UNCHANGED at 12 — the guard is a step on the already-required `Rivet artifact validation` job, so it binds on merge with no post-merge ruleset edit to forget (scry#130). VERIFIED with `--against-file`."
+      residual: >
+        THIS DOES NOT MAKE THE FOUR 100%s DISAPPEAR. `rivet coverage` still
+        prints them, and a reader who does not open the declaration file still
+        sees four green rows. The gate guarantees the emptiness is DECLARED and
+        JUSTIFIED, not that the report is legible. Making 0/0 render as "n/a"
+        rather than 100% is rivet's to fix and is reported upstream.
+
+        IT CHECKS TYPES, NOT LEVELS. A rule whose population is non-empty but
+        WRONG — one token artifact of a type, satisfying the rule at 100% with
+        no real decomposition behind it — passes silently. That is the scry#117
+        class again and this gate does not reach it; only reading the artifacts
+        does.
+
+        The three declared levels are declared for THIS project's process. If
+        scry ever adopts a real detailed-design step, the entries become stale
+        and the gate goes red until they are removed — which is the intended
+        pressure, but it does mean adopting SWE.3 has a gate to satisfy.
+
+        FEAT-033 stays `accepted`. Its acceptance criteria were met; what was
+        missing was disclosure, which is now written. Re-opening a shipped
+        feature to add a residual it should have had is the honest repair, not
+        a status change.
+    links:
+      - type: traces-to
+        target: REQ-005
+      - type: traces-to
+        target: FEAT-033
+      - type: traces-to
+        target: FEAT-088

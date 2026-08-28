@@ -22,6 +22,29 @@ So this checks two directions, not one:
 NOT WHAT THIS DOES: it does not make `rivet coverage`'s 40% meaningful. That
 figure still counts declared-undeveloped goals as uncovered and still prints
 40%. This gate closes one direction only -- forgotten hiding among declared.
+
+SECOND POPULATION, SAME RULE (2026-08-28). The rule above generalises: AN
+ABSENT THING MUST BE DECLARED AND JUSTIFIED. Safety goals are one population;
+EMPTY COVERAGE RULES are another, and they fail in the more dangerous
+direction because rivet renders an empty population as SUCCESS.
+
+MEASURED: four of seventeen rules report 100.0% over 0/0 --
+swe2-allocated-from-swe1, swe3-refines-swe2, swe4-verifies-swe3 and
+swe3-has-verification -- plus the summary line
+`V-closure: sw-detail-design (all 2 rules) 100.0% [0/0]`. Read row by row,
+four rules announce success for work that was never done. scry cannot opt out:
+the `aspice` preset is EMBEDDED and a project cannot subset its rule set.
+
+The weighted overall does NOT inherit it (119/135 = 88.1%; an empty rule adds
+0 to both sides), verified by `--fail-under 88.2` exiting 1 and `88.0` exiting
+0. So the aggregate is safe to gate on and the per-row display is not.
+
+Checked in BOTH directions against `.github/aspice-unmodelled-levels.txt`:
+an empty population not listed there is an undeclared gap; a listed type whose
+population is NOT empty is a stale entry and also fails. The second direction
+is what stops the file becoming append-only, and it is what would catch a
+rivet upgrade introducing a level we never populate -- which is the real
+future event here, since the schema is pinned at aspice@0.2.0.
 """
 import sys, json, glob, subprocess, tempfile, os
 
@@ -91,6 +114,59 @@ def check(arts):
     return bad, goals
 
 
+DECL_PATH = ".github/aspice-unmodelled-levels.txt"
+
+
+def load_declared(text):
+    """-> {source_type: reason}. Pure. A reason is REQUIRED (FEAT-088 rule 2)."""
+    out, bad = {}, []
+    for i, line in enumerate(text.split("\n"), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            bad.append(f"{DECL_PATH}:{i}: no `<type>: <reason>` separator")
+            continue
+        k, v = line.split(":", 1)
+        if not v.strip():
+            bad.append(f"{DECL_PATH}:{i}: `{k.strip()}` declared with NO reason -- "
+                       f"an unjustified declaration is what a forgotten gap looks like")
+            continue
+        out[k.strip()] = v.strip()
+    return out, bad
+
+
+def check_coverage(rules, declared):
+    """-> list of violations. Pure: the self-test drives this too.
+
+    BOTH directions. An empty population that is not declared is an undeclared
+    gap wearing a 100%. A declared type whose population is NOT empty is a
+    stale entry -- that direction is what keeps the file from becoming an
+    append-only suppression list, and is the one that fires on a rivet upgrade.
+    """
+    empty, nonempty = set(), set()
+    for r in rules:
+        st = r.get("source_type")
+        if st is None:
+            continue
+        (empty if r.get("total") == 0 else nonempty).add(st)
+    # A type is only genuinely empty if NO rule over it has rows.
+    empty -= nonempty
+
+    bad = []
+    for st in sorted(empty - set(declared)):
+        names = sorted(r.get("name") for r in rules
+                       if r.get("source_type") == st and r.get("total") == 0)
+        bad.append(f"coverage population `{st}` is EMPTY, so rivet reports "
+                   f"{', '.join(names)} at 100% over 0/0 -- populate it, or declare "
+                   f"it in {DECL_PATH} with a reason")
+    for st in sorted(set(declared) - empty):
+        bad.append(f"`{st}` is declared unmodelled in {DECL_PATH} but its population "
+                   f"is NOT empty -- remove the entry; a stale declaration makes the "
+                   f"file a suppression list instead of a claim")
+    return bad
+
+
 def self_test():
     """Feed the checker inputs it MUST reject, and one it must accept."""
     ok = lambda a: check(a)[0]
@@ -125,6 +201,48 @@ def self_test():
     got = len(ok(prose))
     print(f"  [{'ok' if got==0 else 'SELF-TEST FAILED'}] prose-only justification counts: {got} violation(s), expected 0")
     failed += got != 0
+
+    # ---- second population: empty coverage rules ----
+    R = lambda n, st, tot: {"name": n, "source_type": st, "total": tot}
+    cov_cases = [
+        ("healthy: every rule has rows",
+         [R("a", "x", 5), R("b", "y", 3)], {}, 0),
+        ("REJECT: an empty population that is NOT declared",
+         [R("a", "x", 5), R("b", "y", 0)], {}, 1),
+        ("healthy: the same empty population, DECLARED",
+         [R("a", "x", 5), R("b", "y", 0)], {"y": "reason"}, 0),
+        # The direction that keeps the file from becoming append-only, and the
+        # one that fires when a rivet upgrade populates a level we declared.
+        ("REJECT: a STALE declaration whose population is not empty",
+         [R("a", "x", 5)], {"x": "reason"}, 1),
+        ("REJECT: declared type that appears in NO rule at all is still stale",
+         [R("a", "x", 5)], {"zzz": "reason"}, 1),
+        # A type with one empty rule and one populated rule is NOT empty; the
+        # naive `any total==0` reading would wrongly demand a declaration.
+        ("a type with one empty and one populated rule is not empty",
+         [R("a", "x", 0), R("b", "x", 4)], {}, 0),
+        ("two undeclared empty populations are both reported",
+         [R("a", "x", 0), R("b", "y", 0)], {}, 2),
+    ]
+    for name, rules, decl, want in cov_cases:
+        got = len(check_coverage(rules, decl))
+        st = "ok" if got == want else "SELF-TEST FAILED"
+        failed += got != want
+        print(f"  [{st}] {name}: {got} violation(s), expected {want}")
+
+    # ---- the declaration file parser ----
+    decl_cases = [
+        ("a reason is required", "a: because\nb:\n", 1),
+        ("comments and blanks are skipped", "# note\n\na: because\n", 0),
+        ("a line with no separator is rejected", "just-a-type\n", 1),
+        ("a reason containing a colon survives", "a: see rivet: upstream\n", 0),
+    ]
+    for name, text, want in decl_cases:
+        _, bad = load_declared(text)
+        got = len(bad)
+        st = "ok" if got == want else "SELF-TEST FAILED"
+        failed += got != want
+        print(f"  [{st}] decl-file: {name}: {got} problem(s), expected {want}")
     return failed
 
 
@@ -157,6 +275,37 @@ def main():
     except Exception as e:
         print(f"  WARN: rivet cross-check skipped ({e})", file=sys.stderr)
 
+    # ---- second population: coverage rules whose population is EMPTY ----
+    # FAIL CLOSED throughout: this check exists because an empty rule renders
+    # as 100%, so a checker that skips on an error would itself report green
+    # while checking nothing (scry#141).
+    try:
+        text = open(DECL_PATH, encoding="utf-8").read()
+    except OSError as e:
+        print(f"  FAIL: cannot read {DECL_PATH} ({e}) -- the declaration file is "
+              f"the whole basis of this check")
+        return 1
+    declared, decl_bad = load_declared(text)
+    try:
+        out = subprocess.run(["rivet", "coverage", "--format", "json"],
+                             capture_output=True, text=True, timeout=180)
+        if out.returncode != 0:
+            print(f"  FAIL: `rivet coverage` exited {out.returncode}")
+            return 1
+        rules = json.loads(out.stdout).get("rules") or []
+    except Exception as e:
+        print(f"  FAIL: cannot read coverage rules ({e})")
+        return 1
+    if not rules:
+        print("  FAIL: `rivet coverage` returned no rules -- nothing to check, "
+              "which is not the same as nothing wrong")
+        return 1
+    cov_bad = decl_bad + check_coverage(rules, declared)
+    n_empty = sum(1 for r in rules if r.get("total") == 0)
+    print(f"  coverage: {len(rules)} rule(s), {n_empty} over an EMPTY population; "
+          f"{len(declared)} level(s) declared unmodelled")
+
+    bad = bad + cov_bad
     for b in bad:
         print(f"  FAIL: {b}")
     print("PASS" if not bad else f"FAIL ({len(bad)} violation(s))")
