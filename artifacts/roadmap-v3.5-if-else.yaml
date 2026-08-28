@@ -1,0 +1,68 @@
+# v3.5.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-095
+    type: feature
+    title: "v3.5 — Interpret `if`/`else` regions instead of havocking them"
+    status: proposed
+    release: v3.5.0
+    description: >
+      THE DOMINANT PRECISION LIMIT, and it was untracked until now — no artifact
+      and no issue named it, despite being upstream of most of what scry cannot
+      prove.
+
+      MEASURED on scry's own scry_mcdc.wasm (2026-08-28). Of the 8,162 unproven
+      out-of-bounds obligations:
+        * 7,553 (92.5%) are in a DEGRADED function — one already carrying a
+          precision gap. Degrading causes: unmodeled-control-flow 1,639,
+          unsupported-op 623, unmodeled-branch 12.
+        * 609 (7.5%) are in a cleanly-modelled function, where scry reached the
+          bounds question and could not prove it.
+      636 of 766 functions carrying advisories (83%) are degraded.
+
+      SO THE HEADLINE NUMBER POINTS THE WRONG WAY. A 0.67% proven rate reads as
+      a weak bounds domain and invites work there; that work could address at
+      most the 7.5%. The analyzer gives up on 83% of functions BEFORE the bounds
+      question is reached. It is a COVERAGE problem upstream of the prover, not
+      a precision problem inside it, and the two call for opposite effort.
+
+      WHAT `havoc_region` DOES TODAY, and why it is honest: on entering an `if`
+      region it interprets nothing, havocs the write set, and records a
+      `GapKind::UnmodeledControlFlow` (REQ-017: no silent top). That is sound
+      and disclosed — the gap record is why this was measurable at all. It is
+      also the single biggest thing standing between scry and a useful proven
+      rate.
+
+      SCOPE, deliberately narrow for a first slice: interpret the `then` and
+      `else` arms under the guard's refinement and JOIN their exit states,
+      rather than havocking. The existing machinery is most of the way there —
+      guard refinement already exists (FEAT-016/044/070), the join/widening
+      fixpoint exists (FEAT-016 slice-2), and `havoc_region` already computes
+      the write set it would need to fall back to. What does NOT change: an
+      arm containing an unsupported operator still degrades, and the gap record
+      stays. Nested and irreducible shapes may still havoc; that is a later
+      slice, not a reason to defer this one.
+
+      NOT A SOUNDNESS RELAXATION. Havocking is the conservative choice and any
+      replacement must be at least as over-approximating. The join of two arm
+      states is sound where the havoc was sound; the risk is in the guard
+      refinement applied to each arm, which is exactly where FEAT-089's
+      adversarial invalidation discipline applies.
+    tags: [precision, control-flow, coverage, measured, v3.5]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "RED FIRST: given a module whose `i32.load` is bounds-guarded by an `if`/`else` (the shape LLVM emits for a checked index), When analysed, Then the access is PROVEN-SAFE. This fails today — the region is havoc'd and the obligation stands."
+        - "Given an `if` arm containing an operator scry does not model, When analysed, Then the function still degrades and the gap record is still emitted. Modelling the common case must not remove the honest fallback for the uncommon one."
+        - "SOUNDNESS, adversarial and the first target: given an `if`/`else` whose arms assign DIFFERENT values to the same local, When the arms are joined, Then the local's post-state is the JOIN (over-approximation) and never one arm's value. A join that picks a branch is a false proof, the FEAT-089 failure mode one level up."
+        - "MEASURED, not asserted: re-run the degraded-function breakdown on scry_mcdc.wasm and report the change in `unmodeled-control-flow` count and in the OOB proven rate. If the rate does not move, that is the finding — the 92.5% figure predicts it should."
+        - "MUTATION-CHECKED both directions: forcing the join to take the `then` arm must turn the adversarial soundness test red; forcing every region back to havoc must turn the primary test red."
+      residual: >
+        This does not close FEAT-069. It targets the 92.5%, and what remains
+        after it is the 7.5% where the bounds argument itself is the limit plus
+        whatever shapes still havoc. Re-measure before claiming otherwise.
+
+        `unsupported-op` (623) is a separate and additive cause with a different
+        fix — modelling more operators — and is not in this slice.
+    links:
+      - type: traces-to
+        target: REQ-001

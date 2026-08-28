@@ -1142,6 +1142,10 @@ artifacts:
         - "Given proofs/rocq/ObligationId.v, When built (//proofs/rocq:obligationid_test), Then the QUALIFIED invariance is proven admit-free: an insertion of operators of other kinds leaves a later site's intra-region ordinal — hence its identity — unchanged (ordinal_stable_under_foreign_insertion / _anywhere). CORRECTED after the proof was written: the earlier wording claimed `id equality implies same structural site`, which is a HASH property requiring collision resistance and is NOT proven — the theorems are about the key tuple, not the digest."
         - "Given the same file, When built, Then the NECESSITY of that qualification is itself mechanized, not left as a caveat: ordinal_shifts_under_same_kind_insertion proves one same-kind insertion strictly increases the ordinal (so the unqualified AC is FALSE), and survivor_inherits_deleted_identity proves a surviving site takes the deleted site's ordinal — the aliasing hazard that obliges FEAT-065 to degrade to `uncertain` rather than report `discharged`."
     links:
+      - type: depends-on
+        target: FEAT-077
+      - type: depends-on
+        target: FEAT-087
       - type: traces-to
         target: REQ-020
       - type: traces-to
@@ -1360,6 +1364,8 @@ artifacts:
       acceptance-criteria:
         - "Given a module with provably in-bounds i32 accesses, When scry exports safe-accesses.json, Then each entry carries (func, pc, op, width) plus the module hash, and a consumer that fails the hash check elides nothing."
     links:
+      - type: depends-on
+        target: FEAT-095
       - type: traces-to
         target: REQ-014
       - type: traces-to
