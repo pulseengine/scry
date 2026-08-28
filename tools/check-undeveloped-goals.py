@@ -152,19 +152,32 @@ def check_coverage(rules, declared):
         (empty if r.get("total") == 0 else nonempty).add(st)
     # A type is only genuinely empty if NO rule over it has rows.
     empty -= nonempty
+    known = empty | nonempty
 
-    bad = []
+    bad, warn = [], []
     for st in sorted(empty - set(declared)):
         names = sorted(r.get("name") for r in rules
                        if r.get("source_type") == st and r.get("total") == 0)
         bad.append(f"coverage population `{st}` is EMPTY, so rivet reports "
                    f"{', '.join(names)} at 100% over 0/0 -- populate it, or declare "
                    f"it in {DECL_PATH} with a reason")
-    for st in sorted(set(declared) - empty):
+    for st in sorted(set(declared) & nonempty):
         bad.append(f"`{st}` is declared unmodelled in {DECL_PATH} but its population "
                    f"is NOT empty -- remove the entry; a stale declaration makes the "
                    f"file a suppression list instead of a claim")
-    return bad
+    # A declared type that no rule mentions AT ALL is a different situation and
+    # must NOT fail. It happens when the preset drops a rule -- exactly the
+    # upgrade this gate exists for, seen from the other side. The declaration
+    # ("scry does not model SWE.3") is STILL TRUE, merely no longer observable,
+    # and no vacuous 100% can result because the rule is gone. Failing here
+    # would demand deleting a correct statement to get the build green, which
+    # is the Class-5 shape: a guard that is right about the fact and wrong
+    # about the remedy.
+    for st in sorted(set(declared) - known):
+        warn.append(f"`{st}` is declared unmodelled but NO coverage rule mentions it "
+                    f"-- the rule set changed (a preset upgrade?). The declaration may "
+                    f"still be true; it is simply no longer enforceable here.")
+    return bad, warn
 
 
 def self_test():
@@ -215,8 +228,14 @@ def self_test():
         # one that fires when a rivet upgrade populates a level we declared.
         ("REJECT: a STALE declaration whose population is not empty",
          [R("a", "x", 5)], {"x": "reason"}, 1),
-        ("REJECT: declared type that appears in NO rule at all is still stale",
-         [R("a", "x", 5)], {"zzz": "reason"}, 1),
+        # CORRECTED 2026-08-28: this case originally asserted 1 violation, which
+        # LOCKED IN a defect. A declared type that no rule mentions means the
+        # PRESET DROPPED THE RULE -- the very upgrade MUT5 exists for, seen from
+        # the other side. The declaration is still true and no vacuous 100% can
+        # result, so failing would demand deleting a correct statement to go
+        # green. It warns instead.
+        ("a declared type absent from the rule set does NOT fail",
+         [R("a", "x", 5)], {"zzz": "reason"}, 0),
         # A type with one empty rule and one populated rule is NOT empty; the
         # naive `any total==0` reading would wrongly demand a declaration.
         ("a type with one empty and one populated rule is not empty",
@@ -225,10 +244,26 @@ def self_test():
          [R("a", "x", 0), R("b", "y", 0)], {}, 2),
     ]
     for name, rules, decl, want in cov_cases:
-        got = len(check_coverage(rules, decl))
+        got = len(check_coverage(rules, decl)[0])
         st = "ok" if got == want else "SELF-TEST FAILED"
         failed += got != want
         print(f"  [{st}] {name}: {got} violation(s), expected {want}")
+
+    # The warn channel is a real output and needs its own assertions -- a split
+    # that silently dropped one side would look identical from the fail counts.
+    warn_cases = [
+        ("absent-from-rule-set WARNS (exactly once)",
+         [R("a", "x", 5)], {"zzz": "r"}, 1),
+        ("a POPULATED stale entry fails and does NOT warn",
+         [R("a", "x", 5)], {"x": "r"}, 0),
+        ("a correctly declared empty population neither fails nor warns",
+         [R("a", "x", 0)], {"x": "r"}, 0),
+    ]
+    for name, rules, decl, want in warn_cases:
+        got = len(check_coverage(rules, decl)[1])
+        st = "ok" if got == want else "SELF-TEST FAILED"
+        failed += got != want
+        print(f"  [{st}] {name}: {got} warning(s), expected {want}")
 
     # ---- the declaration file parser ----
     decl_cases = [
@@ -300,7 +335,10 @@ def main():
         print("  FAIL: `rivet coverage` returned no rules -- nothing to check, "
               "which is not the same as nothing wrong")
         return 1
-    cov_bad = decl_bad + check_coverage(rules, declared)
+    cov_viol, cov_warn = check_coverage(rules, declared)
+    for w in cov_warn:
+        print(f"  WARN: {w}")
+    cov_bad = decl_bad + cov_viol
     n_empty = sum(1 for r in rules if r.get("total") == 0)
     print(f"  coverage: {len(rules)} rule(s), {n_empty} over an EMPTY population; "
           f"{len(declared)} level(s) declared unmodelled")

@@ -55,8 +55,10 @@ artifacts:
         - "Given the declaration file is missing, or `rivet coverage` fails, or it returns no rules, When the gate runs, Then it FAILS CLOSED. Inability to check is not evidence of correctness (scry#141). MUTATION-CHECKED: deleting the file exits 1."
         - "THE CASE THAT JUSTIFIES BUILDING IT AT ALL. Given a future rivet upgrade introduces a rule over a level scry never populates, When the gate runs, Then it FAILS rather than adding a fifth silent 100%. The schema is pinned at aspice@0.2.0, so this is a real future event and not a hypothetical. MUTATION-CHECKED by injecting a synthetic `swe5-new-rule` at 0/0 over an undeclared type: exit 1 naming it."
         - "Given a type that has one EMPTY rule and one POPULATED rule, When the gate runs, Then it is NOT treated as empty and no declaration is demanded. The naive `any(total == 0)` reading would wrongly demand one. Self-tested."
+        - "Given a declared type that NO coverage rule mentions at all, When the gate runs, Then it WARNS and does NOT fail. CORRECTED IN REVIEW, and the original self-test had LOCKED THE DEFECT IN by asserting a violation. That state means the preset DROPPED the rule — the same upgrade this gate exists for, seen from the other side — so the declaration (`scry does not model SWE.3`) is still TRUE, merely no longer observable, and no vacuous 100% can result because the rule is gone. Failing would demand deleting a correct statement to get the build green: the Class-5 shape, a guard right about the fact and wrong about the remedy. MUTATION-CHECKED by filtering every sw-detail-design rule out of the live report: exit 0 with the warning."
+        - "Given the split between failing and warning, When the self-test runs, Then BOTH channels are asserted separately — a split that silently dropped one side would be invisible from the violation counts alone. Three warn-channel cases: absent-from-rule-set warns exactly once, a POPULATED stale entry fails and does not warn, and a correctly declared empty population does neither."
         - "Given FEAT-033, When read, Then its residual states which ASPICE levels are unmodelled, why, and what it costs in the coverage report — where before it had NO residual at all. The V-model file states scope by exclusion as well as by enumeration."
-        - "SELF-TESTED, run BEFORE the real check in CI: 17 cases, up from 6 — the original 6 over safety goals, 7 over `check_coverage()` in both directions, and 4 over the declaration-file parser including that a reason containing a colon survives."
+        - "SELF-TESTED, run BEFORE the real check in CI: 20 cases, up from 6 — the original 6 over safety goals, 7 over `check_coverage()`'s violation channel, 3 over its warning channel, and 4 over the declaration-file parser including that a reason containing a colon survives."
         - "Given the required-check set, When this lands, Then it is UNCHANGED at 12 — the guard is a step on the already-required `Rivet artifact validation` job, so it binds on merge with no post-merge ruleset edit to forget (scry#130). VERIFIED with `--against-file`."
       residual: >
         THIS DOES NOT MAKE THE FOUR 100%s DISAPPEAR. `rivet coverage` still
@@ -64,6 +66,14 @@ artifacts:
         sees four green rows. The gate guarantees the emptiness is DECLARED and
         JUSTIFIED, not that the report is legible. Making 0/0 render as "n/a"
         rather than 100% is rivet's to fix and is reported upstream.
+
+        THE `traces-to FEAT-088` LINK WAS ADDED TO SILENCE A LINTER, and that is
+        worth stating rather than hiding. rivet warns when prose names an
+        artifact with no typed link — a good warning, and the same defect
+        FEAT-096 gated one level up — but the real relation is "extends its
+        tool with a second population", which no predicate expresses. Verified
+        inert: no tool reads `traces-to`, and `check-release-ordering.py` reads
+        only `depends-on`, so it creates no ordering edge.
 
         IT CHECKS TYPES, NOT LEVELS. A rule whose population is non-empty but
         WRONG — one token artifact of a type, satisfying the rule at 100% with
