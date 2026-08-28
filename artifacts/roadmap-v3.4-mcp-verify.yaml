@@ -1,0 +1,51 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-094
+    type: feature
+    title: "v3.4 — Expose `verify` over MCP, once a verdict is worth acting on"
+    status: proposed
+    release: v3.4.0
+    description: >
+      FEAT-066 shipped the MCP server with `analyze` + `query` and made the
+      absence of `verify` STRUCTURAL — enforced by the tool list, not by
+      documentation (its AC2, mutation-verified: appending a third tool object
+      turns the test red with `["analyze", "query", "verify"]`).
+
+      This artifact exists because that deferral was otherwise UNTRACKED.
+      FEAT-066's title promises `analyze / query / verify`; its description
+      defers `verify` to v3.4.0; and nothing carried the deferred half. Promoting
+      FEAT-066 without this would have deleted the work from the plan — the
+      scry#157/#160 anti-pattern, where an implementation existed with no
+      artifact and surfaced later as a surprise.
+
+      WHY IT IS DEFERRED, and the reason is measured rather than cautious.
+      FEAT-065's `verify_against` is implemented and `accepted`, but REQ-021
+      measured that on real inputs `discharged` is 0, the gate fails on every
+      commit pair, and ~47% of verdicts are `uncertain` — matching scry#123's
+      43-45% identity churn. On a STRIPPED module `discharged` is unreachable by
+      construction. Exposing that over MCP puts an always-`uncertain` verdict
+      directly into an agent's tool loop, which is the single worst place for a
+      verdict that cannot discriminate.
+
+      SO THIS IS NOT MERELY WAITING ON PLUMBING. The blocker is REQ-021's own:
+      `discharged` needs a shape comparison finer than a hash, or corroboration
+      of the open->safe transition by CONTENT rather than structure (DD-022).
+      Until then a `verify` tool would be worse than its absence, because an
+      absent tool is a fact an agent can plan around and an always-uncertain one
+      is noise it must learn to ignore.
+    tags: [mcp, adjudication, ai-agent, req021, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given REQ-021 has been discharged — a genuine fix reaching `discharged` on a shape an agent would actually write — When the MCP server enumerates its tools, Then `verify` is PRESENT and its verdict is actionable. Until that holds, this AC is not satisfiable and the tool must stay absent."
+        - "Given the tool is added, When a client calls it, Then the response distinguishes `still-open-untouched` from `still-open-after-edit` — an agent told only `still-open` cannot tell 'you did not fix it' from 'I cannot see your fix', which is the loop FEAT-065 AC2 exists to prevent."
+        - "Given the tool is added, When FEAT-066's AC2 test runs, Then it must be UPDATED rather than deleted: the structural guarantee moves from 'verify is absent' to 'verify is present and its verdict set is complete'. A guard removed is a guard that stops being checked."
+      residual: >
+        This feature cannot be scheduled until REQ-021 has a path. It is filed
+        to keep the deferred half of FEAT-066 visible, not because it is ready
+        to build. If REQ-021 turns out to be unreachable, the honest outcome is
+        to CLOSE this and say scry adjudicates for humans and not for an agent
+        loop — which would be a real finding, not a failure.
+    links:
+      - type: depends-on
+        target: REQ-021

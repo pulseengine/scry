@@ -1210,7 +1210,7 @@ artifacts:
   - id: FEAT-066
     type: feature
     title: "v3.3 — scry-mcp: analyze / query / verify as MCP tools"
-    status: proposed
+    status: accepted
     release: v3.3.0
     description: >
       An MCP server exposing scry to agents directly. Agents cannot run `cargo`;
