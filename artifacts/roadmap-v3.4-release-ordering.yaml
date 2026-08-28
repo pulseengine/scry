@@ -1,0 +1,96 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-096
+    type: feature
+    title: "v3.4 — A release cannot be cut before one it depends on, and now something checks (scry#187)"
+    status: accepted
+    release: v3.4.0
+    description: >
+      v3.3.0's FEAT-064 is satisfiable only via FEAT-077 and FEAT-087. Both are
+      scheduled v3.4.0 and both already shipped. FEAT-069 depends on FEAT-095,
+      scheduled v3.5.0. So v3.3.0 CANNOT BE CUT BEFORE v3.4.0, and no amount of
+      work on its remaining items changes that — the dependency runs the wrong
+      way across the release boundary.
+
+      This matters because of how the board READS. "v3.3.0: 3 proposed" invites
+      the conclusion that three pieces of work remain. Two of them are ORDERING,
+      not work. A release plan records what was believed when it was written,
+      and the beliefs here were falsified by the work itself: FEAT-064's AC1 was
+      refuted in practice (scry#123) and repaired in a LATER release, so the plan
+      no longer described the dependency structure it was built on.
+
+      THE GAP THIS CLOSES IS ONE LEVEL UP FROM THE ONE JUST CLOSED. FEAT-064's
+      dependency originally lived in PROSE inside an acceptance criterion, where
+      no tool could see it; typing the three `depends-on` links made it VISIBLE.
+      But the inversion itself was found by an ad-hoc script run by hand ONCE,
+      and nothing re-ran it. Visible is not checked. That is the same defect as a
+      gate that never fails: it reads as rigour and enforces nothing — the
+      distinction FEAT-091 drew for commit trailers and FEAT-093 for the required
+      set.
+
+      THE ALLOWLIST IS THE DESIGN, NOT AN ESCAPE HATCH. Three inversions exist
+      today. Failing on them would put main red for a condition that is real,
+      understood, and recorded on scry#187, so each is listed WITH its reason and
+      anything NEW fails. Critically a STALE entry — one naming an inversion that
+      is no longer real — also fails, so the three known pairs are three facts the
+      detection logic must keep re-deriving from live artifacts on every run.
+      That makes the allowlist a permanent live test of the checker against real
+      data, which is the answer to "who checks the checker" for a gate whose
+      normal state is green. A suppression list you can only ever add to is how
+      gates rot; this one costs something to keep.
+
+      IT IS A STEP ON `rivet-validate`, NOT A JOB OF ITS OWN. It reads the same
+      artifacts and the same PyYAML as the goal guard beside it, and that context
+      is ALREADY required — so the gate binds the moment this merges, with no
+      ruleset edit to forget. A new required context needs a post-merge admin
+      step, and a forgotten post-merge admin step IS scry#130.
+    tags: [release-machinery, gate, traceability, scry187, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given an artifact whose `depends-on` target is scheduled in a LATER release and is not allowlisted, When the gate runs, Then it FAILS naming both ids and both releases. MUTATION-CHECKED AGAINST REAL ARTIFACTS, not fixtures: FEAT-057 (v3.4.0) was given a `depends-on` FEAT-095 (v3.5.0) by structural YAML edit, the mutant was asserted applied, and the gate exited 1 naming it."
+        - "Given the three inversions recorded on scry#187, When the gate runs on main, Then it PASSES and PRINTS each one with its reason. A known problem that must be re-acknowledged to stay known is the opposite of a suppressed one."
+        - "Given an allowlist entry that no longer describes a real inversion, When the gate runs, Then it FAILS and instructs that removing the entry is how a resolved inversion gets recorded. MUTATION-CHECKED: an entry for the nonexistent FEAT-999 -> FEAT-998 exits 1."
+        - "Given the comparison logic itself is broken, When the gate runs, Then it FAILS — because all three allowlisted facts stop being derivable. MUTATION-CHECKED: flipping `>` to `<` exits 1 with all three reported stale. This property was not designed and was found BY the mutation run; it is the reason the allowlist is load-bearing rather than cosmetic."
+        - "Given PyYAML is unavailable, When the gate runs, Then it FAILS CLOSED. A gate that skips on a missing dependency reports green while checking nothing (scry#141)."
+        - "Given an artifact whose release string does not parse as semver, When the gate runs, Then it FAILS naming it. CORRECTED IN REVIEW, and the correction is the point: the first draft mapped an unparseable release to a (99,99,99) sentinel and the residual claimed that sorted it LAST and so biased toward false alarms. That is true when the garbage is the TARGET and FALSE when it is the SOURCE -- nothing can exceed (99,99,99), so such an artifact became a source under which NO inversion could ever be reported. Fail-open, wearing a residual asserting fail-closed. MUTATION-CHECKED on a real artifact: FEAT-064's release set to `v3.3` exits 1."
+        - "Given one artifact id declares two DIFFERENT releases in two files, When the gate runs, Then it FAILS rather than silently taking the last one -- `release_of` is flat across 23 files and last-glob-wins. G-005 living outside safety-case.yaml is the precedent that check-undeveloped-goals.py exists for. MUTATION-CHECKED: a second FEAT-064 declaring v9.9.9 exits 1 naming both."
+        - "Given no artifact in the scan carries a release, When the gate runs, Then it FAILS rather than passing over an empty population — the scry#117 failure of a metric measuring the wrong population, in its degenerate form."
+        - "SELF-TESTED, run BEFORE the real check in CI: 13 cases over the pure `verdict()` and `collect()` functions, including that a dependency in an EARLIER release and one in the SAME release both pass, that an unknown target is ignored rather than crashing, that two new inversions are both reported rather than only the first, that an unparseable release fails as SOURCE and as TARGET and is reported once per id rather than once per edge, and that bare semver without the `v` prefix still parses."
+        - "Given this PR, When `check-required-checks.py --against-file` runs, Then it exits 0 with the required set unchanged at 12 — the gate adds no new context and therefore needs no post-merge ruleset step. VERIFIED on this branch."
+      residual: >
+        IT REACHES 59 OF 266 ARTIFACTS. Only an artifact carrying a `release:`
+        can be ordered, and the axis arrived with rivet 0.22, so FEAT-001..031
+        predate it entirely. MEASURED: 37 `depends-on` edges have an UNSCHEDULED
+        source -- all of them that shipped history, none a blocker.
+
+        SO ONE ASYMMETRIC CASE IS UNDETECTED: a SCHEDULED artifact depending on
+        an UNSCHEDULED one cannot be cut either, and the gate says nothing
+        because it skips any edge whose endpoints are not both scheduled. That
+        skip is codified in the self-test as intended behaviour, which is how it
+        would have gone unnoticed. MEASURED AT ZERO TODAY by a discriminating
+        probe, so it is a hole rather than a defect -- but zero today is not
+        zero tomorrow, and nothing watches it. This is scry#117's class: an
+        accurate metric over the wrong population.
+
+        THE GATE DOES NOT RESOLVE THE THREE INVERSIONS, and cannot: whether
+        FEAT-064 and REQ-020 move to v3.4.0, or v3.3.0 simply ships after it, is
+        a planning decision offered on scry#187 and still unanswered. This makes
+        the condition permanent and visible rather than fixing it. If the answer
+        is "move them", the fix is to delete allowlist entries — and the gate
+        will then FAIL until they are deleted, which is the correct pressure.
+
+        IT CHECKS ONLY TYPED `depends-on` LINKS. A dependency stated in prose is
+        still invisible to it, which is exactly how these three hid until now.
+        Nothing detects an UNTYPED dependency, and nothing can; that remains a
+        human judgement at the moment an acceptance criterion is written.
+
+        AN ARTIFACT THAT LOSES ITS `release:` FIELD turns its allowlist entries
+        stale and takes main red, because the entry stops being derivable. That
+        is the same mechanism that makes the allowlist load-bearing, firing on a
+        benign refactor. Noisy in the safe direction and left alone: making it
+        quieter means making a stale entry survivable, which is the property
+        worth keeping.
+    links:
+      - type: traces-to
+        target: REQ-005
