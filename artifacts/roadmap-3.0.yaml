@@ -1330,6 +1330,30 @@ artifacts:
       correct and nearly empty file. Precision work (FEAT-089 and the
       region-havoc family) should land first, and this AC should be re-measured
       after it, not before.
+
+      RE-MEASURED 2026-08-28, POST-FEAT-089 — which this artifact's own note
+      said had to happen before the AC was judged. Result: the OOB proven rate
+      is UNCHANGED at 0.67% (55 proven vs 8,162 unproven). FEAT-089 targets
+      div-by-zero disequalities and does not touch memory bounds, so the
+      precision work that landed does not help this feature. The precondition
+      is discharged; the answer is no.
+      AND THE FOLLOW-UP MEASUREMENT REFRAMES THE PROBLEM. Of the 8,162 unproven
+      out-of-bounds obligations:
+        7,553 (92.5%) are in a DEGRADED function — one already carrying a
+              precision gap (unmodeled-control-flow 1,639, unsupported-op 623,
+              unmodeled-branch 12). 636 of 766 functions with advisories (83%)
+              are degraded.
+          609 (7.5%) are in a cleanly-modelled function, where scry actually
+              reached the bounds question and could not prove it.
+      So the low proven rate is NOT mainly a weakness of the bounds reasoning.
+      It is that the analyzer GIVES UP on 83% of functions before the bounds
+      question is reached. Strengthening the bounds domain — the obvious
+      reading of `0.67% proven` — could address at most the 7.5%.
+      CONSEQUENCE FOR THIS FEATURE: FEAT-069 stays blocked, but on a DIFFERENT
+      unblocker than the one previously named. The lever is modelling `if`/
+      `else` regions instead of havocking them (the dominant single cause at
+      1,639), not a better interval/bounds argument. Re-measure again after
+      that, not after any other precision work.
     tags: [bounds-elision, synth, interop, embedded, v3.3]
     fields:
       phase: phase-3
