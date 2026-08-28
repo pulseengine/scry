@@ -266,6 +266,25 @@ jobs:
           python3 tools/check-undeveloped-goals.py --self-test
           python3 tools/check-undeveloped-goals.py
 
+      # scry#187: v3.3.0's FEAT-064 is satisfiable only via FEAT-077/FEAT-087,
+      # both scheduled v3.4.0 and both already shipped, so v3.3.0 cannot be cut
+      # before v3.4.0. That inversion was found by an ad-hoc script run by hand
+      # once. Typed `depends-on` links made it VISIBLE; this makes it CHECKED --
+      # the same distinction FEAT-091 drew for commit trailers.
+      #
+      # A step on this job, not a job of its own: it reads the same artifacts and
+      # the same PyYAML as the guard above, and this context is ALREADY required,
+      # so the gate binds on merge with no ruleset edit to forget. A new required
+      # context needs a post-merge admin step, which is the drift scry#130 was.
+      #
+      # The three known inversions are allowlisted WITH reasons and a stale entry
+      # FAILS, so they double as a live test of the detection logic against real
+      # artifacts -- inverting the comparison operator turns the gate red.
+      - name: Guard — no release depends on one scheduled after it
+        run: |
+          python3 tools/check-release-ordering.py --self-test
+          python3 tools/check-release-ordering.py
+
   # scry#161: the V-model's artifact side and the code side were never
   # connected -- rivet ships commit-to-artifact traceability and it shipped
   # here unconfigured, so `Broken refs` read 0 for want of any reference to
