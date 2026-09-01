@@ -82,6 +82,13 @@ scry-sai-handle = { path = "../scry-handle", version = "3.2.7" }
 # instead of degrading every load to ⊤.
 scry-sai-segment = { path = "../scry-segment", version = "3.2.7" }
 
+# FEAT-057 slice 2a: convex-polyhedra domain (general-coefficient linear
+# inequalities above the octagon), carried on FuncCtx in LOCKSTEP with the
+# octagon/segmentation through the structured-CFG fixpoint. Assignment
+# equalities are gated on the interval domain's no-wrap proof (i32_add/i32_sub
+# ≠ ⊤); anything unproven projects (FM-forgets) the assigned variable.
+scry-sai-poly = { path = "../scry-poly", version = "3.2.7" }
+
 [dev-dependencies]
 # Test-only (the crate is otherwise dep-light + no_std): assemble the .wat
 # corpus fixtures to Wasm bytes so the FEAT-016 loop-fixpoint tests can drive

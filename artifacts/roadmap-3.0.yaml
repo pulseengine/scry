@@ -947,6 +947,44 @@ artifacts:
         wrap-aware transfers gated on the interval domain's no-wrap result,
         guard refinement, and `Poly::project`. What this measurement does NOT
         establish is the SIZE of the win, only that the surface exists.
+
+        SLICE 2a BUILT (2026-09-01, branch feat057-slice2a-poly-fixpoint):
+        `Poly::project` (FM elimination, gamma-swept, bail directions stated),
+        `poly: Poly` on FuncCtx threaded lockstep with octagon/mem (join at
+        every merge, widen at every loop header, degrade to top, project on
+        every unmodelled write), wrap-GATED assignment transfers (equality only
+        when scry_interval i32_add/i32_sub proves no-wrap; NEVER unguarded),
+        two-local guard refinement mirroring refine_octagon_rel, and the NEW
+        additive `ProgramPoint.linear` output (constraints over >=2 locals;
+        RelationalConstraint/snapshot_relational untouched). Five analyzer
+        mutants + one crate mutant each observed RED (forced equality, dropped
+        merge join, dropped back-edge join, swapped guard edges, no-project-on-
+        write, project-keeps-eliminated-var).
+
+        MEASURED REALIZATION, stated plainly because it is the number that
+        matters: on scry_mcdc.wasm (25,144 points after this change), 2,020
+        points (8.03%) carry linear facts — but ALL are 2-variable facts the
+        octagon could also express; the >=3-local count is ZERO. Instrumented
+        why: 94 `z := x + y` sites reach the transfer, 0 have a provable
+        no-wrap — real LLVM-emitted operands are interval-TOP at those sites
+        (params unbounded; LLVM bounds checks are UNSIGNED compares, which
+        guard_op soundly refuses). The wrap gate is doing its job with
+        insufficient interval support, exactly the failure mode the 2026-07-14
+        reframing predicted. The slice is WIRED AND SOUND BUT INERT for the
+        octagon-beating class on this corpus. Analysis cost: within run noise
+        (~21.2-22.9s both with and without the poly on scry_mcdc.wasm).
+
+        AC STATUS — why this stays `proposed` (accepted = cuttable): AC#1 is
+        met only on fixtures (the oracle test proves a 3-var relation the
+        octagon provably cannot express, both directions); on the corpus the
+        realized >=3-var surface is zero, so claiming it "infers them" on real
+        programs would overclaim. AC#2 unchanged (Poly.v lattice-only, 0
+        admits; transfers gamma-swept, NOT mechanized). AC#3 (corpus precision/
+        cost differential vs the octagon) is OPEN — that is slice 3, and the
+        realization measurement above says the differential today is zero
+        until no-wrap becomes provable on real code (candidate levers, each
+        its own slice: unsigned-guard refinement, known-bits/segment-fed
+        bounds, interprocedural param_ranges seeding).
     links:
       - type: traces-to
         target: REQ-016

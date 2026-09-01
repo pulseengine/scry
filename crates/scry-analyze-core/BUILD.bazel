@@ -41,6 +41,7 @@ rust_library(
         "//crates/scry-float:scry_float",
         "//crates/scry-handle:scry_handle",
         "//crates/scry-segment:scry_segment",
+        "//crates/scry-poly:scry_poly",
         "//crates/scry-provenance:scry_provenance",
         "//crates/scry-taint:scry_taint",
     ],

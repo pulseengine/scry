@@ -87,6 +87,7 @@ use wasmparser::{Operator, Parser, Payload};
 // sha + origins); the `provenance` field below maps it into the mirror types.
 use scry_bits::{BitsCong, Cong};
 use scry_octagon::Octagon;
+use scry_poly::Poly;
 use scry_segment::Segmentation;
 
 pub use scry_interval::{Interval, Region};
@@ -145,6 +146,38 @@ pub struct ProgramPoint {
     /// carries only `locals`); sound (each cell is a constraint the analysis
     /// maintains — every concrete run's memory respects it).
     pub memory: Vec<MemSegment>,
+    /// FEAT-057 slice 2a (REQ-016): general linear constraints `Σ aᵢ·xᵢ ≤ c`
+    /// over the locals holding at this pc — the convex-polyhedra domain's
+    /// output, strictly above the octagon's `±xᵢ ± xⱼ ≤ c` form. Filtered to
+    /// constraints over ≥ 2 distinct locals (a unary poly bound duplicates the
+    /// interval domain, mirroring FEAT-041's not-implied-by-unary filter).
+    /// ADDITIVE next to `relational` — that struct is in the FEAT-041 output
+    /// contract (viz + guidance feed) and is not reshaped. Library-only (the
+    /// WIT mirror carries only `locals`). Sound: every constraint is
+    /// maintained by the wrap-gated poly transfers through the fixpoint —
+    /// an assignment equality (`z = x + y`) enters ONLY when the interval
+    /// domain proves the arithmetic cannot wrap on any run reaching this pc.
+    pub linear: Vec<LinearConstraint>,
+}
+
+/// FEAT-057 slice 2a: one surfaced polyhedra constraint `Σ terms ≤ bound` at
+/// a program point. `terms` lists only the non-zero coefficients, each pairing
+/// a local index with its integer coefficient.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinearConstraint {
+    /// The non-zero coefficient terms, in ascending `local_index` order.
+    pub terms: Vec<LinearTerm>,
+    /// Upper bound: `Σ coeff·local ≤ bound`.
+    pub bound: i64,
+}
+
+/// FEAT-057 slice 2a: one `coeff · local` term of a [`LinearConstraint`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinearTerm {
+    /// The local's index.
+    pub local_index: u32,
+    /// Its (non-zero) integer coefficient.
+    pub coeff: i64,
 }
 
 /// FEAT-062: a surfaced linear-memory content cell at a program point — every
@@ -1321,6 +1354,20 @@ struct FuncCtx {
     /// a single in-bounds i32 cell must invalidate (⊤) the possibly-touched byte
     /// window, never record content; any degrade resets it to `top`.
     mem: Segmentation,
+    /// FEAT-057 slice 2a: convex-polyhedra domain over the locals
+    /// (scry-sai-poly), carried in lockstep with `locals`/`octagon`/`mem`
+    /// through the structured-CFG fixpoint — joined at every merge and widened
+    /// at every loop header, or the fixpoint would be unsound. Dimension
+    /// equals `locals.len()`; variable `k` is local `k`; `top` means "no
+    /// linear fact known". Soundness rules: (1) any write to a local that
+    /// [`Interp::poly_transfer`] does not model must `project` (FM-forget)
+    /// that variable — a constraint surviving a reassignment is a false
+    /// proof; (2) over Wasm's WRAPPING i32 arithmetic an assignment equality
+    /// (`z = x + y`) is added ONLY when the interval domain proves no-wrap
+    /// (`scry_interval::i32_add`/`i32_sub` returns ⊤ exactly when wrap is
+    /// possible) — never an unguarded equality; (3) any degrade resets it to
+    /// `top`.
+    poly: Poly,
     /// Once we see an unsupported construct in a function, we stop
     /// emitting fresh program-points for it — the abstract state has
     /// become uninformative (all-top) and further records would just
@@ -1370,11 +1417,13 @@ struct FuncCtx {
 impl FuncCtx {
     fn new(locals: Vec<AbstractValue>) -> Self {
         let octagon = scry_octagon::top(locals.len() as u32);
+        let poly = scry_poly::top(locals.len() as u32);
         Self {
             locals,
             operand_stack: Vec::new(),
             octagon,
             mem: scry_segment::top(),
+            poly,
             degraded: false,
             gaps: Vec::new(),
             trap_checks: Vec::new(),
@@ -1403,6 +1452,8 @@ impl FuncCtx {
         // FEAT-058: a degrade means we can no longer track control flow, so any
         // subsequent store could land anywhere — forget all memory content.
         self.mem = scry_segment::top();
+        // FEAT-057: linear facts degrade with everything else (rule 3).
+        self.poly = scry_poly::top(self.locals.len() as u32);
         // FEAT-089: predicate facts degrade with everything else.
         self.nonzero_locals.clear();
         self.degraded = true;
@@ -1461,6 +1512,35 @@ fn snapshot_memory(mem: &Segmentation) -> Vec<MemSegment> {
             lo: s.lo,
             hi: s.hi,
             value: s.val,
+        })
+        .collect()
+}
+
+/// FEAT-057 slice 2a: snapshot the polyhedron's general linear constraints as
+/// output records. Filtered to constraints over ≥ 2 distinct locals — a unary
+/// poly bound duplicates what the interval domain already publishes (the
+/// FEAT-041 not-implied-by-unary spirit); the unary constraint stays INSIDE
+/// the domain, where it still feeds entailment across joins. ⊥ (an
+/// unreachable point) snapshots as empty — claiming nothing is sound.
+fn snapshot_linear(poly: &Poly) -> Vec<LinearConstraint> {
+    if poly.is_bottom() {
+        return Vec::new();
+    }
+    poly.constraints()
+        .iter()
+        .filter(|c| c.coeffs.iter().filter(|&&a| a != 0).count() >= 2)
+        .map(|c| LinearConstraint {
+            terms: c
+                .coeffs
+                .iter()
+                .enumerate()
+                .filter(|&(_, &a)| a != 0)
+                .map(|(i, &a)| LinearTerm {
+                    local_index: i as u32,
+                    coeff: a,
+                })
+                .collect(),
+            bound: c.bound,
         })
         .collect()
 }
@@ -4887,6 +4967,109 @@ fn refine_octagon_rel(oct: &Octagon, a: u32, b: u32, op: GuardOp, taken: bool) -
     }
 }
 
+/// FEAT-057 slice 2a: what a `local.set`/`local.tee` stores, for the
+/// polyhedra transfer. Extends [`StoreSrc`] with the two-LOCAL arithmetic
+/// shapes (`z := x + y` / `z := x − y`) — the general-coefficient facts that
+/// are the polyhedra's reason to exist (a 3-variable equality is outside the
+/// octagon's `±xᵢ ± xⱼ ≤ c` form). The patterns are disjoint from
+/// [`classify_store`]'s (`local.get; local.get; add` vs `local.get;
+/// i32.const; add`), so this delegates for everything else.
+enum PolyStoreSrc {
+    /// `x := c`
+    Const(i64),
+    /// `x := y`
+    Copy(u32),
+    /// `x := y + c`
+    AddConst(u32, i64),
+    /// `x := a + b` (a `local.get a; local.get b; i32.add; local.set x` idiom)
+    AddLocals(u32, u32),
+    /// `x := a − b`
+    SubLocals(u32, u32),
+    Other,
+}
+
+/// Classify the value a `local.set`/`local.tee` at `pc` stores, for the
+/// polyhedra transfer. Sound for the same reason [`classify_store`] is: the
+/// producer ops are consecutive (structured Wasm has no mid-straight-line
+/// branch targets), so the stack top is exactly what they computed.
+fn classify_poly_store(ops: &[Operator<'_>], pc: usize) -> PolyStoreSrc {
+    // `x := a ± b` : local.get a; local.get b; i32.add|sub; local.set x
+    if pc >= 3
+        && let (Operator::LocalGet { local_index: a }, Operator::LocalGet { local_index: b }, op3) =
+            (&ops[pc - 3], &ops[pc - 2], &ops[pc - 1])
+    {
+        match op3 {
+            Operator::I32Add => return PolyStoreSrc::AddLocals(*a, *b),
+            Operator::I32Sub => return PolyStoreSrc::SubLocals(*a, *b),
+            _ => {}
+        }
+    }
+    match classify_store(ops, pc) {
+        StoreSrc::Const(c) => PolyStoreSrc::Const(c),
+        StoreSrc::Copy(src) => PolyStoreSrc::Copy(src),
+        StoreSrc::AddConst(src, c) => PolyStoreSrc::AddConst(src, c),
+        StoreSrc::Other => PolyStoreSrc::Other,
+    }
+}
+
+/// FEAT-057 slice 2a: add the equality `Σ coeff·local = rhs` to the poly as
+/// its two half-spaces (`≤ rhs` and `≥ rhs`). `terms` accumulate additively,
+/// so a repeated local (e.g. `z := x + x`) folds into one coefficient.
+fn poly_with_equality(mut p: Poly, dim: u32, terms: &[(u32, i64)], rhs: i64) -> Poly {
+    let mut coeffs = alloc::vec![0i64; dim as usize];
+    for &(v, a) in terms {
+        coeffs[v as usize] += a;
+    }
+    p.add_constraint(scry_poly::Constraint {
+        coeffs: coeffs.clone(),
+        bound: rhs,
+    });
+    p.add_constraint(scry_poly::Constraint {
+        coeffs: coeffs.iter().map(|&a| -a).collect(),
+        bound: -rhs,
+    });
+    p
+}
+
+/// FEAT-057 slice 2a: add to the polyhedra the difference constraint implied
+/// by the signed comparison `A OP B` being true (`taken`) or false — the
+/// poly-side mirror of [`refine_octagon_rel`], adding the SAME facts. Sound
+/// for the same reason: `guard_op` admits only SIGNED comparisons, which are
+/// facts about the locals' signed values (no wrap consideration applies — no
+/// arithmetic is performed). The `≠` edge adds nothing (not convex).
+fn refine_poly_rel(poly: &Poly, dim: u32, a: u32, b: u32, op: GuardOp, taken: bool) -> Poly {
+    let diff = |x: u32, y: u32, c: i64| {
+        let mut p = poly.clone();
+        let mut coeffs = alloc::vec![0i64; dim as usize];
+        coeffs[x as usize] = 1;
+        coeffs[y as usize] = -1;
+        p.add_constraint(scry_poly::Constraint { coeffs, bound: c });
+        p
+    };
+    match (op, taken) {
+        // A < B: A − B ≤ −1
+        (GuardOp::Lt, true) | (GuardOp::Ge, false) => diff(a, b, -1),
+        // A ≥ B: B − A ≤ 0
+        (GuardOp::Ge, true) | (GuardOp::Lt, false) => diff(b, a, 0),
+        // A ≤ B: A − B ≤ 0
+        (GuardOp::Le, true) | (GuardOp::Gt, false) => diff(a, b, 0),
+        // A > B: B − A ≤ −1
+        (GuardOp::Gt, true) | (GuardOp::Le, false) => diff(b, a, -1),
+        // A == B: both directions.
+        (GuardOp::Eq, true) | (GuardOp::Ne, false) => {
+            let p = diff(a, b, 0);
+            let mut coeffs = alloc::vec![0i64; dim as usize];
+            coeffs[b as usize] = 1;
+            coeffs[a as usize] = -1;
+            let mut p2 = p;
+            p2.add_constraint(scry_poly::Constraint { coeffs, bound: 0 });
+            p2
+        }
+        // A ≠ B: not convex — nothing to add.
+        (GuardOp::Eq, false) | (GuardOp::Ne, true) => poly.clone(),
+    }
+}
+
 /// The reduced product (FEAT-016 slice-2b-ii observability, DD-015 2c): tighten
 /// each local's interval using the octagon, with NO WIT change. Inject the
 /// current interval bounds into a working octagon (sound — they hold for every
@@ -4957,6 +5140,9 @@ struct BreakState {
     /// FEAT-058: memory content carried to the branch target, joined across all
     /// branches to the same label (in lockstep with `locals`/`octagon`).
     mem: Segmentation,
+    /// FEAT-057: polyhedra state carried to the branch target, joined across
+    /// all branches to the same label (in lockstep with `locals`/`octagon`).
+    poly: Poly,
 }
 
 /// A structured label (an enclosing `block` or `loop`) and the joined state
@@ -4967,17 +5153,25 @@ struct Label {
 }
 
 impl Label {
-    fn record(&mut self, locals: &[AbstractValue], octagon: &Octagon, mem: &Segmentation) {
+    fn record(
+        &mut self,
+        locals: &[AbstractValue],
+        octagon: &Octagon,
+        mem: &Segmentation,
+        poly: &Poly,
+    ) {
         self.breaks = Some(match self.breaks.take() {
             Some(acc) => BreakState {
                 locals: join_locals(&acc.locals, locals),
                 octagon: scry_octagon::join(&acc.octagon, octagon),
                 mem: acc.mem.join(mem),
+                poly: acc.poly.join(poly),
             },
             None => BreakState {
                 locals: locals.to_vec(),
                 octagon: octagon.clone(),
                 mem: mem.clone(),
+                poly: poly.clone(),
             },
         });
     }
@@ -5070,6 +5264,7 @@ impl Interp<'_, '_> {
                         operand_stack: snapshot_stack(&ctx.operand_stack),
                         relational: snapshot_relational(&ctx.octagon),
                         memory: snapshot_memory(&ctx.mem),
+                        linear: snapshot_linear(&ctx.poly),
                     });
                 }
                 pc = next;
@@ -5092,6 +5287,7 @@ impl Interp<'_, '_> {
                         operand_stack: snapshot_stack(&ctx.operand_stack),
                         relational: snapshot_relational(&ctx.octagon),
                         memory: snapshot_memory(&ctx.mem),
+                        linear: snapshot_linear(&ctx.poly),
                     });
                 }
                 pc = next;
@@ -5103,7 +5299,7 @@ impl Interp<'_, '_> {
                 Operator::Br { relative_depth } => {
                     // `None` = the branch exits the function; nothing to record.
                     if let Some(l) = self.target(labels, *relative_depth) {
-                        l.record(&ctx.locals, &ctx.octagon, &ctx.mem);
+                        l.record(&ctx.locals, &ctx.octagon, &ctx.mem, &ctx.poly);
                     }
                     return Ok(Flow::Diverged);
                 }
@@ -5115,7 +5311,7 @@ impl Interp<'_, '_> {
                     // `None` = the taken edge exits the function; the
                     // fall-through below is still modelled.
                     if let Some(l) = self.target(labels, *relative_depth) {
-                        l.record(&ctx.locals, &ctx.octagon, &ctx.mem);
+                        l.record(&ctx.locals, &ctx.octagon, &ctx.mem, &ctx.poly);
                     }
                     pc += 1;
                     continue;
@@ -5166,6 +5362,9 @@ impl Interp<'_, '_> {
             // Octagon relational transfer for this op (FEAT-016 slice-2b-ii):
             // local.set/tee update or forget the written variable's relations.
             self.octagon_transfer(pc, ctx);
+            // FEAT-057 slice 2a: polyhedra transfer — wrap-gated assignment
+            // equalities, projection (FM-forget) for everything else.
+            self.poly_transfer(pc, ctx);
             if emit && !ctx.degraded {
                 self.points.push(ProgramPoint {
                     func_index: self.func_index,
@@ -5174,6 +5373,7 @@ impl Interp<'_, '_> {
                     operand_stack: snapshot_stack(&ctx.operand_stack),
                     relational: snapshot_relational(&ctx.octagon),
                     memory: snapshot_memory(&ctx.mem),
+                    linear: snapshot_linear(&ctx.poly),
                 });
             }
             if stop {
@@ -5305,6 +5505,10 @@ impl Interp<'_, '_> {
             // (clean-room finding: the blanket forget was a precision
             // regression on this feature's own motivating shape).
             self.octagon_transfer(pc, ctx);
+            // FEAT-057: the tee is a write the poly must see too — same
+            // wrap-gated transfer as the straight-line path (projects the
+            // assigned variable unless a no-wrap equality is provable).
+            self.poly_transfer(pc, ctx);
         }
         let taken_iv = refine_interval(iv, op, c, true);
         let not_taken_iv = refine_interval(iv, op, c, false);
@@ -5315,7 +5519,7 @@ impl Interp<'_, '_> {
         let mut taken_locals = ctx.locals.clone();
         taken_locals[local as usize] = AbstractValue::I32Interval(taken_iv);
         if let Some(l) = self.target(labels, depth) {
-            l.record(&taken_locals, &ctx.octagon, &ctx.mem);
+            l.record(&taken_locals, &ctx.octagon, &ctx.mem, &ctx.poly);
         }
 
         // Not-taken edge (guard false) → fall through.
@@ -5369,13 +5573,19 @@ impl Interp<'_, '_> {
         }
         let taken_oct = refine_octagon_rel(&ctx.octagon, a, b, op, true);
         let not_taken_oct = refine_octagon_rel(&ctx.octagon, a, b, op, false);
+        // FEAT-057: the polyhedra learn the same difference constraint on each
+        // edge (guard refinement mirroring the octagon's — sound for the same
+        // reason: the signed comparison is a fact about the locals' VALUES).
+        let taken_poly = refine_poly_rel(&ctx.poly, dim, a, b, op, true);
+        let not_taken_poly = refine_poly_rel(&ctx.poly, dim, a, b, op, false);
         // Taken edge (guard true) → label D (locals unchanged). `None` when
         // that edge exits the function; the not-taken refinement still applies.
         if let Some(l) = self.target(labels, depth) {
-            l.record(&ctx.locals, &taken_oct, &ctx.mem);
+            l.record(&ctx.locals, &taken_oct, &ctx.mem, &taken_poly);
         }
         // Not-taken edge (guard false) → fall through.
         ctx.octagon = not_taken_oct;
+        ctx.poly = not_taken_poly;
         Some(next)
     }
 
@@ -5408,6 +5618,99 @@ impl Interp<'_, '_> {
         };
     }
 
+    /// FEAT-057 slice 2a: polyhedra transfer for the op at `pc`, run at the
+    /// same sites as [`Self::octagon_transfer`]. Only `local.set`/`local.tee`
+    /// change the linear state: the assigned variable is ALWAYS `project`ed
+    /// (FM-forgotten) first — every branch below starts from a state with no
+    /// stale constraint on it — and an assignment EQUALITY is then added only
+    /// when it is sound.
+    ///
+    /// THE WRAP GATE — the soundness core of this slice. Over Wasm's WRAPPING
+    /// i32 arithmetic, `z := x + y` justifies the linear fact `z = x + y` only
+    /// on runs where the addition does not wrap. The no-wrap proof comes from
+    /// the interval domain: [`scry_interval::i32_add`] / [`i32_sub`] return ⊤
+    /// exactly when the result may leave i32 range, so a non-⊤ result over the
+    /// operands' current intervals proves NO run reaching this pc wraps here.
+    /// When no-wrap is NOT proven the projection above is the whole transfer —
+    /// never an unguarded equality. Constants and copies involve no arithmetic
+    /// and need no gate.
+    ///
+    /// Self-referencing assignments (`x := x + c`, or `z := x + y` with `z`
+    /// aliasing an operand) only project: this method runs AFTER
+    /// `interpret_op` has overwritten `ctx.locals[l]`, so the operand's
+    /// PRE-assignment interval — which the wrap gate needs — is gone. A
+    /// precision loss (the octagon still models `x := x + c`), never a
+    /// soundness one. Operand intervals are read from `ctx.locals`, which the
+    /// assignment left untouched for every non-aliased operand.
+    fn poly_transfer(&self, pc: usize, ctx: &mut FuncCtx) {
+        if ctx.degraded {
+            return;
+        }
+        let l = match &self.ops[pc] {
+            Operator::LocalSet { local_index } | Operator::LocalTee { local_index } => *local_index,
+            _ => return,
+        };
+        let dim = ctx.locals.len() as u32;
+        if l >= dim {
+            return;
+        }
+        // Only a genuine I32Interval participates in the wrap gate: a
+        // RegionPointer's offset interval is NOT the value's range, and using
+        // it to prove no-wrap would be unsound.
+        let iv = |v: u32| match ctx.locals.get(v as usize) {
+            Some(AbstractValue::I32Interval(iv)) => Some(*iv),
+            _ => None,
+        };
+        let forgotten = ctx.poly.project(l);
+        ctx.poly = match classify_poly_store(self.ops, pc) {
+            // `l := c` — no arithmetic, the equality is exact.
+            PolyStoreSrc::Const(c) => poly_with_equality(forgotten, dim, &[(l, 1)], c),
+            // `l := src` — a copy cannot wrap.
+            PolyStoreSrc::Copy(src) if src < dim && src != l => {
+                poly_with_equality(forgotten, dim, &[(l, 1), (src, -1)], 0)
+            }
+            // `l := src + c` — equality only under the interval no-wrap proof.
+            PolyStoreSrc::AddConst(src, c) if src < dim && src != l => {
+                let no_wrap = iv(src).is_some_and(|s| {
+                    !interval_is_top(&scry_interval::i32_add(s, scry_interval::constant_i64(c)))
+                });
+                if no_wrap {
+                    poly_with_equality(forgotten, dim, &[(l, 1), (src, -1)], c)
+                } else {
+                    forgotten
+                }
+            }
+            // `l := a + b` — THE polyhedra case (a 3-variable equality no
+            // octagon can express), equality only under the no-wrap proof.
+            PolyStoreSrc::AddLocals(a, b) if a < dim && b < dim && a != l && b != l => {
+                let no_wrap = match (iv(a), iv(b)) {
+                    (Some(x), Some(y)) => !interval_is_top(&scry_interval::i32_add(x, y)),
+                    _ => false,
+                };
+                if no_wrap {
+                    poly_with_equality(forgotten, dim, &[(l, 1), (a, -1), (b, -1)], 0)
+                } else {
+                    forgotten
+                }
+            }
+            // `l := a − b` — same gate through i32_sub.
+            PolyStoreSrc::SubLocals(a, b) if a < dim && b < dim && a != l && b != l => {
+                let no_wrap = match (iv(a), iv(b)) {
+                    (Some(x), Some(y)) => !interval_is_top(&scry_interval::i32_sub(x, y)),
+                    _ => false,
+                };
+                if no_wrap {
+                    poly_with_equality(forgotten, dim, &[(l, 1), (a, -1), (b, 1)], 0)
+                } else {
+                    forgotten
+                }
+            }
+            // Anything else (including self-referencing shapes): the
+            // projection is the whole transfer — the sound default.
+            _ => forgotten,
+        };
+    }
+
     /// `block`: branches to it land AFTER the block, so the post-block state
     /// is the fall-through (if reachable) joined with the break states.
     fn block(
@@ -5429,12 +5732,14 @@ impl Interp<'_, '_> {
                 ctx.locals = join_locals(&ctx.locals, &b.locals);
                 ctx.octagon = scry_octagon::join(&ctx.octagon, &b.octagon);
                 ctx.mem = ctx.mem.join(&b.mem);
+                ctx.poly = ctx.poly.join(&b.poly);
             }
             (Flow::Fall, None) => {}
             (Flow::Diverged, Some(b)) => {
                 ctx.locals = b.locals;
                 ctx.octagon = b.octagon;
                 ctx.mem = b.mem;
+                ctx.poly = b.poly;
             }
             (Flow::Diverged, None) => {
                 // Post-block unreachable (body always branched elsewhere).
@@ -5469,6 +5774,10 @@ impl Interp<'_, '_> {
         // FEAT-058: memory content rides the fixpoint in lockstep too — joined
         // at back-edges, widened at the header (segment-count cap ⇒ termination).
         let entry_mem = ctx.mem.clone();
+        // FEAT-057: the polyhedra ride the fixpoint in lockstep as well —
+        // joined at back-edges, widened at the header (the constraint set only
+        // shrinks under scry_poly::widen, so the chain stabilises).
+        let entry_poly = ctx.poly.clone();
         // Seed the entry octagon with the entry interval bounds (FEAT-016
         // slice-2b-ii): without this the octagon does not relate the loop
         // counter to its bound at entry (e.g. `i = 0`, `n = 10` ⇒ `i − n ≤
@@ -5494,12 +5803,14 @@ impl Interp<'_, '_> {
         // re-derives it from the guard.
         let mut header_oct = entry_oct.clone();
         let mut header_mem = entry_mem.clone();
-        let mut exit: Option<(Vec<AbstractValue>, Octagon, Segmentation)> = None;
+        let mut header_poly = entry_poly.clone();
+        let mut exit: Option<(Vec<AbstractValue>, Octagon, Segmentation, Poly)> = None;
         let mut iter = 0u32;
         loop {
             ctx.locals = header.clone();
             ctx.octagon = header_oct.clone();
             ctx.mem = header_mem.clone();
+            ctx.poly = header_poly.clone();
             ctx.operand_stack = saved_stack.clone();
             // FEAT-089: a loop pass starts from `entry ⊔ back-edges`, and a
             // back-edge must NEVER carry a non-zero fact into the next
@@ -5514,36 +5825,51 @@ impl Interp<'_, '_> {
             let label = labels.pop().expect("pushed above");
             if body_flow == Flow::Fall {
                 exit = Some(match exit.take() {
-                    Some((el, eo, em)) => (
+                    Some((el, eo, em, ep)) => (
                         join_locals(&el, &ctx.locals),
                         scry_octagon::join(&eo, &ctx.octagon),
                         em.join(&ctx.mem),
+                        ep.join(&ctx.poly),
                     ),
-                    None => (ctx.locals.clone(), ctx.octagon.clone(), ctx.mem.clone()),
+                    None => (
+                        ctx.locals.clone(),
+                        ctx.octagon.clone(),
+                        ctx.mem.clone(),
+                        ctx.poly.clone(),
+                    ),
                 });
             }
-            let (mut next, mut next_oct, mut next_mem) = match &label.breaks {
+            let (mut next, mut next_oct, mut next_mem, mut next_poly) = match &label.breaks {
                 Some(b) => (
                     join_locals(&entry, &b.locals),
                     scry_octagon::join(&entry_oct, &b.octagon),
                     entry_mem.join(&b.mem),
+                    entry_poly.join(&b.poly),
                 ),
-                None => (entry.clone(), entry_oct.clone(), entry_mem.clone()),
+                None => (
+                    entry.clone(),
+                    entry_oct.clone(),
+                    entry_mem.clone(),
+                    entry_poly.clone(),
+                ),
             };
             if iter >= LOOP_WIDEN_THRESHOLD {
                 next = widen_locals(&header, &next, &self.widen_thresholds);
                 next_oct = scry_octagon::widen(&header_oct, &next_oct);
                 next_mem = header_mem.widen(&next_mem);
+                next_poly = header_poly.widen(&next_poly);
             }
             if locals_leq(&next, &header)
                 && scry_octagon::leq(&next_oct, &header_oct)
                 && next_mem.leq(&header_mem)
+                && next_poly.leq(&header_poly)
             {
                 break;
             }
             header = next;
             header_oct = next_oct;
             header_mem = next_mem;
+            header_poly = next_poly;
             iter += 1;
             if iter > LOOP_ITER_CAP {
                 // Termination safety net: widen every local + relation to ⊤.
@@ -5553,6 +5879,7 @@ impl Interp<'_, '_> {
                     .collect();
                 header_oct = scry_octagon::top(header.len() as u32);
                 header_mem = scry_segment::top();
+                header_poly = scry_poly::top(header.len() as u32);
                 break;
             }
         }
@@ -5566,6 +5893,7 @@ impl Interp<'_, '_> {
             ctx.locals = header.clone();
             ctx.octagon = header_oct.clone();
             ctx.mem = header_mem.clone();
+            ctx.poly = header_poly.clone();
             ctx.operand_stack = saved_stack.clone();
             // FEAT-089: a loop pass starts from `entry ⊔ back-edges`, and a
             // back-edge must NEVER carry a non-zero fact into the next
@@ -5605,6 +5933,7 @@ impl Interp<'_, '_> {
         ctx.locals = header.clone();
         ctx.octagon = header_oct.clone();
         ctx.mem = header_mem.clone();
+        ctx.poly = header_poly.clone();
         ctx.operand_stack = saved_stack.clone();
         // FEAT-089: same clear as every other pass start (see above).
         ctx.nonzero_locals.clear();
@@ -5613,12 +5942,18 @@ impl Interp<'_, '_> {
         let final_label = labels.pop().expect("pushed above");
         if final_flow == Flow::Fall {
             exit = Some(match exit.take() {
-                Some((el, eo, em)) => (
+                Some((el, eo, em, ep)) => (
                     join_locals(&el, &ctx.locals),
                     scry_octagon::join(&eo, &ctx.octagon),
                     em.join(&ctx.mem),
+                    ep.join(&ctx.poly),
                 ),
-                None => (ctx.locals.clone(), ctx.octagon.clone(), ctx.mem.clone()),
+                None => (
+                    ctx.locals.clone(),
+                    ctx.octagon.clone(),
+                    ctx.mem.clone(),
+                    ctx.poly.clone(),
+                ),
             });
         }
         // Drop this loop's own back-edge breaks — they targeted this loop only
@@ -5628,10 +5963,12 @@ impl Interp<'_, '_> {
         let _ = final_label;
         // Post-loop state: fall-through-exit if any, else the fixpoint header
         // (sound: covers the otherwise-unreachable fall-through).
-        let (post_locals, post_oct, post_mem) = exit.unwrap_or((header, header_oct, header_mem));
+        let (post_locals, post_oct, post_mem, post_poly) =
+            exit.unwrap_or((header, header_oct, header_mem, header_poly));
         ctx.locals = post_locals;
         ctx.octagon = post_oct;
         ctx.mem = post_mem;
+        ctx.poly = post_poly;
         ctx.operand_stack = saved_stack;
         // FEAT-089: the post-loop state may join several exit paths; no
         // non-zero fact crosses the region boundary outward.
@@ -5682,6 +6019,12 @@ impl Interp<'_, '_> {
             // their octagon relations too (sound havoc), FEAT-016 slice-2b-ii.
             if (*idx as usize) < ctx.locals.len() {
                 ctx.octagon = scry_octagon::forget(&ctx.octagon, *idx);
+                // FEAT-057: project (FM-forget) the written local out of the
+                // polyhedra — a linear fact about a value the unmodelled
+                // region may have replaced is a false proof. Facts over
+                // UNwritten locals soundly survive (calls cannot write Wasm
+                // locals, and region_write_set catches every local.set/tee).
+                ctx.poly = ctx.poly.project(*idx);
             }
         }
         // FEAT-058: havoc does NOT interpret the region body, so any store (or
@@ -5717,6 +6060,7 @@ impl Interp<'_, '_> {
                 relational: snapshot_relational(&ctx.octagon),
                 // havoc reset ctx.mem to ⊤ above, so this is empty (accurate).
                 memory: snapshot_memory(&ctx.mem),
+                linear: snapshot_linear(&ctx.poly),
             });
         }
     }
@@ -8528,6 +8872,7 @@ mod tests {
                 operand_stack: alloc::vec![av.clone()],
                 relational: alloc::vec![],
                 memory: alloc::vec![],
+                linear: alloc::vec![],
             }],
         };
         let res = AnalysisResult {
@@ -10810,6 +11155,354 @@ mod tests {
             "a call must forget memory content; stale [42,42] is UNSOUND; points={:?}",
             r.invariants.points
         );
+    }
+
+    // ── FEAT-057 slice 2a: polyhedra in the fixpoint ────────────────────
+
+    /// Rebuild a `scry_poly::Poly` from a point's surfaced `linear` facts, so
+    /// entailment over the OUTPUT (not the internal state) can be checked.
+    fn poly_of_linear(linear: &[LinearConstraint], dim: u32) -> scry_poly::Poly {
+        let mut p = scry_poly::top(dim);
+        for c in linear {
+            let mut coeffs = alloc::vec![0i64; dim as usize];
+            for t in &c.terms {
+                coeffs[t.local_index as usize] = t.coeff;
+            }
+            p.add_constraint(scry_poly::Constraint {
+                coeffs,
+                bound: c.bound,
+            });
+        }
+        p
+    }
+
+    /// Does the concrete valuation satisfy every surfaced linear constraint
+    /// at this point? (The γ-soundness check for the poly OUTPUT.)
+    fn linear_holds(linear: &[LinearConstraint], vals: &[i64]) -> bool {
+        linear.iter().all(|c| {
+            c.terms
+                .iter()
+                .map(|t| t.coeff as i128 * vals[t.local_index as usize] as i128)
+                .sum::<i128>()
+                <= c.bound as i128
+        })
+    }
+
+    /// x, y guard-refined into [0,100] (so no-wrap is provable), then
+    /// `z := x + y`. Ops 0..=16 are the block + four constant-guard idioms;
+    /// pc 20 is the `local.set 2`.
+    const FEAT057_GUARDED_ADD_PREFIX: &str = "block \
+           local.get 0 i32.const 0 i32.lt_s br_if 0 \
+           local.get 0 i32.const 100 i32.gt_s br_if 0 \
+           local.get 1 i32.const 0 i32.lt_s br_if 0 \
+           local.get 1 i32.const 100 i32.gt_s br_if 0 \
+           local.get 0 local.get 1 i32.add local.set 2 ";
+
+    /// THE ORACLE, both directions (FEAT-057 AC#1): a THREE-variable relation
+    /// the octagon provably cannot express. After guard-bounding x,y∈[0,100]
+    /// and `z := x + y`, the invariant `x + y − z ≤ 0` holds. The witness
+    /// valuation (100, 100, 0) satisfies EVERY fact the octagon side
+    /// publishes at that point (all surfaced relational constraints and all
+    /// unary interval bounds) yet violates the invariant — so the octagon
+    /// output does NOT imply it. The poly output must both ENTAIL the
+    /// invariant and EXCLUDE the witness. A test that only checked
+    /// `linear` non-empty would pass on a domain emitting garbage; this one
+    /// cannot.
+    #[test]
+    fn feat057_linear_beats_octagon_on_three_var_relation() {
+        let r = analyze_default(&alloc::format!(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local i32) \
+               {FEAT057_GUARDED_ADD_PREFIX} \
+             end \
+             local.get 2))"
+        ));
+        // pc 20 = the `local.set 2` (see the prefix doc comment).
+        let p = r
+            .invariants
+            .points
+            .iter()
+            .find(|p| p.pc == 20)
+            .expect("point at the z := x + y assignment");
+        // Direction 1: the poly output entails the invariant (both halves of
+        // the equality, so this is not satisfied by an accidental one-sided
+        // constraint).
+        let poly = poly_of_linear(&p.linear, 3);
+        let inv = scry_poly::Constraint {
+            coeffs: alloc::vec![1, 1, -1],
+            bound: 0,
+        };
+        let inv_rev = scry_poly::Constraint {
+            coeffs: alloc::vec![-1, -1, 1],
+            bound: 0,
+        };
+        assert!(
+            poly.entails(&inv) && poly.entails(&inv_rev),
+            "linear output must entail z = x + y; got {:?}",
+            p.linear
+        );
+        // Direction 2: the octagon side CANNOT rule out the witness — it
+        // satisfies every surfaced relational constraint and every unary
+        // interval bound at this point...
+        let witness: [i64; 3] = [100, 100, 0];
+        for c in &p.relational {
+            let (a, b) = (witness[c.a as usize], witness[c.b as usize]);
+            let v = match c.kind {
+                RelKind::Diff => a - b,
+                RelKind::Sum => a + b,
+            };
+            assert!(
+                v <= c.bound,
+                "witness must satisfy every octagon constraint (else the \
+                 octagon-cannot-express claim is untested); violated {c:?}"
+            );
+        }
+        for l in &p.locals {
+            if let AbstractValue::I32Interval(iv) = &l.value {
+                let v = witness[l.local_index as usize];
+                assert!(
+                    iv.lo <= v && v <= iv.hi,
+                    "witness must satisfy every interval bound; local {} = {v} \
+                     outside [{}, {}]",
+                    l.local_index,
+                    iv.lo,
+                    iv.hi
+                );
+            }
+        }
+        // ...while the poly output excludes it.
+        assert!(
+            !linear_holds(&p.linear, &witness),
+            "the linear output must EXCLUDE (100, 100, 0) — x + y − z = 200 > 0"
+        );
+    }
+
+    /// THE WRAP GATE (FEAT-057 soundness core). `z := x + y` with
+    /// x = i32::MAX, y = 1 WRAPS to i32::MIN at run time, so the linear
+    /// equality `z = x + y` (over ℤ) is FALSE — the transfer must project z
+    /// instead. γ-check: the concrete run's valuation at every pc satisfies
+    /// every surfaced linear constraint. Forcing the equality in
+    /// unconditionally (ignoring the no-wrap result) makes pc ≥ 7 carry
+    /// `x + y − z ≤ 0`, violated by 2147483647 + 1 − (−2147483648) = 2^32.
+    /// The no-wrap twin (5 + 7) pins the gate's other side: a gate that
+    /// never admits an equality would be inert, not sound.
+    #[test]
+    fn feat057_wrap_gate_never_admits_unproven_equality() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (result i32) (local i32 i32 i32) \
+               i32.const 2147483647 local.set 0 \
+               i32.const 1 local.set 1 \
+               local.get 0 local.get 1 i32.add local.set 2 \
+               local.get 2))",
+        );
+        // Concrete valuation after each pc (locals start at 0).
+        let vals_at = |pc: u32| -> [i64; 3] {
+            match pc {
+                0 => [0, 0, 0],
+                1 | 2 => [2147483647, 0, 0],
+                3..=6 => [2147483647, 1, 0],
+                _ => [2147483647, 1, -2147483648],
+            }
+        };
+        assert!(!r.invariants.points.is_empty(), "fixture must emit points");
+        for p in &r.invariants.points {
+            assert!(
+                linear_holds(&p.linear, &vals_at(p.pc)),
+                "UNSOUND linear fact at pc {} (the run wraps): {:?}",
+                p.pc,
+                p.linear
+            );
+        }
+        // No-wrap twin: 5 + 7 cannot wrap, so the equality MUST be admitted
+        // (otherwise the gate is inert and the whole domain is dead weight).
+        let r2 = analyze_default(
+            "(module (func (export \"f\") (result i32) (local i32 i32 i32) \
+               i32.const 5 local.set 0 \
+               i32.const 7 local.set 1 \
+               local.get 0 local.get 1 i32.add local.set 2 \
+               local.get 2))",
+        );
+        let p7 = r2
+            .invariants
+            .points
+            .iter()
+            .find(|p| p.pc == 7)
+            .expect("point at the no-wrap z := x + y");
+        let poly = poly_of_linear(&p7.linear, 3);
+        assert!(
+            poly.entails(&scry_poly::Constraint {
+                coeffs: alloc::vec![1, 1, -1],
+                bound: 0,
+            }),
+            "no-wrap equality must be admitted; got {:?}",
+            p7.linear
+        );
+        // And it must hold on the concrete run (5, 7, 12) — the positive γ.
+        assert!(linear_holds(&p7.linear, &[5, 7, 12]));
+    }
+
+    /// Relational-guard refinement into the poly (mirroring
+    /// `refine_octagon_rel`): the fall-through of `br_if (x < y)` licenses
+    /// `y − x ≤ 0`. Direction matters — the classic refinement bug adds the
+    /// TAKEN edge's constraint to the fall-through. Checked both ways: the
+    /// fall-through point must entail `y − x ≤ 0` (non-vacuity: the
+    /// refinement actually fired) AND satisfy the concrete fall-through
+    /// valuation (5, 3, 5), which violates the taken edge's `x − y ≤ −1`.
+    /// The post-merge point must satisfy BOTH paths' valuations.
+    #[test]
+    fn feat057_guard_refinement_direction() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local i32) \
+               block \
+                 local.get 0 local.get 1 i32.lt_s br_if 0 \
+                 local.get 0 local.set 2 \
+               end \
+               local.get 2))",
+        );
+        // pc 6 = `local.set 2` on the fall-through (x ≥ y) path.
+        let p6 = r
+            .invariants
+            .points
+            .iter()
+            .find(|p| p.pc == 6)
+            .expect("fall-through point at z := x");
+        assert!(
+            poly_of_linear(&p6.linear, 3).entails(&scry_poly::Constraint {
+                coeffs: alloc::vec![-1, 1, 0],
+                bound: 0,
+            }),
+            "fall-through of br_if (x < y) must carry y − x ≤ 0; got {:?}",
+            p6.linear
+        );
+        assert!(
+            linear_holds(&p6.linear, &[5, 3, 5]),
+            "fall-through run (x, y, z) = (5, 3, 5) violated: {:?}",
+            p6.linear
+        );
+        // pc 8 = post-merge `local.get 2`: both paths' runs must satisfy it
+        // (taken: x < y, z still 0).
+        let p8 = r
+            .invariants
+            .points
+            .iter()
+            .find(|p| p.pc == 8)
+            .expect("post-merge point");
+        for vals in [[5i64, 3, 5], [3i64, 5, 0]] {
+            assert!(
+                linear_holds(&p8.linear, &vals),
+                "post-merge point keeps a one-sided guard fact, violated by \
+                 {vals:?}: {:?}",
+                p8.linear
+            );
+        }
+    }
+
+    /// Merge-join soundness at a `block` exit: one path keeps `z = x + y`,
+    /// the other reassigns `z := x + 1`. NEITHER fact may survive the merge
+    /// alone — a real execution exists against each. γ-check with one
+    /// valuation per path at every post-merge pc; drop either merge arm
+    /// (keeping the fall-through poly, or replacing with the break state)
+    /// and one of the two valuations goes red. Local 3 is a scratch the
+    /// post-merge `local.get 2; local.set 3` copy writes — it exists because
+    /// `drop` is outside the modelled op set (it would scrub the function)
+    /// and a point is only emitted at an interpreted op.
+    ///
+    /// Non-vacuity is asserted per pc: every checked pc must actually carry a
+    /// point (the first draft of the LOOP twin of this test silently checked
+    /// zero points — the fixture had degraded upstream).
+    #[test]
+    fn feat057_merge_join_drops_one_sided_facts() {
+        let r = analyze_default(&alloc::format!(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local i32 i32) \
+               {FEAT057_GUARDED_ADD_PREFIX} \
+               block \
+                 local.get 1 br_if 0 \
+                 local.get 0 i32.const 1 i32.add local.set 2 \
+               end \
+               local.get 2 local.set 3 \
+             end \
+             local.get 2))"
+        ));
+        // Non-vacuity: the fall-through path's `z := x + 1` (pc 27) must
+        // itself carry a 2-variable fact, or this fixture exercises nothing.
+        let p27 = r
+            .invariants
+            .points
+            .iter()
+            .find(|p| p.pc == 27)
+            .expect("point at z := x + 1");
+        assert!(
+            poly_of_linear(&p27.linear, 4).entails(&scry_poly::Constraint {
+                coeffs: alloc::vec![-1, 0, 1, 0],
+                bound: 1,
+            }),
+            "z := x + 1 must yield z − x ≤ 1 pre-merge; got {:?}",
+            p27.linear
+        );
+        // Post-merge pcs, with the concrete per-path valuation at each:
+        // path 1 (y = 2 ≠ 0, branch taken): z = x + y = 7;
+        // path 2 (y = 0, fall through):     z = x + 1 = 6.
+        // The scratch (local 3) is 0 until the pc-30 copy executes.
+        let checks: [(u32, [i64; 4], [i64; 4]); 3] = [
+            (29, [5, 2, 7, 0], [5, 0, 6, 0]), // local.get 2
+            (30, [5, 2, 7, 7], [5, 0, 6, 6]), // local.set 3
+            (32, [5, 2, 7, 7], [5, 0, 6, 6]), // final local.get 2
+        ];
+        for (pc, v1, v2) in checks {
+            let p = r
+                .invariants
+                .points
+                .iter()
+                .find(|p| p.pc == pc)
+                .unwrap_or_else(|| panic!("post-merge point at pc {pc} must exist"));
+            for vals in [v1, v2] {
+                assert!(
+                    linear_holds(&p.linear, &vals),
+                    "post-merge pc {pc} keeps a one-sided fact, violated by {vals:?}: {:?}",
+                    p.linear
+                );
+            }
+        }
+    }
+
+    /// Loop-header join soundness: `z = x + y` holds at loop ENTRY but the
+    /// body reassigns `z := x + 1`, so from iteration 2 on the entry fact is
+    /// FALSE at the header. The header state must be entry ⊔ back-edge;
+    /// seeding each pass from the entry poly alone keeps the stale equality
+    /// and the iteration-2 valuation refutes it. γ-check at the header point
+    /// (pc 24, the first body op — a `local.get 2; local.set 4` copy into a
+    /// scratch, because `drop` is outside the modelled op set) with the
+    /// concrete iteration-1 AND iteration-2 states.
+    #[test]
+    fn feat057_loop_backedge_kills_stale_equality() {
+        let r = analyze_default(&alloc::format!(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local i32 i32 i32) \
+               {FEAT057_GUARDED_ADD_PREFIX} \
+               i32.const 0 local.set 3 \
+               loop \
+                 local.get 2 local.set 4 \
+                 local.get 0 i32.const 1 i32.add local.set 2 \
+                 local.get 3 i32.const 1 i32.add local.set 3 \
+                 local.get 3 i32.const 2 i32.lt_s br_if 0 \
+               end \
+             end \
+             local.get 2))"
+        ));
+        // Run x = 5, y = 3 (locals: 2 = z, 3 = i, 4 = scratch):
+        //   iteration 1 reaches pc 24 with (5, 3, 8, 0, 0);
+        //   iteration 2 reaches it with z = x + 1 = 6, i = 1, scratch = 8.
+        let p = r
+            .invariants
+            .points
+            .iter()
+            .find(|p| p.pc == 24)
+            .expect("loop header point must be emitted");
+        for vals in [[5i64, 3, 8, 0, 0], [5i64, 3, 6, 1, 8]] {
+            assert!(
+                linear_holds(&p.linear, &vals),
+                "stale fact at the loop header, violated by {vals:?}: {:?}",
+                p.linear
+            );
+        }
     }
 
     /// First non-empty obligation id recorded for `func`.
