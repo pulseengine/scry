@@ -902,6 +902,51 @@ artifacts:
         - "Given a program with linear inequality invariants the octagon cannot express, When scry analyzes it, Then the polyhedra domain infers them soundly (decomposed) and surfaces them via the relational-invariant output."
         - "Given proofs/rocq/Poly.v, When built, Then the polyhedra LATTICE laws (order/join-upper-bound/meet-glb) are proven with 0 admits; the transfer functions are documented as γ-sweep-validated, NOT mechanized (honest scope)."
         - "Given the precision corpus, When polyhedra is compared to the octagon, Then it is strictly more precise on the targeted inequality cases within a bounded cost budget."
+      residual: >
+        MEASURED BEFORE BUILDING SLICE 2 (2026-09-01, scry's own scry_mcdc.wasm,
+        851 functions / 23,772 program points). Harness committed as
+        `crates/scry-analyze-core/examples/poly_surface.rs` so the number can be
+        re-derived rather than trusted; re-run it after FEAT-095 lands.
+
+        THE OPPORTUNITY IS REAL, which is the opposite of what FEAT-069's
+        pre-build measurement found for its own feature. The octagon already
+        emits `ProgramPoint.relational` filtered to constraints NOT implied by
+        the unary intervals, and those carry information at 4,749 of 23,772
+        points (19.98%) across 197 of 851 functions. The octagon is exact for
+        two-variable constraints, so polyhedra can only exceed it where THREE OR
+        MORE locals are mutually constrained: 2,512 points, 10.57% of the
+        module, in 83 functions. The Diff/Sum split is 24,321 / 4,053, so the
+        octagon's non-difference power is genuinely in use — this is not a
+        degenerate difference-bound matrix whose relations are all trivial.
+
+        IT IS NOT GATED ON FEAT-095, and checking that reversed the conclusion.
+        2,165 of the 2,512 wide points sit in functions that degrade SOMEWHERE,
+        which reads like FEAT-069's 92.5%-in-degraded-functions result and is a
+        different claim. Gaps are per-pc and write-set havoc widens only the
+        locals a region writes, so a wide point can sit nowhere near a gap.
+        Measured directly: only 13 of 2,512 wide points have a gap at or before
+        them. NO `depends-on FEAT-095` link was added, because the measurement
+        does not support one — the expectation going in was that it would.
+
+        TWO BOUNDS STATED IN THE DIRECTIONS THEY ACTUALLY RUN. (a) "3+ mutually
+        constrained locals" is OPPORTUNITY, not realized gain: polyhedra beats
+        the octagon only where the true invariant is a general linear inequality
+        the pairwise closure cannot express, so 2,512 bounds the ceiling from
+        ABOVE and shows no point would in fact improve. (b) "no gap at or before
+        it" is an UPPER bound on unaffected points, not a lower one — program
+        order is not dataflow order, and a gap inside a LOOP reaches earlier pcs
+        through the back edge. The loop-induced shortfall is UNQUANTIFIED here:
+        a first attempt to size it counted functions where the fixpoint
+        revisited a pc, and its own vacuity check reported zero duplicate
+        (func, pc) pairs — ProgramPoint is one per pc, so the proxy could only
+        ever return zero. It was removed rather than reported as "no loops".
+
+        SO SLICE 2 REMAINS THE ONLY UNBUILT WORK IN v3.3.0/v3.4.0 and is worth
+        building on its own merits, as a multi-slice arc mirroring the octagon's
+        v1.7-v1.9: a `Poly` on FuncCtx threaded in LOCKSTEP with the octagon,
+        wrap-aware transfers gated on the interval domain's no-wrap result,
+        guard refinement, and `Poly::project`. What this measurement does NOT
+        establish is the SIZE of the win, only that the surface exists.
     links:
       - type: traces-to
         target: REQ-016
