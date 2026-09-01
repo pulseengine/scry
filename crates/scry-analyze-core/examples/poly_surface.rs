@@ -20,10 +20,18 @@ use scry_analyze_core::{AnalysisConfig, GapKind, analyze};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: poly_surface <module.wasm>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: poly_surface <module.wasm>");
     let bytes = std::fs::read(&path).expect("read module");
-    let r = analyze(bytes, AnalysisConfig { emit_diagnostics: true, ..Default::default() })
-        .expect("analysis");
+    let r = analyze(
+        bytes,
+        AnalysisConfig {
+            emit_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .expect("analysis");
 
     let pts = &r.invariants.points;
     let total_pts = pts.len();
@@ -45,8 +53,10 @@ fn main() {
         };
         gap_funcs.entry(k).or_default().insert(g.func_index);
     }
-    let havoc: BTreeSet<u32> =
-        gap_funcs.get("unmodeled-control-flow").cloned().unwrap_or_default();
+    let havoc: BTreeSet<u32> = gap_funcs
+        .get("unmodeled-control-flow")
+        .cloned()
+        .unwrap_or_default();
     let scrub: BTreeSet<u32> = gap_funcs.get("unsupported-op").cloned().unwrap_or_default();
     let any_gap: BTreeSet<u32> = gap_funcs.values().flatten().copied().collect();
     let clean: BTreeSet<u32> = funcs_with_pts.difference(&any_gap).copied().collect();
@@ -58,38 +68,59 @@ fn main() {
     println!();
     println!("--- gap population, by function ---");
     for (k, s) in &gap_funcs {
-        println!("  {k:<24} {:>6} functions, {:>7} gaps", s.len(),
-                 r.gaps.iter().filter(|g| match g.kind {
-                     GapKind::UnsupportedOp => *k == "unsupported-op",
-                     GapKind::UnmodeledBranch => *k == "unmodeled-branch",
-                     GapKind::UnmodeledMemoryAddress => *k == "unmodeled-mem-addr",
-                     GapKind::UnmodeledControlFlow => *k == "unmodeled-control-flow",
-                 }).count());
+        println!(
+            "  {k:<24} {:>6} functions, {:>7} gaps",
+            s.len(),
+            r.gaps
+                .iter()
+                .filter(|g| match g.kind {
+                    GapKind::UnsupportedOp => *k == "unsupported-op",
+                    GapKind::UnmodeledBranch => *k == "unmodeled-branch",
+                    GapKind::UnmodeledMemoryAddress => *k == "unmodeled-mem-addr",
+                    GapKind::UnmodeledControlFlow => *k == "unmodeled-control-flow",
+                })
+                .count()
+        );
     }
     println!("  {:<24} {:>6} functions", "ANY gap", any_gap.len());
-    println!("  {:<24} {:>6} functions", "NO gap (fully modelled)", clean.len());
+    println!(
+        "  {:<24} {:>6} functions",
+        "NO gap (fully modelled)",
+        clean.len()
+    );
     println!();
     println!("--- THE POLYHEDRA CEILING: where a relational domain carries info ---");
-    println!("  points with >=1 relational constraint : {} / {total_pts}  ({:.2}%)",
-             rel_pts.len(), 100.0 * rel_pts.len() as f64 / total_pts.max(1) as f64);
+    println!(
+        "  points with >=1 relational constraint : {} / {total_pts}  ({:.2}%)",
+        rel_pts.len(),
+        100.0 * rel_pts.len() as f64 / total_pts.max(1) as f64
+    );
     println!("  total relational constraints          : {total_rel}");
-    println!("  functions with >=1 relational point   : {} / {}  ({:.2}%)",
-             rel_funcs.len(), funcs_with_pts.len(),
-             100.0 * rel_funcs.len() as f64 / funcs_with_pts.len().max(1) as f64);
+    println!(
+        "  functions with >=1 relational point   : {} / {}  ({:.2}%)",
+        rel_funcs.len(),
+        funcs_with_pts.len(),
+        100.0 * rel_funcs.len() as f64 / funcs_with_pts.len().max(1) as f64
+    );
     println!();
-    println!("  of those functions, ALSO control-flow havoc'd : {}",
-             rel_funcs.intersection(&havoc).count());
-    println!("  of those functions, ALSO unsupported-op scrub : {}",
-             rel_funcs.intersection(&scrub).count());
-    println!("  fully-clean functions that emit relational    : {}",
-             rel_funcs.intersection(&clean).count());
+    println!(
+        "  of those functions, ALSO control-flow havoc'd : {}",
+        rel_funcs.intersection(&havoc).count()
+    );
+    println!(
+        "  of those functions, ALSO unsupported-op scrub : {}",
+        rel_funcs.intersection(&scrub).count()
+    );
+    println!(
+        "  fully-clean functions that emit relational    : {}",
+        rel_funcs.intersection(&clean).count()
+    );
     println!();
     // How wide are the relations? Octagon is 2-variable by construction; the
     // question for polyhedra is how many DISTINCT locals participate per point.
     let mut width_hist: BTreeMap<usize, usize> = BTreeMap::new();
     for p in &rel_pts {
-        let vars: BTreeSet<u32> =
-            p.relational.iter().flat_map(|c| [c.a, c.b]).collect();
+        let vars: BTreeSet<u32> = p.relational.iter().flat_map(|c| [c.a, c.b]).collect();
         *width_hist.entry(vars.len()).or_default() += 1;
     }
     println!("--- distinct locals participating in relations, per point ---");
@@ -107,16 +138,25 @@ fn main() {
         let vars: BTreeSet<u32> = p.relational.iter().flat_map(|c| [c.a, c.b]).collect();
         if vars.len() >= 3 {
             wide_funcs.insert(p.func_index);
-            if clean.contains(&p.func_index) { wide_clean += 1 } else { wide_degraded += 1 }
+            if clean.contains(&p.func_index) {
+                wide_clean += 1
+            } else {
+                wide_degraded += 1
+            }
         }
     }
     println!("--- SHARPENED: points where polyhedra COULD exceed the octagon ---");
-    println!("  points with >=3 mutually-constrained locals : {}  ({:.2}% of all points)",
-             wide_clean + wide_degraded,
-             100.0 * (wide_clean + wide_degraded) as f64 / total_pts.max(1) as f64);
+    println!(
+        "  points with >=3 mutually-constrained locals : {}  ({:.2}% of all points)",
+        wide_clean + wide_degraded,
+        100.0 * (wide_clean + wide_degraded) as f64 / total_pts.max(1) as f64
+    );
     println!("    in a FULLY-CLEAN function                : {wide_clean}");
     println!("    in an already-DEGRADED function          : {wide_degraded}");
-    println!("  distinct functions involved                : {}", wide_funcs.len());
+    println!(
+        "  distinct functions involved                : {}",
+        wide_funcs.len()
+    );
     println!();
 
     // Constraint form split. Diff-only would mean the octagon is operating as a
@@ -138,12 +178,17 @@ fn main() {
     // point, i.e. whether this point's state could have been touched by one.
     let mut first_gap: BTreeMap<u32, u32> = BTreeMap::new();
     for g in &r.gaps {
-        first_gap.entry(g.func_index).and_modify(|e| *e = (*e).min(g.pc)).or_insert(g.pc);
+        first_gap
+            .entry(g.func_index)
+            .and_modify(|e| *e = (*e).min(g.pc))
+            .or_insert(g.pc);
     }
     let (mut upstream_clean, mut downstream_of_gap) = (0usize, 0usize);
     for p in &rel_pts {
         let vars: BTreeSet<u32> = p.relational.iter().flat_map(|c| [c.a, c.b]).collect();
-        if vars.len() < 3 { continue }
+        if vars.len() < 3 {
+            continue;
+        }
         match first_gap.get(&p.func_index) {
             Some(&gpc) if gpc <= p.pc => downstream_of_gap += 1,
             _ => upstream_clean += 1,
