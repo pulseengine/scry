@@ -194,6 +194,53 @@ fn main() {
             _ => upstream_clean += 1,
         }
     }
+    // ── FEAT-057 slice 2a REALIZATION: what does the wired poly deliver? ──
+    // The sections above measured the CEILING before slice 2a was built.
+    // This one measures what the wired domain actually carries: points whose
+    // `linear` output is non-empty (constraints over >=2 locals — unary poly
+    // bounds are filtered as interval-duplicates), and the >=3-variable
+    // subset only polyhedra can express at all. Compare against the 2,512
+    // wide-point ceiling: the DELTA, not "tests pass", is whether the slice
+    // did anything.
+    let lin_pts: Vec<_> = pts.iter().filter(|p| !p.linear.is_empty()).collect();
+    let total_lin: usize = pts.iter().map(|p| p.linear.len()).sum();
+    let lin_funcs: BTreeSet<u32> = lin_pts.iter().map(|p| p.func_index).collect();
+    let wide_lin: Vec<_> = lin_pts
+        .iter()
+        .filter(|p| p.linear.iter().any(|c| c.terms.len() >= 3))
+        .collect();
+    let wide_set: BTreeSet<(u32, u32)> = rel_pts
+        .iter()
+        .filter(|p| {
+            let vars: BTreeSet<u32> = p.relational.iter().flat_map(|c| [c.a, c.b]).collect();
+            vars.len() >= 3
+        })
+        .map(|p| (p.func_index, p.pc))
+        .collect();
+    let lin_on_wide = lin_pts
+        .iter()
+        .filter(|p| wide_set.contains(&(p.func_index, p.pc)))
+        .count();
+    println!("--- FEAT-057 slice 2a REALIZED: points carrying `linear` facts ---");
+    println!(
+        "  points with >=1 linear constraint (>=2 locals) : {} / {total_pts}  ({:.2}%)",
+        lin_pts.len(),
+        100.0 * lin_pts.len() as f64 / total_pts.max(1) as f64
+    );
+    println!("  total linear constraints                       : {total_lin}");
+    println!(
+        "  points with a >=3-local linear constraint      : {}",
+        wide_lin.len()
+    );
+    println!(
+        "  functions with >=1 linear point                : {}",
+        lin_funcs.len()
+    );
+    println!(
+        "  linear points among the >=3-mutually-constrained ceiling set : {lin_on_wide} / {}",
+        wide_set.len()
+    );
+    println!();
     println!("--- SHARPER: is the wide point actually downstream of a gap? ---");
     println!("  wide points with NO gap at or before them : {upstream_clean}");
     println!("  wide points downstream of a gap in-func   : {downstream_of_gap}");

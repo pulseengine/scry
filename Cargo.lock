@@ -1804,6 +1804,7 @@ dependencies = [
  "scry-sai-interval",
  "scry-sai-octagon",
  "scry-sai-pentagon",
+ "scry-sai-poly",
  "scry-sai-provenance",
  "scry-sai-segment",
  "scry-sai-taint",

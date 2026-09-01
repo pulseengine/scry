@@ -40,6 +40,10 @@
 //!   only costs fixpoint iterations, never soundness).
 //! - **widen** keeps the constraints of `a` that `b` still entails — the
 //!   constraint set can only shrink, so ascending chains stabilise.
+//! - **project** (FEAT-057 slice 2a) eliminates ONE variable by
+//!   Fourier–Motzkin — the "forget on reassignment" transfer. Every bail
+//!   (overflow, combination cap) DROPS constraints, which only enlarges the
+//!   result: sound for a projection. See [`Poly::project`].
 //!
 //! The lattice laws (order reflexive/transitive, join an upper bound, meet a
 //! lower bound) are mechanized admit-free in `proofs/rocq/Poly.v`; the FM
@@ -72,6 +76,12 @@ pub struct Poly {
 /// coefficient/bound would exceed this, [`fm_feasible`] bails to `true`
 /// (feasible) — the sound direction (entailment then under-reports).
 const FM_LIMIT: i128 = 1 << 100;
+
+/// Cap on the number of pos×neg row combinations [`Poly::project`] will form.
+/// Above it the combinations are SKIPPED entirely (only zero-coefficient rows
+/// survive) — the sound direction for a projection (larger result, no false
+/// fact), trading precision for a hard cost bound.
+const PROJECT_COMBINE_LIMIT: usize = 64;
 
 /// ⊤ over `dim` variables — no constraints; admits every point.
 pub fn top(dim: u32) -> Poly {
@@ -201,6 +211,111 @@ impl Poly {
         Poly {
             dim: self.dim,
             cons,
+            empty: false,
+        }
+    }
+
+    /// Fourier–Motzkin elimination of ONE variable: a sound over-approximation
+    /// of the projection `∃x_k. γ(self)`, expressed in the SAME `dim`-space
+    /// with `x_k` left unconstrained. This is the "forget on reassignment"
+    /// transfer (FEAT-057 slice 2a): when a local is overwritten, every
+    /// constraint mentioning its OLD value must go, but the consequences that
+    /// do not mention it (the pos/neg combinations) may soundly stay.
+    ///
+    /// Soundness spec: if `x[k := v] ∈ γ(self)` for SOME `v`, then
+    /// `x[k := w] ∈ γ(project(self, k))` for EVERY `w` (γ-swept below).
+    ///
+    /// Bail directions — each stated explicitly, mirroring [`fm_feasible`]:
+    /// - a combined row whose coefficients/bound OVERFLOW (i128 check, then
+    ///   the i64 narrowing, `FM_LIMIT` cap) is DROPPED — dropping a constraint
+    ///   only ENLARGES the result, which for a forget/projection is the sound
+    ///   direction (precision loss, never a false fact);
+    /// - when `pos·neg` exceeds [`PROJECT_COMBINE_LIMIT`] ALL combinations are
+    ///   skipped (only the rows with coefficient 0 on `x_k` are kept) — same
+    ///   sound direction;
+    /// - what would be UNSOUND is keeping any row that still mentions `x_k`,
+    ///   or keeping a wrongly-combined row: neither happens — every kept row
+    ///   has coefficient 0 on `x_k` by construction, and combination
+    ///   arithmetic is exact-or-dropped.
+    ///
+    /// A combination that degenerates to `0 ≤ negative` proves `self` was
+    /// infeasible (γ = ∅), so ⊥ is returned — exact, not an approximation.
+    pub fn project(&self, var: u32) -> Poly {
+        if self.empty {
+            return bottom(self.dim);
+        }
+        let k = var as usize;
+        if var >= self.dim {
+            return self.clone();
+        }
+        let mut keep: Vec<Constraint> = Vec::new();
+        let mut pos: Vec<&Constraint> = Vec::new();
+        let mut neg: Vec<&Constraint> = Vec::new();
+        for c in &self.cons {
+            match c.coeffs.get(k).copied().unwrap_or(0) {
+                0 => keep.push(c.clone()),
+                a if a > 0 => pos.push(c),
+                _ => neg.push(c),
+            }
+        }
+        if pos
+            .len()
+            .checked_mul(neg.len())
+            .is_some_and(|n| n <= PROJECT_COMBINE_LIMIT)
+        {
+            for p in &pos {
+                for n in &neg {
+                    // Cancel x_k: a·p + b·n with a = −n_k > 0, b = p_k > 0.
+                    let a = -(n.coeffs[k] as i128);
+                    let b = p.coeffs[k] as i128;
+                    let mut nc = alloc::vec![0i128; self.dim as usize];
+                    let mut overflow = false;
+                    for (j, slot) in nc.iter_mut().enumerate() {
+                        match a.checked_mul(p.coeffs[j] as i128).and_then(|ap| {
+                            b.checked_mul(n.coeffs[j] as i128)
+                                .and_then(|bn| ap.checked_add(bn))
+                        }) {
+                            Some(v) if v.abs() <= FM_LIMIT => *slot = v,
+                            _ => {
+                                overflow = true;
+                                break;
+                            }
+                        }
+                    }
+                    let nb = match a.checked_mul(p.bound as i128).and_then(|ap| {
+                        b.checked_mul(n.bound as i128)
+                            .and_then(|bn| ap.checked_add(bn))
+                    }) {
+                        Some(v) if v.abs() <= FM_LIMIT => v,
+                        _ => {
+                            overflow = true;
+                            0
+                        }
+                    };
+                    if overflow {
+                        continue; // sound bail: DROP the combination
+                    }
+                    let (rc, rb) = reduce(nc, nb);
+                    if rc.iter().all(|&c| c == 0) {
+                        if rb < 0 {
+                            return bottom(self.dim); // 0 ≤ negative: infeasible
+                        }
+                        continue; // 0 ≤ nonneg: trivially true
+                    }
+                    // Narrow back to i64; a row that does not fit is DROPPED
+                    // (sound — see the bail-direction note above).
+                    let coeffs: Option<Vec<i64>> =
+                        rc.iter().map(|&c| i64::try_from(c).ok()).collect();
+                    match (coeffs, i64::try_from(rb).ok()) {
+                        (Some(coeffs), Some(bound)) => keep.push(Constraint { coeffs, bound }),
+                        _ => continue,
+                    }
+                }
+            }
+        }
+        Poly {
+            dim: self.dim,
+            cons: keep,
             empty: false,
         }
     }
@@ -511,6 +626,74 @@ mod tests {
         assert!(!fm_feasible(2, &[con(&[1, 0], 1), con(&[-1, 0], -3)]));
         // x ≤ 3 ∧ x ≥ 1 is feasible.
         assert!(fm_feasible(2, &[con(&[1, 0], 3), con(&[-1, 0], -1)]));
+    }
+
+    /// γ-sweep for [`Poly::project`] (FEAT-057 slice 2a): if some value of
+    /// x_k puts the point inside γ(P), then EVERY value of x_k puts it inside
+    /// γ(project(P, k)). The witness range for `v` is wider than the sample
+    /// polyhedra's own bounds so non-trivial slices are exercised. Also the
+    /// structural half: no surviving constraint may mention x_k at all —
+    /// keeping one would be the unsound direction (a stale fact about a
+    /// reassigned variable).
+    #[test]
+    fn project_is_gamma_sound_and_forgets_the_variable() {
+        let pts = all_points();
+        for p in &samples() {
+            for k in 0..D as u32 {
+                let q = p.project(k);
+                for c in q.constraints() {
+                    assert_eq!(
+                        c.coeffs[k as usize], 0,
+                        "project({k}) kept a constraint mentioning x_{k}: {c:?}"
+                    );
+                }
+                for x in &pts {
+                    for v in -10..=10i64 {
+                        let mut y = *x;
+                        y[k as usize] = v;
+                        if p.contains(&y) {
+                            for w in -10..=10i64 {
+                                y[k as usize] = w;
+                                assert!(
+                                    q.contains(&y),
+                                    "γ-unsound project: {y:?} outside project({p:?}, {k})"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `project` keeps the sound CONSEQUENCES that do not mention the
+    /// eliminated variable: from `x ≤ 2 ∧ y − x ≤ 0`, eliminating x still
+    /// knows `y ≤ 2`. This is the precision half — a blanket "drop everything
+    /// mentioning x" would lose it (and would still be sound, which is why
+    /// the γ-sweep alone cannot catch a lazy implementation).
+    #[test]
+    fn project_keeps_transitive_consequences() {
+        let p = poly(2, &[con(&[1, 0], 2), con(&[-1, 1], 0)]);
+        let q = p.project(0);
+        assert!(
+            q.entails(&con(&[0, 1], 2)),
+            "projecting x from x ≤ 2 ∧ y ≤ x must retain y ≤ 2; got {q:?}"
+        );
+        assert!(!q.entails(&con(&[0, 1], 1)), "y ≤ 1 must NOT appear");
+    }
+
+    /// Projecting a variable from an infeasible-by-combination system detects
+    /// the contradiction (`0 ≤ negative`) and returns ⊥ — exact, not sound-by-
+    /// enlargement.
+    #[test]
+    fn project_detects_infeasibility() {
+        // x ≤ 1 ∧ x ≥ 3.
+        let p = poly(2, &[con(&[1, 0], 1), con(&[-1, 0], -3)]);
+        assert!(p.project(0).is_bottom());
+        // ⊥ projects to ⊥.
+        assert!(bottom(2).project(0).is_bottom());
+        // ⊤ projects to ⊤.
+        assert!(top(2).project(1).constraints().is_empty());
     }
 
     #[test]
