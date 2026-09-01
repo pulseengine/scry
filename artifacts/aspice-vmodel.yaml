@@ -9,9 +9,21 @@
 # tests / clean-room that discharge each requirement. Mirrors the meld/spar
 # house pattern (dev + aspice schemas side by side). SR-1..SR-13 restate dev
 # REQ-001..REQ-013 as software requirements (one for one, checked by title) and
-# derive structurally from the SYS-* system requirements; the verification
-# mapping is the authoritative one (the dev REQ-* carry no verifies link by
-# construction).
+# derive structurally from the SYS-* system requirements.
+#
+# THE DEV REQ-* DO CARRY VERIFICATION, and an earlier version of this comment
+# said they did not. When FEAT-033 landed (bea3ddf) the parenthetical "the dev
+# REQ-* carry no verifies link by construction" was TRUE -- no artifact type
+# could source a `verifies` link onto them. Commit 6be7359 then added
+# artifacts/verifications.yaml, whose `verification` artifacts link `verifies`
+# straight at the dev REQ-*, and nothing revisited this file. The statement
+# stayed checked in, false, for months.
+#
+# So, structurally and without a count that can drift the same way: dev REQ-*
+# are verified by `verification` artifacts in artifacts/verifications.yaml,
+# and the gaps are named individually in that file's DELIBERATELY UNCOVERED
+# block, each with what evidence would close it. `rivet coverage` reports the
+# current split; this comment deliberately does not restate it.
 #
 # SCOPE, STATED BY EXCLUSION AND NOT ONLY BY ENUMERATION. Three ASPICE levels
 # are DELIBERATELY NOT MODELLED here: SWE.2 (software architectural design),
