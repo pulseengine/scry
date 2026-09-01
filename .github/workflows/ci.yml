@@ -261,7 +261,14 @@ jobs:
       # declaration must be justified. Ships a --self-test, run FIRST, which
       # includes the subtle case (flag present, no justification naming it) --
       # the shape a forgotten goal takes once someone quiets the report.
-      - name: Guard — an unsupported safety goal is DECLARED and justified
+      # Two populations, ONE rule: an absent thing must be DECLARED and
+      # JUSTIFIED. Safety goals were the first. The second is coverage rules
+      # whose population is EMPTY -- rivet renders those as 100.0%, and four
+      # of scry's seventeen currently do, because the `aspice` preset is
+      # embedded and a project cannot subset its rules. Checked in BOTH
+      # directions against .github/aspice-unmodelled-levels.txt so the file
+      # cannot become an append-only suppression list.
+      - name: Guard — an absent goal or coverage level is DECLARED and justified
         run: |
           python3 tools/check-undeveloped-goals.py --self-test
           python3 tools/check-undeveloped-goals.py

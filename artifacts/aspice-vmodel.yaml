@@ -7,9 +7,41 @@
 # (SYS.2) → sw-req (SWE.1), with sys-verification (SYS.5) and sw-verification
 # (SWE.6) measures naming the REAL tests / Rocq proofs / MC-DC gate / host
 # tests / clean-room that discharge each requirement. Mirrors the meld/spar
-# house pattern (dev + aspice schemas side by side). The sw-reqs restate the
-# dev the dev requirement..013 as software requirements; the verification mapping is the
-# authoritative one (the dev REQ-* carry no verifies link by construction).
+# house pattern (dev + aspice schemas side by side). SR-1..SR-13 restate dev
+# REQ-001..REQ-013 as software requirements (one for one, checked by title) and
+# derive structurally from the SYS-* system requirements; the verification
+# mapping is the authoritative one (the dev REQ-* carry no verifies link by
+# construction).
+#
+# SCOPE, STATED BY EXCLUSION AND NOT ONLY BY ENUMERATION. Three ASPICE levels
+# are DELIBERATELY NOT MODELLED here: SWE.2 (software architectural design),
+# SWE.3 (software detailed design) and SWE.4 (unit verification). MEASURED:
+# zero artifacts of type sw-arch-component, sw-detail-design or
+# unit-verification exist anywhere under artifacts/, and zero textual
+# occurrences of those type names.
+#
+# That is a choice, not an oversight. scry's design intent already lives in the
+# dev REQ/FEAT/DD spine; a parallel ASPICE architecture and detailed-design
+# decomposition would restate the crate structure without adding evidence, and
+# authoring a unit-verification artifact per detail-design element would be
+# fabricated traceability. FEAT-033's governing principle is "no fabricated
+# DAL", and it applies to process levels exactly as to integrity levels.
+#
+# THE COST IS FOUR VACUOUS GREENS, so read `rivet coverage` knowing it. The
+# aspice preset is EMBEDDED and a project cannot subset its rules, so the
+# report carries rules for levels this project does not model and renders an
+# empty population as success:
+#
+#   swe2-allocated-from-swe1   sw-arch-component   0/0   100.0%
+#   swe3-refines-swe2          sw-detail-design    0/0   100.0%
+#   swe4-verifies-swe3         unit-verification   0/0   100.0%
+#   swe3-has-verification      sw-detail-design    0/0   100.0%
+#   V-closure: sw-detail-design (all 2 rules)    100.0%  [0/0]
+#
+# Those 100%s mean "nothing to check", NOT "checked". The weighted overall does
+# NOT inherit it -- 119/135 = 88.1%, and an empty rule adds 0 to both sides --
+# so `rivet coverage --fail-under` keys off an honest number (VERIFIED in both
+# directions: --fail-under 88.2 exits 1, --fail-under 88.0 exits 0).
 # ─────────────────────────────────────────────────────────────────────────
 artifacts:
 

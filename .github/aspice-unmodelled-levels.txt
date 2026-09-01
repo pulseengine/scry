@@ -1,0 +1,23 @@
+# ASPICE process levels scry deliberately does NOT model, one per line as
+# `<source-type>: <reason>`. A reason is REQUIRED — see FEAT-088's rule 2: a
+# flag with no justification is what a forgotten gap looks like once somebody
+# notices the number.
+#
+# WHY A FILE AT ALL. The `aspice` preset is EMBEDDED and a project cannot
+# subset its rules, so `rivet coverage` emits rules for levels this project
+# does not model and renders an EMPTY population as 100.0%. Four of seventeen
+# rules currently report success for work that was never done. The weighted
+# overall is honest (an empty rule adds 0 to both sides, 119/135 = 88.1%), so
+# the aggregate is safe to gate on and the per-row display is not.
+#
+# tools/check-undeveloped-goals.py reads this and fails BOTH directions:
+#   - an empty coverage population NOT listed here          -> undeclared gap
+#   - a type listed here whose population is NOT empty      -> stale entry
+# The second is what keeps this file honest rather than append-only, and it is
+# what would catch a rivet upgrade adding a level we never populate.
+#
+# The 0/0 -> 100% rendering is rivet's, not scry's. Reported upstream.
+
+sw-arch-component: SWE.2 software architectural design. scry's architecture is the 13-crate decomposition, already tracked in the dev FEAT/DD spine; restating it as ASPICE architecture elements would add structure without adding evidence.
+sw-detail-design: SWE.3 software detailed design. No detailed-design step exists in this project's process — code is written against typed requirements and gated by oracles, so a detail-design layer would be written after the fact to fill a row.
+unit-verification: SWE.4 unit verification. scry's unit tests are real (332 in CI) but they verify sw-reqs via SWE.6, not detail-design elements; authoring one unit-verification artifact per absent detail-design element would be fabricated traceability. FEAT-033's governing principle is "no fabricated DAL".
