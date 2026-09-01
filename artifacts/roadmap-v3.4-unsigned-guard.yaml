@@ -1,0 +1,69 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-098
+    type: feature
+    title: "v3.4 — Refine unsigned bounds-check guards, the measured blocker on every relational domain"
+    status: proposed
+    release: v3.4.0
+    description: >
+      FEAT-057 slice 2a shipped polyhedra into the fixpoint (scry#201) and
+      MEASURED ITSELF INERT for the class it exists to serve: on scry's own
+      scry_mcdc.wasm it emits 5,138 linear constraints across 130 functions,
+      and ZERO of them involve three or more locals — nothing the octagon could
+      not already express. The cause was instrumented rather than guessed: of
+      94 `z := x + y` sites reaching the transfer, ZERO have a provable
+      no-wrap, because the operands are interval-⊤.
+
+      THE OPERANDS ARE ⊤ BECAUSE THE GUARD THAT WOULD BOUND THEM IS DECLINED.
+      `guard_op` maps only SIGNED comparisons to a `GuardOp`; every `*U`
+      variant returns `None`, and the code says why: "unsigned comparisons
+      wrap, so refining their bounds with a signed constant is not sound".
+      That refusal is CORRECT as written. It is also the single most
+      consequential precision decision in the analyzer, because LLVM emits
+      array bounds checks as `i32.lt_u index, len` — so the one idiom that
+      would bound an index is the one shape scry declines to read.
+
+      THE REFINEMENT IS AVAILABLE UNDER A SIDE CONDITION, and the side
+      condition is exactly the bounds-check shape. For `x <u c` with a
+      constant `0 <= c <= 2^31`, the SIGNED interval `[0, c-1]` is sound:
+      unsigned `x < c <= 2^31` puts `x` in `[0, 2^31-1]`, which is
+      representable as a non-negative signed i32, so no wrap into the negative
+      half is possible. VERIFIED EXHAUSTIVELY at w=8 over all (c, x) pairs:
+      zero counterexamples for `0 <= c <= 2^(w-1)`. The NEGATIVE CONTROL
+      matters as much — for `c > 2^(w-1)` there are 127 constants where it
+      FAILS, so the side condition is load-bearing rather than decorative, and
+      a version of this feature that dropped it would be unsound.
+
+      THIS IS NOT A POLYHEDRA FEATURE. It bounds locals, so it feeds the
+      interval domain, the octagon, the no-wrap gate, the trap checks, and the
+      OOB proven rate — FEAT-069 measured 0.67% proven and diagnosed PRECISION,
+      not format. Filed as its own artifact rather than buried in FEAT-057's
+      residual because it blocks several things and, like FEAT-095, nothing
+      currently tracks it.
+    tags: [precision, guards, unsigned, relational, blocker, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given `local.get x; i32.const c; i32.lt_u; br_if` with 0 <= c <= 2^31, When scry refines the taken edge, Then local x carries the signed interval [0, c-1]. The FALSE case must be tested too: on the not-taken edge, x is NOT refined to [c, ...] (unsigned >= c admits the whole negative half)."
+        - "Given a constant c > 2^31, When the guard is seen, Then NO refinement occurs. The exhaustive w=8 check found 127 such constants where the signed reading fails; a version without this side condition is unsound, so the test must pin the boundary and not merely the happy path."
+        - "Given the refinement, When the γ-sweep runs at w=8 over every (c, x) pair, Then no concrete value admitted by the guard falls outside the refined interval. MUTATION-CHECK: widening the side condition to all c must turn it RED."
+        - "Given scry_mcdc.wasm, When analyzed after this lands, Then report the delta in `examples/poly_surface.rs`: the >=3-local linear count (0 today) and the no-wrap-provable share of the 94 `z := x + y` sites (0 today). A number that does not move means the diagnosis was wrong, and that must be reported rather than absorbed."
+        - "Given FEAT-069's OOB measurement, When re-run, Then report whether the 0.67% proven rate moved. This feature is filed on the claim that bounding locals feeds several consumers; that claim is checkable and should be checked."
+      residual: >
+        SCOPE IS THE CONSTANT-OPERAND SHAPE ONLY. `x <u y` between two locals
+        is the more general case and is NOT covered here — it needs a bound on
+        `y` first, which is the same problem one level up. The LLVM idiom that
+        motivates this feature is `index <u len` where `len` is often a local,
+        not a constant, so a real corpus may see less benefit than the
+        constant-form fixtures suggest. That is the honest risk and it is why
+        AC#4 demands the measured delta rather than a passing fixture.
+
+        IT DOES NOT MAKE FEAT-057 PAY. Slice 2a is inert for the >=3-local
+        class today; this removes ONE named cause of that. Whether removing it
+        is sufficient is unmeasured, and AC#4 is written so that "the number
+        did not move" is a reportable outcome rather than a silent one.
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: FEAT-057

@@ -986,6 +986,8 @@ artifacts:
         its own slice: unsigned-guard refinement, known-bits/segment-fed
         bounds, interprocedural param_ranges seeding).
     links:
+      - type: depends-on
+        target: FEAT-098
       - type: traces-to
         target: REQ-016
 
