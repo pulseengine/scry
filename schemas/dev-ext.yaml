@@ -1,0 +1,58 @@
+# Local extension to the built-in `dev` schema.
+#
+# Declares ONE field: `residual` on `feature`.
+#
+# WHY. `residual` is where this repo puts every honesty disclosure — what a
+# feature does NOT do, what was measured and found wanting, what an assessor
+# must not conclude from a green. FEAT-091's trailer limits, FEAT-093's
+# ruleset-reset gap, FEAT-096's undetected asymmetric case, FEAT-097's four
+# vacuous 100%s all live in it. The `dev` schema does not declare it, so all
+# 18 uses were reported as possibly-a-typo (scry#197). Measured: INFO
+# diagnostics drop 32 -> 14 with this schema; WARN is unchanged at 188, so it
+# removes exactly these and nothing else.
+#
+# THE POINT IS NOT THE 17 SUPPRESSED INFOs. It is that an UNDECLARED field
+# makes a TYPO INDISTINGUISHABLE FROM THE CORRECT SPELLING. Measured on an
+# isolated probe with three artifacts — `residual`, `residuals`,
+# `residual_notes`:
+#
+#   without this schema : all THREE reported identically
+#   with this schema    : only the two typos reported
+#
+# A misspelled disclosure is silently a different field, i.e. silently absent,
+# which is the exact failure mode `residual` exists to prevent.
+#
+# DELIBERATELY NOT `required: true`, even for `status: accepted`. A required
+# field is satisfiable with the word "none", so it would gate on the presence
+# of a string rather than on disclosure — a checkbox that reads as rigour and
+# enforces nothing, which is this repo's documented dominant failure class.
+# FEAT-088's rule 2 shape (declared AND justified) is what would be worth
+# having, and it is not expressible as a schema field constraint.
+#
+# Field merge behaviour, VERIFIED before writing this (not assumed): naming an
+# existing artifact-type here MERGES fields rather than replacing them —
+# `rivet schema show feature` afterwards lists phase, acceptance-criteria,
+# baseline AND residual. Confirmed in both directions on an isolated project:
+# disabling this schema brings the INFO back, enabling it removes it.
+
+schema:
+  name: dev-ext
+  version: "0.1.0"
+  namespace: "http://pulseengine.dev/ns/dev-ext#"
+  extends: [dev, common]
+  description: >
+    Local extension to `dev` declaring the `residual` honesty-disclosure
+    field on `feature`, so a misspelling is distinguishable from the
+    correct spelling.
+
+artifact-types:
+  - name: feature
+    description: A user-visible capability or feature
+    fields:
+      - name: residual
+        type: string
+        required: false
+        description: >
+          What this feature does NOT do, and what an assessor must not
+          conclude from it being green. Optional by design — see the file
+          header for why it is not required.
