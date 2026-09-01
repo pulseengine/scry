@@ -16,6 +16,7 @@ project:
     - dev
     - research
     - research-ext     # local — adds references-paper / addresses-finding / evaluates-tech
+    - dev-ext          # local — declares `residual` on feature (scry#197)
     - safety-case
     - aspice
 
