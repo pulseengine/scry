@@ -41,9 +41,18 @@ except ImportError:
 
 # (dependent, dependency) pairs that are KNOWN and RECORDED. Each needs a reason.
 KNOWN = {
-    ("FEAT-064", "FEAT-077"): "scry#187 — FEAT-064's AC1 was falsified and repaired in v3.4.0; the plan did not follow the discovery",
-    ("FEAT-064", "FEAT-087"): "scry#187 — same repair, second identity bit",
-    ("FEAT-069", "FEAT-095"): "the OOB proven rate is blocked on region-havoc coverage, measured at 92.5% of unproven obligations",
+    # EMPTY, and that is the point. Three inversions were recorded here from
+    # 2026-08-28 to 2026-09-01. They were resolved on 2026-09-01 by moving the
+    # artifacts rather than by deleting the entries: FEAT-064 and REQ-020 to
+    # v3.4.0 (where FEAT-077 and FEAT-087, the repairs that make them
+    # satisfiable, had already shipped), and FEAT-069 to v3.5.0 (beside
+    # FEAT-095, its measured blocker). See scry#195.
+    #
+    # The gate FAILS on an entry that no longer describes a real inversion, so
+    # emptying this is not a suppression -- it is the record that the condition
+    # is gone. Verified in that order: with the entries removed and the
+    # releases UNCHANGED the gate failed on all three; after the moves it
+    # passes with none.
 }
 
 

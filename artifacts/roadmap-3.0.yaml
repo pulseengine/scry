@@ -210,7 +210,7 @@ artifacts:
     type: requirement
     title: "An AI agent can CITE a scry obligation: stable identity that survives the edit"
     status: proposed
-    release: v3.3.0
+    release: v3.4.0
     description: >
       REQ-018 shipped ranked, honesty-classed advisories each carrying a
       VERIFICATION ORACLE — but as PROSE ("re-run scry: this trap_check becomes
@@ -1169,9 +1169,9 @@ artifacts:
 
   - id: FEAT-064
     type: feature
-    title: "v3.3 — Stable obligation identity (survives the edit)"
+    title: "v3.4 — Stable obligation identity (survives the edit)"
     status: proposed
-    release: v3.3.0
+    release: v3.4.0
     description: >
       Replace raw `(func_index, pc)` as the EXTERNAL key for every finding with a
       content-addressed obligation ID (DD-020). Composed of: function identity
@@ -1387,9 +1387,9 @@ artifacts:
 
   - id: FEAT-069
     type: feature
-    title: "v3.3 — safe-accesses.json: proven-safe sites for bounds-check elision"
+    title: "v3.5 — safe-accesses.json: proven-safe sites for bounds-check elision"
     status: proposed
-    release: v3.3.0
+    release: v3.5.0
     description: >
       Export the PROVEN-SAFE OutOfBounds verdicts scry already computes as a flat,
       engine-agnostic list keyed on the wasmparser operator index — the channel
