@@ -36,7 +36,7 @@ concurrency:
 jobs:
   delta:
     name: Rivet artifact delta
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, light]
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}

@@ -57,6 +57,24 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# RUNNERS: every job here targets the pulseengine self-hosted fleet
+# ([self-hosted, linux, x64, light|rust-cpu]), matching rivet / witness / meld.
+# scry was the last repo still on GitHub-hosted `ubuntu-latest`, and on
+# 2026-09-02 that cost it 85 minutes of a completely unstarted queue (0 of 13
+# jobs began, across a cancel + re-run) while 5 runners in the org fleet sat
+# idle. `light` = checks that do no heavy Rust compile; `rust-cpu` = anything
+# that builds or proves.
+#
+# THE RISK THIS CARRIES, stated so a failure is diagnosed rather than
+# re-discovered: `bazel-build` and `test` install Nix via
+# cachix/install-nix-action, because Bazel resolves @rocq_toolchains through
+# rules_nixpkgs and fails with "nix-build not found in PATH" without it. That
+# install needs to work on a self-hosted runner too. If those two jobs fail on
+# a Nix step, the runner class is the cause and the fix is the runner, not the
+# build.
+#
+# Job NAMES are unchanged, so all 12 required contexts (scry#130) keep
+# reporting — `runs-on` does not affect a check's context name.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -69,7 +87,7 @@ jobs:
 
   fmt:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, light]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -80,7 +98,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, rust-cpu]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -134,7 +152,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, rust-cpu]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
@@ -239,7 +257,7 @@ jobs:
 
   rivet-validate:
     name: Rivet artifact validation
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, light]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -307,7 +325,7 @@ jobs:
   # 1/257) that no pull request can satisfy.
   commit-traceability:
     name: Commit traceability (rivet)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, light]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -335,7 +353,7 @@ jobs:
   # open PR.
   required-checks-drift:
     name: Required checks track CI jobs (scry#130)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, light]
     permissions:
       contents: read
     steps:
@@ -367,7 +385,7 @@ jobs:
   # so the status section can't silently rot ~40 versions again (issue #97).
   claim-check:
     name: Doc claims (claim-check)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, light]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v5
@@ -380,7 +398,7 @@ jobs:
 
   spar-parse:
     name: AADL model (spar parse)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, light]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -395,7 +413,7 @@ jobs:
 
   wit-validate:
     name: WIT round-trip (wasm-tools)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, light]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -416,7 +434,7 @@ jobs:
 
   bazel-build:
     name: Bazel build (//:scry)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, rust-cpu]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -487,7 +505,7 @@ jobs:
 
   deny:
     name: cargo-deny (licenses, advisories, bans)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, rust-cpu]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -499,7 +517,7 @@ jobs:
 
   mcdc:
     name: MC/DC (witness)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, rust-cpu]
     timeout-minutes: 30
     # FEAT-014 rollout: the witness MC/DC pipeline runs on every change over
     # the REAL analyzer core (crates/scry-analyze-core, driven by

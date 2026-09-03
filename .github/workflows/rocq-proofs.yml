@@ -36,9 +36,13 @@ jobs:
 
   rocq-proofs:
     name: Rocq Formal Proofs
-    # Stays on ubuntu-latest: requires Nix + Bazel for the hermetic
-    # Rocq 9.0 toolchain. Matches loom's runner choice.
-    runs-on: ubuntu-latest
+    # WAS ubuntu-latest, "requires Nix + Bazel for the hermetic Rocq 9.0
+    # toolchain, matches loom's runner choice". Moved to the org fleet with
+    # every other scry job (see ci.yml's header): the Nix + Bazel requirement
+    # is satisfied by the install steps BELOW, not by the runner image, so it
+    # was never a reason to stay hosted. This job is `continue-on-error`, so
+    # it is also the cheapest place to find out if that reading is wrong.
+    runs-on: [self-hosted, linux, x64, rust-cpu]
     # Informational at v0.2 (FEAT-012). Flips to required at v1.0
     # alongside FEAT-011's six-domain credit dossier.
     continue-on-error: true

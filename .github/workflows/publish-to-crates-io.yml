@@ -42,7 +42,7 @@ jobs:
   publish:
     name: Publish workspace libraries
     if: github.repository == 'pulseengine/scry'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, rust-cpu]
     permissions:
       contents: read
     steps:

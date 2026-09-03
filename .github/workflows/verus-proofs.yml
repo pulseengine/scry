@@ -41,7 +41,7 @@ jobs:
 
   verus-proofs:
     name: Verus Formal Proofs
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, rust-cpu]
     # Informational at v0.2 (FEAT-012); flips to required at v1.0.
     continue-on-error: true
     timeout-minutes: 30
