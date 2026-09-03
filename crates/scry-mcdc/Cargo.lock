@@ -77,11 +77,11 @@ dependencies = [
 
 [[package]]
 name = "scry-sai-bits"
-version = "3.2.7"
+version = "3.3.0"
 
 [[package]]
 name = "scry-sai-core"
-version = "3.2.7"
+version = "3.3.0"
 dependencies = [
  "scry-sai-bits",
  "scry-sai-float",
@@ -99,42 +99,42 @@ dependencies = [
 
 [[package]]
 name = "scry-sai-float"
-version = "3.2.7"
+version = "3.3.0"
 
 [[package]]
 name = "scry-sai-handle"
-version = "3.2.7"
+version = "3.3.0"
 
 [[package]]
 name = "scry-sai-interval"
-version = "3.2.7"
+version = "3.3.0"
 
 [[package]]
 name = "scry-sai-octagon"
-version = "3.2.7"
+version = "3.3.0"
 
 [[package]]
 name = "scry-sai-pentagon"
-version = "3.2.7"
+version = "3.3.0"
 
 [[package]]
 name = "scry-sai-poly"
-version = "3.2.7"
+version = "3.3.0"
 
 [[package]]
 name = "scry-sai-provenance"
-version = "3.2.7"
+version = "3.3.0"
 
 [[package]]
 name = "scry-sai-segment"
-version = "3.2.7"
+version = "3.3.0"
 dependencies = [
  "scry-sai-interval",
 ]
 
 [[package]]
 name = "scry-sai-taint"
-version = "3.2.7"
+version = "3.3.0"
 
 [[package]]
 name = "sha2"

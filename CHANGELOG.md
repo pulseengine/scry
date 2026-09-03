@@ -7,6 +7,83 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.3.0] — 2026-09-03
+
+**Agent-consumable scry.** Every feature here exists so a machine, not a
+person, can consume a scry verdict: an MCP server, a query surface, a
+versioned feed schema, a capability manifest as data, and citable obligation
+anchors. The one precision fix (`br_if` on a bare value) is here because it is
+what LLVM emits for the loops agents actually ask about.
+
+### Added
+
+- **`scry-sai-mcp` — an MCP server exposing scry to agents directly** (FEAT-066).
+  Agents cannot run `cargo`; consuming scry meant shelling out or scraping a
+  5.7 MB JSON. Tools: `analyze` (module → summary + counts) and `query`
+  (FEAT-067 filters). Structured results, never HTML. **This is a NEW crate and
+  its first publish** — v3.2.7's tree contained no `crates/scry-mcp`.
+- **Query filters over `AnalysisResult`** (FEAT-067). Ask instead of scrape:
+  "every site where kind=Top and op in (call_indirect, memory.grow)". The
+  bounded slice of the FEAT-056 queryable-CPG idea — filtering and projection
+  over the existing result, no new graph substrate.
+- **`guidance.json` as a versioned contract** (FEAT-068). The v3.2.2 feed
+  shipped un-versioned; it now carries an explicit `schema` field, per-class
+  counts, and the module hash binding the feed to one exact module.
+- **A machine-readable capability manifest** (FEAT-071). The dashboard stated
+  scry's scope in prose — what is mechanized vs γ-sweep-validated, and what
+  scry does NOT prove. An agent deciding whether to trust a verdict needs that
+  as data. Rendered from the same constants as the page, so the two cannot
+  drift.
+- **Obligation anchors and the delta view** (FEAT-072). Every obligation in the
+  rendered page carries `id="ob-<obligation_id>"` and a copyable deep link, so
+  a verdict can be cited rather than described.
+- **Self-adjudication harness** (FEAT-073). scry adjudicates scry across N
+  consecutive commits of its own history, in observation mode. Purpose is
+  evidence, not gating — and it earned its keep immediately by finding the
+  identity churn recorded below.
+
+### Improved
+
+- **Guard refinement for `br_if` on a bare value** (FEAT-070). Refinement
+  already handled `local.get X; i32.const c; <cmp>; br_if` and `i32.eqz`, but
+  not `local.tee $x; br_if` — a branch on raw truthiness (implicit `≠ 0`),
+  which is what LLVM emits for count-to-zero loops and therefore common in real
+  bounds-check code.
+
+### What this release does NOT give you
+
+Stated here rather than left to be discovered:
+
+- **Obligation identity is NOT yet stable across builds.** FEAT-073's first run
+  measured **43–45% of function identities churning per build** (#123):
+  `func_ident` inherits Rust's `17h<hex>` symbol disambiguator, so an unrelated
+  edit destroys every obligation in the affected function. The anchors and the
+  feed schema ship; the guarantee behind them does not. FEAT-064 and REQ-020
+  moved to v3.4.0 for exactly this reason (#195) — cross-build citation is not
+  yet reliable, and a consumer should treat an `obligation_id` as stable
+  *within* a build only.
+- **The MCP `verify` tool is structurally absent.** FEAT-065 adjudication was
+  refuted pre-ship with six wrong-verdict paths (#122); exposing it would ship a
+  verdict not worth acting on. Tracked as FEAT-094, gated on REQ-021.
+
+### Falsification
+
+This release is wrong if any of the following holds:
+
+1. A module that analysed successfully under 3.2.7 now returns an error, or a
+   different verdict set, from `analyze`.
+2. An `obligation_id` cited from the dashboard does not resolve to the same site
+   when the *same* module is re-analysed by the same build.
+3. The MCP server returns a summary whose counts disagree with the
+   `AnalysisResult` the same build produces for the same module.
+4. `guidance.json` validates against its declared `schema` version while
+   carrying a field that version does not define.
+
+Limitation of (1), stated because it is the weakest of the four: the
+before/after comparison is not corpus-wide. A consumer with a module set —
+#126's reporter has offered theirs — would falsify it properly.
+
+
 ## [3.2.7] — 2026-08-27
 
 Two fixes. Both were found by looking at what the project actually did rather

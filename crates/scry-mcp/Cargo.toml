@@ -21,7 +21,7 @@ path = "src/main.rs"
 [dependencies]
 # The analyzer library — same single-dependency pattern as scry-viz: a plain
 # `std` host tool consuming the published `AnalysisResult` plain-Rust types.
-scry-sai-core = { path = "../scry-analyze-core", version = "3.2.7" }
+scry-sai-core = { path = "../scry-analyze-core", version = "3.3.0" }
 # Hand-rolled JSON-RPC 2.0 (DELIBERATE — no MCP SDK dependency): MCP's stdio
 # transport is newline-delimited JSON-RPC and the server needs exactly three
 # methods (initialize / tools/list / tools/call). serde_json covers that; an
