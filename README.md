@@ -63,7 +63,7 @@ deductive-proof and bounded-model-checking layers do not staff.
 <!-- claim id=version: "scry-sai-core" crates.io max_version == workspace version -->
 <!-- claim id=crates: publish.rs lists 13 scry-sai-* crates -->
 <!-- claim id=admit-free: 0 Admitted/admit/Axiom across proofs/rocq/*.v -->
-**v3.2.7 shipped** — the full v0.1 → v3.2 arc is done; scry is a working **sound
+**v3.3.0 shipped** — the full v0.1 → v3.3 arc is done; scry is a working **sound
 abstract interpreter**, not a scaffold. Shipped and on crates.io: **13 pure
 `scry-sai-*` crates** (10 abstract domains — interval, region-memory, call-graph
 + reachability, octagon, pentagon, known-bits/congruence, IEEE-754 float,
