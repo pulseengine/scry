@@ -35,8 +35,131 @@ permissions:
 
 jobs:
 
+  # ── Native binaries (DD-023) ──────────────────────────────────────────
+  # DD-008 made the wasm component the PRIMARY deliverable and allowed "an
+  # optional native CLI wrapper". DD-023 supersedes that half: `scry-mcp` is
+  # an MCP server an agent runtime launches as a native stdio process, and
+  # there is no Component Model distribution path for that shape. v3.3.0
+  # shipped 59 assets and zero binaries.
+  #
+  # These MUST run on GitHub-hosted runners: the pulseengine self-hosted fleet
+  # is Linux-only, so macOS and Windows targets cannot build there. That makes
+  # the hosted dependency structural rather than un-migrated work (scry#205).
+  #
+  # The artifacts fold into the EXISTING release-assets/ staging directory, so
+  # they are covered by the same SHA256SUMS and the same cosign loop. A second
+  # signing path would be a second thing that can silently not run.
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            can_run: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+            can_run: false   # cross-compiled: not executable on an x86 builder
+          - target: x86_64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+            can_run: true    # arm64 host runs x86_64 via Rosetta
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+            can_run: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+            can_run: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }} -p scry-sai-mcp -p scry-sai-viz
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }} -p scry-sai-mcp -p scry-sai-viz
+
+      # scry#152 shipped a component announcing `scry 0.0.0`, and scry#215
+      # found the coverage evidence measures a different binary than the
+      # release. So assert each binary's OWN output against the tag — running
+      # it, not grepping the archive, which would match a bystander string.
+      # EACH binary is asserted separately: scry-viz has an in-repo caller and
+      # scry-mcp has none, so neither covers the other.
+      - name: Verify --version matches the tag
+        if: matrix.can_run
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/}"; EXPECTED="${VERSION#v}"
+          EXT=""; [ "${{ matrix.archive }}" = "zip" ] && EXT=".exe"
+          for bin in scry-mcp scry-viz; do
+            P="target/${{ matrix.target }}/release/${bin}${EXT}"
+            ACTUAL="$("$P" --version)"
+            if [ "$ACTUAL" != "$bin $EXPECTED" ]; then
+              echo "::error::$bin --version said '$ACTUAL', tag expects '$bin $EXPECTED'"
+              exit 1
+            fi
+            echo "::notice::$bin --version == '$ACTUAL'"
+          done
+
+      # Stated, not silent: a cross-compiled binary cannot run on its builder,
+      # so these two targets ship without the self-report check. The x86_64
+      # linux build exercises the same source and the same assertion.
+      - name: Version check SKIPPED (cross-compiled)
+        if: ${{ !matrix.can_run }}
+        run: echo "::warning::${{ matrix.target }} is cross-compiled; --version not asserted on this target"
+
+      - name: Package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCHIVE_KIND: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/}"
+          EXT=""; [ "$ARCHIVE_KIND" = "zip" ] && EXT=".exe"
+          mkdir -p staging
+          for bin in scry-mcp scry-viz; do
+            cp "target/${TARGET}/release/${bin}${EXT}" staging/
+          done
+          cp README.md LICENSE* staging/ 2>/dev/null || true
+          if [ "$ARCHIVE_KIND" = "zip" ]; then
+            ARCHIVE="scry-${VERSION}-${TARGET}.zip"
+            (cd staging && 7z a "../$ARCHIVE" .)
+          else
+            ARCHIVE="scry-${VERSION}-${TARGET}.tar.gz"
+            tar -czf "$ARCHIVE" -C staging .
+          fi
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
   release:
     name: Build, sign, and release
+    needs: build-binaries
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -160,6 +283,33 @@ jobs:
           fi
           ls -la release-assets/
 
+      # DD-023: the native archives join the SAME staging directory, so they
+      # are covered by the SHA256SUMS below and by the per-asset cosign loop
+      # that follows it — not by a parallel signing path.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: native-archives
+          merge-multiple: true
+
+      - name: Stage native archives
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=0
+          for f in native-archives/*.tar.gz native-archives/*.zip; do
+            cp "$f" "release-assets/$(basename "$f")"; found=$((found+1))
+          done
+          # Fail closed: build-binaries is a `needs:` dependency, so zero
+          # archives here means the download silently produced nothing rather
+          # than the matrix being skipped.
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no native archives staged — build-binaries produced none"
+            exit 1
+          fi
+          echo "::notice::staged $found native archive(s)"
+          ls -la release-assets/
+
       - name: Generate SHA256SUMS.txt
         run: |
           set -euo pipefail
@@ -177,7 +327,7 @@ jobs:
         run: |
           set -euo pipefail
           cd release-assets
-          for asset in *.wasm *.cdx.json *.tar.gz; do
+          for asset in *.wasm *.cdx.json *.tar.gz *.zip; do
             [ -f "$asset" ] || continue
             cosign sign-blob --yes \
               --output-signature "${asset}.sig" \

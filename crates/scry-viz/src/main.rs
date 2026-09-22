@@ -13,8 +13,35 @@ use std::process::ExitCode;
 
 use scry_analyze_core::{AnalysisConfig, analyze, verify_against};
 
+const USAGE: &str = "\
+usage: scry-viz <input.wasm|input.wat> [-o output.html] [--title NAME]
+       scry-viz check <input.wasm|input.wat>
+       scry-viz delta <a.wasm> <b.wasm> [-o output.html]
+       scry-viz index [...]
+
+  -V, --version   print version and exit
+  -h, --help      print this help and exit";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // PulseEngine CLI conventions 1 and 2, handled uniformly for EVERY form:
+    // `--version` was previously an unknown flag (exit 2), and `-h`/`--help`
+    // returned `err(2, usage)` — help treated as a usage ERROR, printed to
+    // stderr. Convention 2 says help is a successful request for help, and a
+    // tool that cannot state its own version cannot appear in evidence
+    // (DD-023 makes this binary a shipped, signed artifact).
+    //
+    // Checked across all positions so `scry-viz delta --help` behaves like
+    // `scry-viz --help`, rather than only fixing the bare form the test drives.
+    if args.iter().any(|a| a == "-V" || a == "--version") {
+        println!("scry-viz {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     // `scry-viz check <module>` is a well-formedness gate (its own exit code,
     // no file output), so it's dispatched before the file-writing forms.
     if args.first().map(String::as_str) == Some("check") {

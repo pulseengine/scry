@@ -358,6 +358,14 @@ artifacts:
       component, not a native binary. Implementation runs inside a
       Wasm runtime (kiln in production; wasmtime for local
       development); WIT interfaces define its inputs and outputs.
+
+      SUPERSEDED IN PART BY DD-023 (2026-09-22): native binaries for
+      `scry-mcp` and `scry-viz` are now a FIRST-CLASS deliverable, not the
+      "optional wrapper" this decision anticipated. The dogfooding rationale
+      below is UNCHANGED and still governs the analyzer itself — what DD-023
+      changes is that `scry-mcp` is not the analyzer, and an MCP server has no
+      Component Model distribution path. This note is appended rather than
+      rewritten: the reasoning below was correct when written.
     fields:
       decision: >
         scry's primary deliverable is a Wasm Component Model component
@@ -392,6 +400,8 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-001
+      - type: traces-to
+        target: DD-023
 
   - id: DD-009
     type: design-decision
@@ -939,5 +949,85 @@ artifacts:
         target: FEAT-072
       - type: traces-to
         target: FEAT-073
+      - type: traces-to
+        target: DD-021
+
+  - id: DD-023
+    type: design-decision
+    title: Native binaries are a first-class deliverable alongside the Wasm component
+    status: approved
+    tags: [packaging, distribution, mcp, component-model, supersedes-dd008]
+    description: >
+      scry ships native binaries for `scry-mcp` and `scry-viz` on the same
+      target matrix as rivet and witness, signed and SBOM'd through the same
+      release flow as the Wasm component. This SUPERSEDES the distribution
+      half of DD-008; it does NOT disturb DD-008's dogfooding rationale, which
+      remains correct and remains the reason the analyzer itself ships as a
+      component.
+    fields:
+      decision: >
+        Native binaries for `scry-mcp` and `scry-viz` are built for
+        x86_64/aarch64 on linux-gnu and apple-darwin plus x86_64-pc-windows-msvc,
+        archived, folded into the EXISTING signed SHA256SUMS manifest, and
+        published as release assets. The wasm32-wasip2 component remains the
+        analyzer's deliverable. Both are first-class; neither is "the wrapper".
+      rationale: >
+        DD-008 already permitted this — it says "a thin native CLI wrapper may
+        be provided for convenience" and its chosen alternative (b) is "the Wasm
+        component plus an optional native CLI wrapper for ergonomics". What
+        changed is that OPTIONAL is no longer defensible for `scry-mcp`.
+
+        `scry-mcp` IS NOT THE ANALYZER. It is an MCP server: an agent runtime
+        launches it as a native process speaking JSON-RPC over stdio. There is
+        no Component Model distribution path for that shape — an agent host
+        cannot consume a wasip2 component as its MCP server without a wrapper
+        that does not exist. So DD-008's dogfood argument, which is about the
+        analyzer passing through meld/sigil/witness/kiln, simply does not apply
+        to it.
+
+        The cost of the gap is measurable against FEAT-066's own stated purpose,
+        which calls MCP "the single biggest adoption lever for the AI agent
+        audience". v3.3.0 shipped that lever in the form requiring the most
+        setup: `cargo install scry-sai-mcp`, i.e. a Rust toolchain on every
+        consumer machine. rivet ships 5 native targets; witness ships natives
+        AND a component. scry shipped 59 release assets and zero binaries.
+
+        Parity also means a consumer who knows the rest of the toolchain finds
+        scry shaped the same way, which is the argument DD-008 made for the
+        component and applies equally here.
+      alternatives: >
+        (a) `scry-mcp` only — the smallest matrix and the real adoption fix.
+            Rejected because `scry-viz` is the "ergonomics CLI" DD-008 already
+            anticipated and costs one more matrix entry once the track exists.
+        (b) Leave both on crates.io — rejected: it keeps a Rust toolchain in the
+            path of the adoption lever.
+        (c) Amend DD-008 in place — REJECTED ON METHOD. DD-008's reasoning was
+            correct when written; editing it would erase why it changed. This
+            repo retracts-and-records rather than overwrites (DD-021 precedent).
+      residual: >
+        THIS MAKES THE HOSTED-RUNNER DEPENDENCY PERMANENT AND STRUCTURAL.
+        macOS and Windows targets cannot build on the pulseengine self-hosted
+        fleet, which is Linux-only (12 runners, labels self-hosted/linux/x64).
+        So scry#205's "migrate every job off ubuntu-latest" is no longer the
+        right goal — a subset of jobs must stay hosted by construction. Recorded
+        on that issue.
+
+        MORE ARTIFACTS MEANS MORE ARTIFACTS THAT CAN LIE. scry#152 shipped a
+        component announcing `scry 0.0.0`, and scry#215 found the coverage
+        evidence measures a different binary than the release. Each native
+        binary therefore carries a `--version` assertion that RUNS THE BINARY
+        and compares its own output to the tag — not a grep over the archive,
+        which would pass on a bystander string.
+
+        The natives are NOT separately signed. They fold into the existing
+        SHA256SUMS + cosign flow; a second signing path is a second thing that
+        can silently not run.
+    links:
+      - type: satisfies
+        target: REQ-001
+      - type: refines
+        target: DD-008
+      - type: traces-to
+        target: FEAT-066
       - type: traces-to
         target: DD-021

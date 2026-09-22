@@ -46,6 +46,16 @@ schema:
     correct spelling.
 
 artifact-types:
+  - name: design-decision
+    description: An architectural or implementation decision with rationale
+    fields:
+      - name: residual
+        type: string
+        required: false
+        description: >
+          What this decision does NOT settle, and what it costs. Same field and
+          same reasoning as on `feature` — see the header.
+
   - name: feature
     description: A user-visible capability or feature
     fields:
