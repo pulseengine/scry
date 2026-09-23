@@ -73,7 +73,7 @@
 
 extern crate alloc;
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -497,6 +497,11 @@ pub struct AnalysisResult {
     /// dropped. Sorted by `(func_index, pc, kind)`. Library-only (not in the
     /// WIT mirror or the frozen v1 JSON contract), like [`Self::bit_facts`].
     pub trap_checks: Vec<TrapCheck>,
+    /// FEAT-098 (AC#4 instrument): every `z := x ± y` / `z := x + c` site the
+    /// FEAT-057 polyhedra wrap gate reached, with its outcome on the converged
+    /// visit — see [`WrapGateSite`]. Sorted by `(func_index, pc)`. Library-only
+    /// (not in the WIT mirror or the frozen v1 JSON contract).
+    pub wrap_gate_sites: Vec<WrapGateSite>,
     /// FEAT-047 (REQ-015, AC-022): sound float-interval facts for f32/f64
     /// locals, produced by an additive straight-line pass over each function
     /// body using the IEEE-754 float-interval domain ([`scry_float`]). Each
@@ -987,6 +992,57 @@ pub enum TrapVerdict {
     PotentialTrap,
 }
 
+/// FEAT-098 (AC#4 instrument): the producer shape of a `local.set`/`local.tee`
+/// that reached the FEAT-057 polyhedra wrap gate ([`Interp::poly_transfer`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WrapGateShape {
+    /// `z := x + y` — the 3-variable equality only polyhedra can express.
+    AddLocals,
+    /// `z := x − y`.
+    SubLocals,
+    /// `z := x + c`.
+    AddConst,
+}
+
+/// FEAT-098 (AC#4 instrument): what the wrap gate decided at one site, on
+/// the LAST fixpoint visit (the converged state — the same visit that emits
+/// the site's [`ProgramPoint`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WrapGateOutcome {
+    /// The interval domain proved the arithmetic cannot wrap, so the linear
+    /// equality was added.
+    Proven,
+    /// No-wrap was NOT provable (an operand interval was ⊤ or wide enough to
+    /// leave i32 range), so the assigned variable was only projected.
+    Unproven,
+    /// The assigned local aliases an operand (`x := x + y`): the gate needs
+    /// the operand's PRE-assignment interval, which the transfer no longer
+    /// has, so the site is projected without consulting the gate.
+    Aliased,
+}
+
+/// FEAT-098 (AC#4 instrument): one record per `local.set`/`local.tee` whose
+/// producer is one of the wrap-gated arithmetic shapes, with the gate's
+/// outcome on the converged visit. Exists so the FEAT-057 realization
+/// question — "of the `z := x + y` sites the transfer reaches, how many have
+/// a provable no-wrap?" — is re-derivable from `examples/poly_surface.rs`
+/// rather than quoted from a one-off instrumentation. Sorted by
+/// `(func_index, pc)`. Library-only (not in the WIT mirror or the frozen v1
+/// JSON contract), like [`AnalysisResult::bit_facts`]. Sites in a degraded
+/// function (or reached only after degradation) are absent: the transfer
+/// returns before classifying there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WrapGateSite {
+    /// Absolute function index.
+    pub func_index: u32,
+    /// Operator index (pc) of the `local.set`/`local.tee`.
+    pub pc: u32,
+    /// The producer shape.
+    pub shape: WrapGateShape,
+    /// The gate's decision on the converged visit.
+    pub outcome: WrapGateOutcome,
+}
+
 /// FEAT-027: human-readable metadata for one function index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionMeta {
@@ -1381,6 +1437,11 @@ struct FuncCtx {
     /// this function's walk, drained by the caller in the authoritative pass
     /// (same as `gaps`). One entry per applicable trap condition per div/rem.
     trap_checks: Vec<TrapCheck>,
+    /// FEAT-098 (AC#4 instrument): per-pc outcome of the polyhedra wrap gate,
+    /// overwritten on every visit so the surviving entry is the converged
+    /// (last-visit) decision. Drained by the caller into
+    /// [`AnalysisResult::wrap_gate_sites`].
+    wrap_gate: BTreeMap<u32, (WrapGateShape, WrapGateOutcome)>,
     /// FEAT-089: locals known NON-ZERO on the current path — the narrow
     /// predicate fact an interval cannot hold (`!= 0` is a hole in the middle
     /// of a range). Established ONLY on the fall-through edge of a
@@ -1427,6 +1488,7 @@ impl FuncCtx {
             degraded: false,
             gaps: Vec::new(),
             trap_checks: Vec::new(),
+            wrap_gate: BTreeMap::new(),
             nonzero_locals: BTreeSet::new(),
         }
     }
@@ -2319,6 +2381,7 @@ pub fn analyze(
                 /*depth=*/ 0,
                 /*emit_gaps=*/ None,
                 /*emit_trap_checks=*/ None,
+                /*emit_wrap_gate=*/ None,
             )?;
             extract_results(&defined_funcs[defined].results, &result_state)
         };
@@ -2360,6 +2423,7 @@ pub fn analyze(
     let mut call_graph: Vec<CallEdge> = Vec::new();
     let mut gaps: Vec<Gap> = Vec::new();
     let mut trap_checks: Vec<TrapCheck> = Vec::new();
+    let mut wrap_gate_sites: Vec<WrapGateSite> = Vec::new();
     for func in &defined_funcs {
         let init_locals = top_input_locals(func);
         run_function_body(
@@ -2373,9 +2437,11 @@ pub fn analyze(
             /*depth=*/ 0,
             /*emit_gaps=*/ Some(&mut gaps),
             /*emit_trap_checks=*/ Some(&mut trap_checks),
+            /*emit_wrap_gate=*/ Some(&mut wrap_gate_sites),
         )?;
     }
     gaps.sort_by_key(|g| (g.func_index, g.pc));
+    wrap_gate_sites.sort_by_key(|s| (s.func_index, s.pc));
     // FEAT-045 soundness: `classify_div_trap` runs on EVERY fixpoint pass, so a
     // div/rem in a loop body can collect a stale `ProvenSafe` from an early
     // (pre-widening) iterate alongside the `PotentialTrap` of the converged
@@ -2720,6 +2786,7 @@ pub fn analyze(
         gaps,
         pentagon_facts,
         trap_checks,
+        wrap_gate_sites,
         float_facts,
         handle_findings,
         advisories,
@@ -4863,9 +4930,13 @@ enum GuardOp {
 }
 
 /// Map a wasmparser comparison operator (with a `local` first operand and a
-/// `const` second operand) to a [`GuardOp`]. Only SIGNED i32 comparisons are
-/// refined — unsigned comparisons wrap, so refining their bounds with a
-/// signed constant is not sound; they return `None` (no refinement).
+/// `const` second operand) to a [`GuardOp`]. Only SIGNED i32 comparisons map
+/// here — an unsigned comparison is NOT a fact about the signed value the
+/// interval holds (its constant reads as u32 and the negative half sits
+/// above every non-negative value), so it must never reach the signed
+/// refiners or the relational consumers. The `*_u` family returns `None`
+/// here and is read by [`guard_op_unsigned`] / [`refine_interval_unsigned`]
+/// (FEAT-098), on the constant-operand path only.
 fn guard_op(op: &Operator<'_>) -> Option<GuardOp> {
     Some(match op {
         Operator::I32Eq => GuardOp::Eq,
@@ -4876,6 +4947,121 @@ fn guard_op(op: &Operator<'_>) -> Option<GuardOp> {
         Operator::I32GeS => GuardOp::Ge,
         _ => return None,
     })
+}
+
+/// FEAT-098: an UNSIGNED i32 comparison guard `local OP_u const`. A separate
+/// type from [`GuardOp`] on purpose: the relational consumers
+/// ([`refine_octagon_rel`], [`refine_poly_rel`]) reason about signed VALUES
+/// and cannot receive one by accident — only [`refine_interval_unsigned`]
+/// knows how to read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UGuardOp {
+    Lt,
+    Gt,
+    Le,
+    Ge,
+}
+
+impl UGuardOp {
+    /// The signed operator with the same truth table on NON-NEGATIVE
+    /// operands, where the unsigned and signed readings coincide.
+    fn as_signed(self) -> GuardOp {
+        match self {
+            UGuardOp::Lt => GuardOp::Lt,
+            UGuardOp::Gt => GuardOp::Gt,
+            UGuardOp::Le => GuardOp::Le,
+            UGuardOp::Ge => GuardOp::Ge,
+        }
+    }
+}
+
+/// FEAT-098: the `*_u` counterpart of [`guard_op`].
+fn guard_op_unsigned(op: &Operator<'_>) -> Option<UGuardOp> {
+    Some(match op {
+        Operator::I32LtU => UGuardOp::Lt,
+        Operator::I32GtU => UGuardOp::Gt,
+        Operator::I32LeU => UGuardOp::Le,
+        Operator::I32GeU => UGuardOp::Ge,
+        _ => return None,
+    })
+}
+
+/// FEAT-098: refine the SIGNED interval of a local known to satisfy
+/// (`taken`) or violate the UNSIGNED guard `local OP_u c`, where `c` is the
+/// constant's unsigned value (the `i32.const` bits read as u32) and `width`
+/// the operand width in bits — 32 in production; the w=8 γ-sweep test
+/// exercises this same body, so the sweep is over the shipped logic and not
+/// a model of it.
+///
+/// Two cases, each with its own soundness argument:
+///
+/// 1. PRIOR KNOWN NON-NEGATIVE (`iv.lo >= 0`): every concrete value in γ(iv)
+///    lies in `[0, 2^(w−1)−1]`, where the unsigned and signed readings
+///    coincide, so `x OP_u c ⇔ x OP c` over the integers and the signed
+///    refinement applies verbatim with `c` as a plain non-negative integer.
+///    This is what lets the EXIT edge of a `i <u n` loop pin `i ≥ n`.
+///
+/// 2. OTHERWISE — the bounds-check shape. Only the `x <u c` / `x <=u c`
+///    OUTCOME refines, to `[0, c−1]` / `[0, c]`, and ONLY when that interval
+///    fits the non-negative half (`hi <= 2^(w−1) − 1`): unsigned `x < c`
+///    with `c <= 2^(w−1)` puts x in `[0, 2^(w−1)−1]`, representable as a
+///    non-negative signed value, so no wrap into the negative half is
+///    possible. The `x >=u c` / `x >u c` outcome admits the whole negative
+///    half (every negative signed value is ≥ 2^(w−1) unsigned) and is left
+///    unrefined, whichever edge it lands on.
+///
+/// THE SIDE CONDITION IS LOAD-BEARING, not decorative: exhaustively at w=8
+/// the signed reading `[0, c−1]` has zero counterexamples for
+/// `c <= 2^(w−1)` and fails for all 127 constants above it. The γ-sweep test
+/// pins both numbers, and the mutant that drops the check is observed RED.
+fn refine_interval_unsigned(
+    iv: Interval,
+    op: UGuardOp,
+    c: u64,
+    taken: bool,
+    width: u32,
+) -> Interval {
+    if scry_interval::is_bot(iv) {
+        return iv;
+    }
+    // Case 1: non-negative prior ⇒ unsigned is signed on every admitted value.
+    if iv.lo >= 0 {
+        return refine_interval(iv, op.as_signed(), c as i64, taken);
+    }
+    // Case 2: the outcome's upper bound as a signed integer, if it bounds.
+    let hi = match (op, taken) {
+        (UGuardOp::Lt, true) | (UGuardOp::Ge, false) => c as i64 - 1, // x <u c
+        (UGuardOp::Le, true) | (UGuardOp::Gt, false) => c as i64,     // x <=u c
+        (UGuardOp::Ge, true)
+        | (UGuardOp::Lt, false)
+        | (UGuardOp::Gt, true)
+        | (UGuardOp::Le, false) => return iv, // x >=u c / x >u c: negative half admitted
+    };
+    // SIDE CONDITION: [0, hi] must sit inside the non-negative half.
+    let half = 1i64 << (width - 1);
+    if hi >= half {
+        return iv;
+    }
+    scry_interval::meet(iv, Interval { lo: 0, hi })
+}
+
+/// FEAT-098: the comparison a constant-operand guard performs, with the
+/// constant read the way the OPERATOR reads it — sign-extended for the
+/// signed family, the raw u32 bits for the `*_u` family. The two never mix.
+#[derive(Clone, Copy)]
+enum Guard {
+    Signed(GuardOp, i64),
+    Unsigned(UGuardOp, u32),
+}
+
+impl Guard {
+    /// Refine `iv` by this guard being true (`taken`) or false.
+    fn refine(self, iv: Interval, taken: bool) -> Interval {
+        match self {
+            Guard::Signed(op, c) => refine_interval(iv, op, c, taken),
+            Guard::Unsigned(op, c) => refine_interval_unsigned(iv, op, c as u64, taken, 32),
+        }
+    }
 }
 
 /// Refine the interval of a local known to satisfy (`taken = true`) or
@@ -5423,9 +5609,15 @@ impl Interp<'_, '_> {
     ///
     /// ```text
     ///   <get|tee> L; i32.const C; <signed cmp>; br_if D   (4 ops)
+    ///   <get|tee> L; i32.const C; <unsigned cmp>; br_if D (4 ops)  FEAT-098
     ///   <get|tee> L; i32.eqz; br_if D                     (3 ops)  taken ⇔ L == 0
     ///   <get|tee> L; br_if D                              (2 ops)  taken ⇔ L ≠ 0
     /// ```
+    ///
+    /// The unsigned form (FEAT-098) is LLVM's bounds check (`index <u len`,
+    /// `index >=u len; br_if fail`) and is refined by
+    /// [`refine_interval_unsigned`] under its side condition; the signed and
+    /// unsigned readings of `C` never mix (see [`Guard`]).
     ///
     /// The 2-op form is the bare-truthiness branch: `br_if` takes the edge when
     /// the popped value is non-zero, so the FALL-THROUGH pins `L` to exactly 0.
@@ -5457,15 +5649,25 @@ impl Interp<'_, '_> {
             _ => return None,
         };
         // Guard shape, longest match first.
-        let (c, op, depth, next) = match (ops.get(pc + 1)?, ops.get(pc + 2), ops.get(pc + 3)) {
+        let (guard, depth, next) = match (ops.get(pc + 1)?, ops.get(pc + 2), ops.get(pc + 3)) {
             (Operator::I32Const { value }, Some(cmp), Some(Operator::BrIf { relative_depth })) => {
-                (*value as i64, guard_op(cmp)?, *relative_depth, pc + 4)
+                let guard = if let Some(op) = guard_op(cmp) {
+                    Guard::Signed(op, *value as i64)
+                } else if let Some(op) = guard_op_unsigned(cmp) {
+                    // FEAT-098: the constant is read as the operator reads it.
+                    Guard::Unsigned(op, *value as u32)
+                } else {
+                    return None;
+                };
+                (guard, *relative_depth, pc + 4)
             }
             (Operator::I32Eqz, Some(Operator::BrIf { relative_depth }), _) => {
-                (0, GuardOp::Eq, *relative_depth, pc + 3)
+                (Guard::Signed(GuardOp::Eq, 0), *relative_depth, pc + 3)
             }
             // FEAT-070: bare truthiness — taken ⇔ L ≠ 0, fall-through ⇔ L == 0.
-            (Operator::BrIf { relative_depth }, _, _) => (0, GuardOp::Ne, *relative_depth, pc + 2),
+            (Operator::BrIf { relative_depth }, _, _) => {
+                (Guard::Signed(GuardOp::Ne, 0), *relative_depth, pc + 2)
+            }
             _ => return None,
         };
 
@@ -5510,8 +5712,8 @@ impl Interp<'_, '_> {
             // assigned variable unless a no-wrap equality is provable).
             self.poly_transfer(pc, ctx);
         }
-        let taken_iv = refine_interval(iv, op, c, true);
-        let not_taken_iv = refine_interval(iv, op, c, false);
+        let taken_iv = guard.refine(iv, true);
+        let not_taken_iv = guard.refine(iv, false);
 
         // Taken edge (guard true) → label D. The octagon rides along
         // unchanged (the constant bound is already captured in the interval;
@@ -5531,7 +5733,7 @@ impl Interp<'_, '_> {
         // untouched for exactly this case). Carry it as a narrow predicate
         // fact for the div/rem trap check. The dual `Ne` shape needs no fact:
         // its fall-through pins the interval to `[0,0]` above.
-        if matches!(op, GuardOp::Eq) && c == 0 {
+        if matches!(guard, Guard::Signed(GuardOp::Eq, 0)) {
             ctx.nonzero_locals.insert(local);
         }
         Some(next)
@@ -5662,6 +5864,16 @@ impl Interp<'_, '_> {
             _ => None,
         };
         let forgotten = ctx.poly.project(l);
+        // FEAT-098 (AC#4 instrument): what the gate decided here, recorded
+        // after the match (the `iv` closure borrows `ctx.locals` until then).
+        let mut gate: Option<(WrapGateShape, WrapGateOutcome)> = None;
+        let outcome = |no_wrap: bool| {
+            if no_wrap {
+                WrapGateOutcome::Proven
+            } else {
+                WrapGateOutcome::Unproven
+            }
+        };
         ctx.poly = match classify_poly_store(self.ops, pc) {
             // `l := c` — no arithmetic, the equality is exact.
             PolyStoreSrc::Const(c) => poly_with_equality(forgotten, dim, &[(l, 1)], c),
@@ -5674,6 +5886,7 @@ impl Interp<'_, '_> {
                 let no_wrap = iv(src).is_some_and(|s| {
                     !interval_is_top(&scry_interval::i32_add(s, scry_interval::constant_i64(c)))
                 });
+                gate = Some((WrapGateShape::AddConst, outcome(no_wrap)));
                 if no_wrap {
                     poly_with_equality(forgotten, dim, &[(l, 1), (src, -1)], c)
                 } else {
@@ -5687,6 +5900,7 @@ impl Interp<'_, '_> {
                     (Some(x), Some(y)) => !interval_is_top(&scry_interval::i32_add(x, y)),
                     _ => false,
                 };
+                gate = Some((WrapGateShape::AddLocals, outcome(no_wrap)));
                 if no_wrap {
                     poly_with_equality(forgotten, dim, &[(l, 1), (a, -1), (b, -1)], 0)
                 } else {
@@ -5699,16 +5913,31 @@ impl Interp<'_, '_> {
                     (Some(x), Some(y)) => !interval_is_top(&scry_interval::i32_sub(x, y)),
                     _ => false,
                 };
+                gate = Some((WrapGateShape::SubLocals, outcome(no_wrap)));
                 if no_wrap {
                     poly_with_equality(forgotten, dim, &[(l, 1), (a, -1), (b, 1)], 0)
                 } else {
                     forgotten
                 }
             }
-            // Anything else (including self-referencing shapes): the
-            // projection is the whole transfer — the sound default.
+            // Self-referencing two-local shapes (`x := x + y`): projected
+            // without consulting the gate — recorded so the instrument can
+            // tell "unprovable" from "never asked".
+            PolyStoreSrc::AddLocals(a, b) if a < dim && b < dim => {
+                gate = Some((WrapGateShape::AddLocals, WrapGateOutcome::Aliased));
+                forgotten
+            }
+            PolyStoreSrc::SubLocals(a, b) if a < dim && b < dim => {
+                gate = Some((WrapGateShape::SubLocals, WrapGateOutcome::Aliased));
+                forgotten
+            }
+            // Anything else (including the self-referencing `x := x + c`):
+            // the projection is the whole transfer — the sound default.
             _ => forgotten,
         };
+        if let Some(g) = gate {
+            ctx.wrap_gate.insert(pc as u32, g);
+        }
     }
 
     /// `block`: branches to it land AFTER the block, so the post-block state
@@ -6096,6 +6325,7 @@ fn run_function_body(
     depth: u32,
     emit_gaps: Option<&mut Vec<Gap>>,
     emit_trap_checks: Option<&mut Vec<TrapCheck>>,
+    emit_wrap_gate: Option<&mut Vec<WrapGateSite>>,
 ) -> Result<Vec<AbstractValue>, AnalyzeError> {
     let mut ctx = FuncCtx::new(init_locals);
     let ops = &func.ops;
@@ -6124,6 +6354,19 @@ fn run_function_body(
     }
     if let Some(t) = emit_trap_checks {
         t.append(&mut ctx.trap_checks);
+    }
+    if let Some(w) = emit_wrap_gate {
+        // BTreeMap iteration is pc-ascending, so per-function output is sorted.
+        w.extend(
+            ctx.wrap_gate
+                .iter()
+                .map(|(&pc, &(shape, outcome))| WrapGateSite {
+                    func_index: func.abs_index,
+                    pc,
+                    shape,
+                    outcome,
+                }),
+        );
     }
     Ok(ctx.operand_stack)
 }
@@ -8029,6 +8272,7 @@ fn handle_call(
             depth.saturating_add(1),
             /*emit_gaps=*/ None,
             /*emit_trap_checks=*/ None,
+            /*emit_wrap_gate=*/ None,
         )?;
         (
             extract_results(&callee.results, &final_stack),
@@ -8899,6 +9143,7 @@ mod tests {
             gaps: alloc::vec![],
             pentagon_facts: alloc::vec![],
             trap_checks: alloc::vec![],
+            wrap_gate_sites: alloc::vec![],
             float_facts: alloc::vec![],
             handle_findings: alloc::vec![],
             advisories: alloc::vec![],
@@ -13927,5 +14172,372 @@ mod tests {
             ..Query::default()
         });
         assert!(none.is_empty(), "an absent operator selects nothing");
+    }
+
+    // ───────────────────────── FEAT-098 ─────────────────────────
+
+    /// Interval of `local` at the point emitted for `pc` (the state AFTER
+    /// that op). A missing point or a non-interval local panics naming the
+    /// pc — a fixture bug must never read as a pass.
+    fn local_iv_at(r: &AnalysisResult, pc: u32, local: u32) -> Interval {
+        let p = r
+            .invariants
+            .points
+            .iter()
+            .find(|p| p.pc == pc)
+            .unwrap_or_else(|| panic!("no program point at pc {pc}"));
+        p.locals
+            .iter()
+            .find(|l| l.local_index == local)
+            .and_then(|l| match l.value {
+                AbstractValue::I32Interval(iv) => Some(iv),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("local {local} is not an i32 interval at pc {pc}"))
+    }
+
+    /// γ-membership: does the interval admit the concrete i32 value `x`?
+    fn admits(iv: Interval, x: i32) -> bool {
+        iv.lo <= x as i64 && (x as i64) <= iv.hi
+    }
+
+    /// FEAT-098 fixture: `local.get 0; i32.const C; <cmp>; br_if` in a block
+    /// whose fall-through RETURNS, so the post-block point is reached by the
+    /// TAKEN edge alone and the in-block point by the NOT-TAKEN edge alone.
+    /// Returns `(taken, not_taken)` intervals of local 0.
+    fn feat098_const_guard_edges(cmp: &str, c: i32) -> (Interval, Interval) {
+        let r = analyze_default(&alloc::format!(
+            "(module (func (export \"f\") (param i32) (result i32) (local i32) \
+               block \
+                 local.get 0 i32.const {c} {cmp} br_if 0 \
+                 local.get 0 local.set 1 \
+                 i32.const 0 return \
+               end \
+               local.get 0 local.set 1 \
+               local.get 1))"
+        ));
+        // pc 6 = in-block `local.set 1` (not-taken edge); pc 11 = post-block
+        // `local.set 1` (taken edge only — the fall-through returned).
+        (local_iv_at(&r, 11, 0), local_iv_at(&r, 6, 0))
+    }
+
+    /// FEAT-098 AC#1: `x <u 10` refines the TAKEN edge to exactly [0, 9]. The
+    /// NOT-taken edge (`x >=u 10`) is NOT refined to [10, …]: unsigned ≥ 10
+    /// admits the whole negative half, so −1 (0xFFFFFFFF) and i32::MIN
+    /// (0x80000000) must stay admitted alongside 10 and i32::MAX.
+    #[test]
+    fn feat098_lt_u_const_refines_taken_edge_not_fallthrough() {
+        let (taken, not_taken) = feat098_const_guard_edges("i32.lt_u", 10);
+        assert_eq!(taken, Interval { lo: 0, hi: 9 }, "taken edge of x <u 10");
+        for x in [-1, i32::MIN, 10, i32::MAX] {
+            assert!(
+                admits(not_taken, x),
+                "not-taken edge of x <u 10 must admit {x} (it satisfies x >=u 10); \
+                 got {not_taken:?}"
+            );
+        }
+    }
+
+    /// FEAT-098: the other three unsigned comparisons, derived per operator
+    /// rather than copied from `lt_u`. Only the `<u c` / `<=u c` OUTCOME
+    /// refines (to [0, c−1] / [0, c]); the `>=u c` / `>u c` outcome admits the
+    /// negative half and is left alone, whichever edge it lands on.
+    #[test]
+    fn feat098_ge_u_gt_u_le_u_duals() {
+        // x >=u 10; br_if: taken = x >=u 10 (no refinement), fall-through = x <u 10.
+        let (taken, not_taken) = feat098_const_guard_edges("i32.ge_u", 10);
+        assert_eq!(
+            not_taken,
+            Interval { lo: 0, hi: 9 },
+            "fall-through of x >=u 10"
+        );
+        for x in [-1, i32::MIN, 10, i32::MAX] {
+            assert!(
+                admits(taken, x),
+                "taken edge of x >=u 10 must admit {x}; got {taken:?}"
+            );
+        }
+        // x >u 10; br_if: fall-through = x <=u 10 ⇒ [0, 10].
+        let (taken, not_taken) = feat098_const_guard_edges("i32.gt_u", 10);
+        assert_eq!(
+            not_taken,
+            Interval { lo: 0, hi: 10 },
+            "fall-through of x >u 10"
+        );
+        for x in [-1, i32::MIN, 11, i32::MAX] {
+            assert!(
+                admits(taken, x),
+                "taken edge of x >u 10 must admit {x}; got {taken:?}"
+            );
+        }
+        // x <=u 10; br_if: taken ⇒ [0, 10]; fall-through = x >u 10 (no refinement).
+        let (taken, not_taken) = feat098_const_guard_edges("i32.le_u", 10);
+        assert_eq!(taken, Interval { lo: 0, hi: 10 }, "taken edge of x <=u 10");
+        for x in [-1, i32::MIN, 11, i32::MAX] {
+            assert!(
+                admits(not_taken, x),
+                "not-taken edge of x <=u 10 must admit {x}; got {not_taken:?}"
+            );
+        }
+    }
+
+    /// FEAT-098 AC#2: the side condition is load-bearing. `x <u c` refines
+    /// only for c ≤ 2^31 (`[0, c−1]` fits the non-negative half). At c = 2^31
+    /// the taken edge is exactly [0, 2^31−1]; one past it (c = 2^31+1) and at
+    /// c = 2^32−1 the taken edge must still admit i32::MIN (0x80000000 <u c)
+    /// as well as i32::MAX, which forces the full range — NO refinement. The
+    /// not-taken edge is checked by γ too (every value satisfying `x >=u c`
+    /// stays admitted). `<=u` has the boundary one lower: c = 2^31−1 refines,
+    /// c = 2^31 does not.
+    #[test]
+    fn feat098_unsigned_guard_side_condition_boundary() {
+        // As i32 literals: 2^31 is i32::MIN; 2^31+1 is i32::MIN+1; 2^32−1 is −1.
+        let (t, _) = feat098_const_guard_edges("i32.lt_u", i32::MIN);
+        assert_eq!(
+            t,
+            Interval {
+                lo: 0,
+                hi: i32::MAX as i64
+            },
+            "x <u 2^31"
+        );
+        let (t, nt) = feat098_const_guard_edges("i32.lt_u", i32::MIN + 1);
+        assert!(
+            admits(t, i32::MIN) && admits(t, i32::MAX),
+            "x <u 2^31+1 admits 0x80000000: the taken edge must NOT refine; got {t:?}"
+        );
+        assert!(
+            admits(nt, -1) && admits(nt, i32::MIN + 1),
+            "x >=u 2^31+1 is satisfied by −1 and by 0x80000001; got {nt:?}"
+        );
+        let (t, nt) = feat098_const_guard_edges("i32.lt_u", -1);
+        assert!(
+            admits(t, i32::MIN) && admits(t, i32::MAX),
+            "x <u 2^32−1: no refinement; got {t:?}"
+        );
+        assert!(
+            admits(nt, -1),
+            "x >=u 2^32−1 is satisfied by −1; got {nt:?}"
+        );
+        let (t, _) = feat098_const_guard_edges("i32.le_u", i32::MAX);
+        assert_eq!(
+            t,
+            Interval {
+                lo: 0,
+                hi: i32::MAX as i64
+            },
+            "x <=u 2^31−1"
+        );
+        let (t, _) = feat098_const_guard_edges("i32.le_u", i32::MIN);
+        assert!(
+            admits(t, i32::MIN) && admits(t, i32::MAX),
+            "x <=u 2^31 admits 0x80000000: no refinement; got {t:?}"
+        );
+    }
+
+    /// FEAT-098: once a local is known NON-NEGATIVE its unsigned reading IS
+    /// its signed reading, so every unsigned outcome refines — including the
+    /// `>=u c` exit edge the ⊤-prior case must leave alone. After the signed
+    /// guard `x >= 0`, the fall-through of `x <u 10` carries x ∈ [10, i32::MAX].
+    #[test]
+    fn feat098_nonneg_prior_lets_unsigned_exit_edge_refine() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32) (result i32) (local i32) \
+               block \
+                 local.get 0 i32.const 0 i32.lt_s br_if 0 \
+                 block \
+                   local.get 0 i32.const 10 i32.lt_u br_if 0 \
+                   local.get 0 local.set 1 \
+                   i32.const 0 return \
+                 end \
+                 local.get 0 local.set 1 \
+               end \
+               local.get 1))",
+        );
+        // pc 11 = inner fall-through (x >= 0 ∧ x >=u 10); pc 16 = inner taken edge.
+        let fall = local_iv_at(&r, 11, 0);
+        assert_eq!(fall.lo, 10, "x >= 0 ∧ x >=u 10 ⇒ x ≥ 10; got {fall:?}");
+        assert!(
+            admits(fall, i32::MAX) && !admits(fall, -1),
+            "must admit i32::MAX and reject −1; got {fall:?}"
+        );
+        assert_eq!(
+            local_iv_at(&r, 16, 0),
+            Interval { lo: 0, hi: 9 },
+            "taken edge"
+        );
+    }
+
+    /// FEAT-098's causal claim, on a fixture: LLVM's bounds-check shape
+    /// (`x >=u len; br_if exit`) bounds both operands, so FEAT-057's wrap gate
+    /// proves `z := x + y` cannot wrap and the polyhedra learn the 3-variable
+    /// equality z = x + y no octagon can express. Checked as data
+    /// (`wrap_gate_sites` says Proven) AND as γ: the linear facts at the
+    /// assignment admit (5, 7, 12) and reject (5, 7, 13).
+    #[test]
+    fn feat098_unsigned_bounds_checks_unlock_three_local_equality() {
+        let r = analyze_default(
+            "(module (func (export \"f\") (param i32 i32) (result i32) (local i32) \
+               block \
+                 local.get 0 i32.const 100 i32.ge_u br_if 0 \
+                 local.get 1 i32.const 100 i32.ge_u br_if 0 \
+                 local.get 0 local.get 1 i32.add local.set 2 \
+               end \
+               local.get 2))",
+        );
+        let site = r
+            .wrap_gate_sites
+            .iter()
+            .find(|s| s.pc == 12)
+            .expect("z := x + y reaches the wrap gate at pc 12");
+        assert_eq!(site.shape, WrapGateShape::AddLocals);
+        assert_eq!(
+            site.outcome,
+            WrapGateOutcome::Proven,
+            "x, y ∈ [0, 99] ⇒ no wrap"
+        );
+        assert_eq!(local_iv_at(&r, 12, 2), Interval { lo: 0, hi: 198 });
+        let p12 = r
+            .invariants
+            .points
+            .iter()
+            .find(|p| p.pc == 12)
+            .expect("point at z := x + y");
+        assert!(
+            p12.linear.iter().any(|c| c.terms.len() == 3),
+            "a 3-local linear fact; got {:?}",
+            p12.linear
+        );
+        assert!(linear_holds(&p12.linear, &[5, 7, 12]));
+        assert!(
+            !linear_holds(&p12.linear, &[5, 7, 13]),
+            "z = x + y must reject z = 13; got {:?}",
+            p12.linear
+        );
+    }
+
+    /// FEAT-098 AC#4 instrument, non-vacuity: the wrap-gate tally must tell
+    /// PROVEN from UNPROVEN from ALIASED on shapes that differ only in that.
+    /// Unbounded params ⇒ Unproven; SIGNED guards (refinable since FEAT-016)
+    /// ⇒ Proven; `x := x + y` ⇒ Aliased (never asked).
+    #[test]
+    fn feat098_wrap_gate_instrument_distinguishes_outcomes() {
+        let body = |guards: &str, dst: u32| {
+            alloc::format!(
+                "(module (func (export \"f\") (param i32 i32) (result i32) (local i32) \
+                   block {guards} \
+                     local.get 0 local.get 1 i32.add local.set {dst} \
+                   end \
+                   local.get 2))"
+            )
+        };
+        let signed = "local.get 0 i32.const 100 i32.ge_s br_if 0 \
+                      local.get 0 i32.const 0 i32.lt_s br_if 0 \
+                      local.get 1 i32.const 100 i32.ge_s br_if 0 \
+                      local.get 1 i32.const 0 i32.lt_s br_if 0";
+        let outcome = |src: String| {
+            let r = analyze_default(&src);
+            r.wrap_gate_sites
+                .iter()
+                .find(|s| s.shape == WrapGateShape::AddLocals)
+                .expect("an AddLocals site")
+                .outcome
+        };
+        assert_eq!(outcome(body("", 2)), WrapGateOutcome::Unproven);
+        assert_eq!(outcome(body(signed, 2)), WrapGateOutcome::Proven);
+        assert_eq!(outcome(body("", 0)), WrapGateOutcome::Aliased);
+    }
+
+    /// FEAT-098 AC#3: γ-sweep of `refine_interval_unsigned` — the SHIPPED
+    /// body, at w=8 — over EVERY (op, c, x, prior): priors are ⊤ plus a grid
+    /// of [lo, hi] straddling 0 and −1 (so both cases of the function run).
+    /// For each edge, every concrete x admitted by the prior whose guard
+    /// truth selects that edge must be admitted by the edge's refinement.
+    ///
+    /// Non-vacuity is pinned three ways: the sweep must run more checks than
+    /// the ⊤ prior alone contributes (so the grid priors participated), the
+    /// refinement must have tightened SOMETHING, and the AC#1 shape at w=8
+    /// (`x <u 10` on ⊤) must give exactly [0, 9] with ⊤ on the other edge.
+    ///
+    /// The NEGATIVE CONTROL for the side condition is computed in-test: the
+    /// unconditional signed reading `x <u c ⇒ [0, c−1]` fails for exactly
+    /// the 127 constants c > 2^(w−1) and for none at or below it. The
+    /// out-of-band MUTATION-CHECK (dropping the side condition from the
+    /// implementation) turns THIS test red; its run is recorded on FEAT-098.
+    #[test]
+    fn feat098_unsigned_refine_gamma_sweep_w8() {
+        const W: u32 = 8;
+        let ops = [UGuardOp::Lt, UGuardOp::Gt, UGuardOp::Le, UGuardOp::Ge];
+        let holds = |op: UGuardOp, xu: u8, cu: u8| match op {
+            UGuardOp::Lt => xu < cu,
+            UGuardOp::Gt => xu > cu,
+            UGuardOp::Le => xu <= cu,
+            UGuardOp::Ge => xu >= cu,
+        };
+        let grid: [i64; 9] = [-128, -100, -2, -1, 0, 1, 9, 100, 127];
+        let mut priors = alloc::vec![scry_interval::TOP];
+        for &lo in &grid {
+            for &hi in &grid {
+                if lo <= hi {
+                    priors.push(Interval { lo, hi });
+                }
+            }
+        }
+        let (mut checks, mut tightened) = (0u64, 0u64);
+        for prior in &priors {
+            for op in ops {
+                for c in 0..=255u8 {
+                    for taken in [true, false] {
+                        let refined = refine_interval_unsigned(*prior, op, c as u64, taken, W);
+                        if refined != *prior {
+                            tightened += 1;
+                        }
+                        for x in i8::MIN..=i8::MAX {
+                            if !admits(*prior, x as i32) || holds(op, x as u8, c) != taken {
+                                continue;
+                            }
+                            checks += 1;
+                            assert!(
+                                admits(refined, x as i32),
+                                "UNSOUND at w=8: prior {prior:?}, guard x {op:?}_u {c}, \
+                                 taken={taken}: x={x} (0x{:02x}) is admitted by the guard \
+                                 but not by {refined:?}",
+                                x as u8
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // ⊤ alone contributes 4 ops × 256 c × 256 x = 262,144 checks.
+        assert!(
+            checks > 262_144,
+            "grid priors must participate; only {checks} checks ran"
+        );
+        assert!(tightened > 0, "nothing tightened: the sweep proves nothing");
+        assert_eq!(
+            refine_interval_unsigned(scry_interval::TOP, UGuardOp::Lt, 10, true, W),
+            Interval { lo: 0, hi: 9 }
+        );
+        assert_eq!(
+            refine_interval_unsigned(scry_interval::TOP, UGuardOp::Lt, 10, false, W),
+            scry_interval::TOP
+        );
+        // NEGATIVE CONTROL: the unconditional reading `x <u c ⇒ [0, c−1]`.
+        let failing: Vec<u32> = (0..=255u32)
+            .filter(|&c| {
+                (i8::MIN..=i8::MAX)
+                    .any(|x| (x as u8 as u32) < c && !(0 <= x as i64 && (x as i64) < c as i64))
+            })
+            .collect();
+        assert!(
+            failing.iter().all(|&c| c > 1 << (W - 1)),
+            "the unconditional reading fails only above 2^(w−1); failing = {failing:?}"
+        );
+        assert_eq!(
+            failing.len(),
+            127,
+            "exactly the 127 constants above 2^(w−1) fail"
+        );
     }
 }

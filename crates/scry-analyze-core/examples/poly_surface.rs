@@ -25,7 +25,7 @@ fn main() {
         .expect("usage: poly_surface <module.wasm>");
     let bytes = std::fs::read(&path).expect("read module");
     let r = analyze(
-        bytes,
+        bytes.clone(),
         AnalysisConfig {
             emit_diagnostics: true,
             ..Default::default()
@@ -241,6 +241,101 @@ fn main() {
         wide_set.len()
     );
     println!();
+    // ── FEAT-098 AC#4: WHY is the >=3-local count what it is? ──
+    // The wrap gate is the only thing standing between a `z := x + y` site and
+    // a 3-variable equality. This tallies the gate's converged decision per
+    // site (see `WrapGateSite`), so "N sites, M provable" is re-derivable here
+    // instead of quoted from a one-off instrumentation. FEAT-098's claim is
+    // that reading unsigned bounds-check guards moves M; the number decides.
+    use scry_analyze_core::{WrapGateOutcome, WrapGateShape};
+    println!("--- FEAT-098: the wrap gate at two-local arithmetic sites ---");
+    for (shape, label) in [
+        (WrapGateShape::AddLocals, "z := x + y"),
+        (WrapGateShape::SubLocals, "z := x - y"),
+        (WrapGateShape::AddConst, "z := x + c"),
+    ] {
+        let sites: Vec<_> = r
+            .wrap_gate_sites
+            .iter()
+            .filter(|s| s.shape == shape)
+            .collect();
+        let tally = |o: WrapGateOutcome| sites.iter().filter(|s| s.outcome == o).count();
+        let (proven, unproven, aliased) = (
+            tally(WrapGateOutcome::Proven),
+            tally(WrapGateOutcome::Unproven),
+            tally(WrapGateOutcome::Aliased),
+        );
+        let asked = proven + unproven;
+        println!(
+            "  {label:<12} sites reaching the gate : {asked:>5}  no-wrap PROVEN : {proven:>5}  \
+             ({:.2}%)   unproven : {unproven:>5}   (+{aliased} aliased, never asked)",
+            100.0 * proven as f64 / asked.max(1) as f64
+        );
+    }
+    println!();
+    // WHY each `z := x + y` site is unproven: name it, with the operand
+    // intervals the gate saw. A count that does not move is only reportable
+    // if the reason is inspectable; the operator stream is re-parsed here
+    // (wasmparser is a dependency of the crate) to recover the two operand
+    // locals from the `local.get a; local.get b; i32.add; local.set z` idiom.
+    let unproven_add: Vec<_> = r
+        .wrap_gate_sites
+        .iter()
+        .filter(|s| s.shape == WrapGateShape::AddLocals && s.outcome == WrapGateOutcome::Unproven)
+        .collect();
+    if !unproven_add.is_empty() {
+        let operands = operand_locals_of_add_sites(&bytes, &unproven_add);
+        println!("  unproven `z := x + y` sites (func, pc): operand intervals at the site");
+        for (s, ops) in unproven_add.iter().zip(operands) {
+            let name = r
+                .function_meta
+                .iter()
+                .find(|m| m.func_index == s.func_index)
+                .and_then(|m| m.name.clone())
+                .unwrap_or_default();
+            let pt = pts
+                .iter()
+                .find(|p| p.func_index == s.func_index && p.pc == s.pc);
+            let iv_of = |l: u32| {
+                pt.and_then(|p| p.locals.iter().find(|v| v.local_index == l))
+                    .map(|v| format!("{:?}", v.value))
+                    .unwrap_or_else(|| "<no point>".into())
+            };
+            match ops {
+                Some((a, b)) => println!(
+                    "    f{:<4} pc {:<6} {:<40.40} x=l{a} {}  y=l{b} {}",
+                    s.func_index,
+                    s.pc,
+                    name,
+                    iv_of(a),
+                    iv_of(b)
+                ),
+                None => println!(
+                    "    f{:<4} pc {:<6} {:<40.40} (operands not recovered)",
+                    s.func_index, s.pc, name
+                ),
+            }
+        }
+        println!();
+    }
+    // ── FEAT-098 AC#5 / FEAT-069: the OOB proven rate, from the same run ──
+    let oob: Vec<_> = r
+        .trap_checks
+        .iter()
+        .filter(|t| t.kind == scry_analyze_core::TrapKind::OutOfBounds)
+        .collect();
+    let oob_proven = oob
+        .iter()
+        .filter(|t| t.verdict == scry_analyze_core::TrapVerdict::ProvenSafe)
+        .count();
+    println!("--- FEAT-069 / FEAT-098 AC#5: out-of-bounds trap checks ---");
+    println!(
+        "  OOB obligations : {}   ProvenSafe : {oob_proven}   PotentialTrap : {}   proven rate : {:.2}%",
+        oob.len(),
+        oob.len() - oob_proven,
+        100.0 * oob_proven as f64 / oob.len().max(1) as f64
+    );
+    println!();
     println!("--- SHARPER: is the wide point actually downstream of a gap? ---");
     println!("  wide points with NO gap at or before them : {upstream_clean}");
     println!("  wide points downstream of a gap in-func   : {downstream_of_gap}");
@@ -277,4 +372,58 @@ fn main() {
     println!("ceiling from ABOVE; it does not show any point would actually improve.");
     println!("(A point where the octagon is TOP is TOP for polyhedra too: both ride");
     println!(" the same fixpoint and the same region havoc.)");
+}
+
+/// For each `(func_index, pc)` site, the two operand locals of the
+/// `local.get a; local.get b; i32.add; local.set/tee z` idiom ending at `pc`,
+/// recovered by re-walking the code section with wasmparser. `None` when the
+/// ops at that pc are not that idiom (the analyzer's own classifier is the
+/// authority; this is a display aid).
+fn operand_locals_of_add_sites(
+    bytes: &[u8],
+    sites: &[&scry_analyze_core::WrapGateSite],
+) -> Vec<Option<(u32, u32)>> {
+    use wasmparser::{Operator, Parser, Payload};
+    let mut import_funcs = 0u32;
+    let mut bodies: Vec<Vec<Operator<'_>>> = Vec::new();
+    for payload in Parser::new(0).parse_all(bytes) {
+        match payload.expect("parse") {
+            Payload::ImportSection(s) => {
+                for imp in s.into_imports() {
+                    if matches!(imp.expect("import").ty, wasmparser::TypeRef::Func(_)) {
+                        import_funcs += 1;
+                    }
+                }
+            }
+            Payload::CodeSectionEntry(body) => {
+                let ops: Vec<Operator<'_>> = body
+                    .get_operators_reader()
+                    .expect("ops")
+                    .into_iter()
+                    .collect::<Result<_, _>>()
+                    .expect("ops");
+                bodies.push(ops);
+            }
+            _ => {}
+        }
+    }
+    sites
+        .iter()
+        .map(|s| {
+            let ops = bodies.get(s.func_index.checked_sub(import_funcs)? as usize)?;
+            let pc = s.pc as usize;
+            match (
+                ops.get(pc.checked_sub(3)?),
+                ops.get(pc - 2),
+                ops.get(pc - 1),
+            ) {
+                (
+                    Some(Operator::LocalGet { local_index: a }),
+                    Some(Operator::LocalGet { local_index: b }),
+                    Some(Operator::I32Add),
+                ) => Some((*a, *b)),
+                _ => None,
+            }
+        })
+        .collect()
 }
