@@ -65,6 +65,23 @@ jobs:
             archive: tar.gz
             cross: true
             can_run: false   # cross-compiled: not executable on an x86 builder
+          # STATIC musl builds alongside the gnu ones (scry#223). The gnu
+          # assets are dynamically linked against whatever glibc the runner
+          # image carries — currently a 2.39 floor on ubuntu-latest, which
+          # excludes Ubuntu 22.04 (2.35), Debian 12 (2.36), RHEL 9 / AL2023
+          # (2.34) and every musl distro. A varve realm layer's portability is
+          # the MAXIMUM floor across its payloads, so one 2.39 payload sets the
+          # floor for the whole toolchain.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+            musl: true
+            can_run: true    # static x86_64: runs on the x86_64 builder
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+            can_run: false   # cross-compiled: not executable on an x86 builder
           - target: x86_64-apple-darwin
             os: macos-14
             archive: tar.gz
@@ -89,6 +106,10 @@ jobs:
       - name: Install cross
         if: matrix.cross
         run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Install musl toolchain
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build (native)
         if: ${{ !matrix.cross }}
@@ -127,6 +148,32 @@ jobs:
       - name: Version check SKIPPED (cross-compiled)
         if: ${{ !matrix.can_run }}
         run: echo "::warning::${{ matrix.target }} is cross-compiled; --version not asserted on this target"
+
+      # A musl asset that is dynamically linked is worse than no musl asset:
+      # it carries the triple that promises portability and does not deliver
+      # it, and nothing downstream would notice. Assert the property the
+      # target exists for, on the binary itself.
+      - name: Verify musl binaries are statically linked
+        if: matrix.musl
+        run: |
+          set -euo pipefail
+          for bin in scry-mcp scry-viz; do
+            P="target/${{ matrix.target }}/release/${bin}"
+            OUT="$(file -b "$P")"
+            case "$OUT" in
+              *"statically linked"*) echo "::notice::$bin is static: $OUT" ;;
+              *) echo "::error::$bin is NOT statically linked — musl asset would not be portable: $OUT"; exit 1 ;;
+            esac
+            # Belt and braces: a static binary has no interpreter and no
+            # GLIBC_* version symbols. Either appearing means the build
+            # silently fell back to the host libc.
+            if readelf -l "$P" 2>/dev/null | grep -q "program interpreter"; then
+              echo "::error::$bin has a program interpreter — it is dynamically linked"; exit 1
+            fi
+            if strings -a "$P" | grep -qoE 'GLIBC_[0-9.]+'; then
+              echo "::error::$bin references GLIBC symbols — it is not a musl static build"; exit 1
+            fi
+          done
 
       - name: Package
         shell: bash

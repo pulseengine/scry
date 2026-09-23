@@ -1,0 +1,60 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-099
+    type: feature
+    title: "v3.4 — Static musl Linux binaries, so the first native release is not glibc-locked"
+    status: proposed
+    release: v3.4.0
+    description: >
+      DD-023 added native binaries (scry#221) targeting `x86_64-unknown-linux-gnu`
+      and `aarch64-unknown-linux-gnu` on `ubuntu-latest`, so they link
+      dynamically against that image's glibc. The sibling measurement on the
+      same runner class puts that floor at 2.39, which excludes Ubuntu 22.04
+      (2.35), Debian 12 (2.36), RHEL 9 / Amazon Linux 2023 (2.34) and every
+      musl distro.
+
+      TIMING IS THE POINT. scry's native binaries have NEVER been released —
+      the first ones ship with v3.4.0. Every sibling (rivet#980, witness#234,
+      meld#432, synth#1349, sigil#279) is retrofitting this onto assets already
+      published; scry can ship correct from its first native release instead.
+      No repo in the org publishes a musl asset yet.
+
+      IT MATTERS MORE HERE THAN FOR A TYPICAL CLI. `scry-mcp` is an MCP server
+      that consumers launch on THEIR machines. A glibc-2.39 floor on the
+      adoption lever is the same class of defect as shipping it only via
+      `cargo install`, which DD-023 exists to fix. And per rivet#980 a varve
+      realm layer's portability is the MAXIMUM floor across its payloads, so a
+      single 2.39 payload sets the floor for the whole pinned toolchain an
+      air-gapped consumer installs.
+    tags: [packaging, distribution, musl, portability, release-machinery, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a release tag, When the matrix runs, Then `scry-<tag>-x86_64-unknown-linux-musl.tar.gz` and `scry-<tag>-aarch64-unknown-linux-musl.tar.gz` are produced ALONGSIDE the gnu assets, with triple-based naming so varve picks them up by a one-line manifest change."
+        - "Given a musl build, When it completes, Then each binary is asserted STATICALLY LINKED by three independent checks on the binary itself — `file` reports `statically linked`, `readelf -l` shows NO program interpreter, and `strings` finds NO `GLIBC_*` symbols. Any one failing fails the build. A musl asset that is dynamically linked is WORSE than no musl asset: it carries a triple promising portability and does not deliver it, and nothing downstream would notice."
+        - "Given `x86_64-unknown-linux-musl`, When built, Then the `--version == tag` assertion RUNS (a static x86_64 binary executes on the x86_64 builder). Given `aarch64-unknown-linux-musl`, Then the assertion is declared-skipped with a `::warning::`, never silently omitted."
+        - "Given the gnu targets, When this lands, Then they are UNCHANGED and still shipped — musl is added alongside, not as a replacement. A consumer on a recent glibc distro keeps a dynamically-linked build."
+      residual: >
+        THE GLIBC FLOOR IS NOT MEASURED ON SCRY'S OWN ARTIFACT, because scry has
+        never released a native Linux binary — there is nothing to inspect. The
+        2.39 figure is the sibling measurement on the same `ubuntu-latest`
+        runner class (rivet#980, measured 2026-09-22), carried across as the
+        expected floor rather than an observed one. The first v3.4.0 release
+        makes it measurable; if the gnu asset's floor turns out different, this
+        residual is the thing to correct.
+
+        THE STATIC CHECK RUNS ONLY ON THE MUSL TARGETS. Nothing asserts what the
+        GNU assets' floor actually is, so a runner-image change that moved it
+        would pass unnoticed — exactly the "which image the workflow happened to
+        use" drift rivet#980 identifies as unintended. A `strings | grep GLIBC_`
+        floor check on the gnu assets is the obvious follow-up and is NOT in
+        this feature.
+
+        MUSL BUILDS ARE NOT FASTER OR SMALLER BY DEFAULT and may differ in
+        allocator behaviour under load. Nothing here measures scry's runtime on
+        musl versus gnu; the claim is portability only.
+    links:
+      - type: traces-to
+        target: REQ-001
+      - type: traces-to
+        target: DD-023
