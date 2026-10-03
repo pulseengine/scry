@@ -17,3 +17,10 @@ target/
 # uploaded by CI as an artifact; 40 MB of it reached a commit once because a
 # `git add -A` swept the agent's untracked output in.
 self-history/
+
+# Python bytecode from the tools/ gate family (check-gate-coverage,
+# check-required-checks, claim-check, ...). tools/ is tracked and CI runs
+# these on every PR, so every contributor generates this locally. Repo-wide
+# noise, not local-only, hence .gitignore rather than .git/info/exclude.
+__pycache__/
+*.py[cod]
