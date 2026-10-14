@@ -5651,13 +5651,15 @@ impl Interp<'_, '_> {
         // Guard shape, longest match first.
         let (guard, depth, next) = match (ops.get(pc + 1)?, ops.get(pc + 2), ops.get(pc + 3)) {
             (Operator::I32Const { value }, Some(cmp), Some(Operator::BrIf { relative_depth })) => {
+                // FEAT-098: the constant is read as the OPERATOR reads it —
+                // sign-extended for the signed family, raw u32 bits for `*_u`.
+                // The `?` on the unsigned arm is what clippy::question_mark
+                // wants (rust 1.99) and is equivalent: a comparison in neither
+                // family is not a guard shape.
                 let guard = if let Some(op) = guard_op(cmp) {
                     Guard::Signed(op, *value as i64)
-                } else if let Some(op) = guard_op_unsigned(cmp) {
-                    // FEAT-098: the constant is read as the operator reads it.
-                    Guard::Unsigned(op, *value as u32)
                 } else {
-                    return None;
+                    Guard::Unsigned(guard_op_unsigned(cmp)?, *value as u32)
                 };
                 (guard, *relative_depth, pc + 4)
             }
