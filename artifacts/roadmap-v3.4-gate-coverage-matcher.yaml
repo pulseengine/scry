@@ -1,0 +1,72 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-101
+    type: feature
+    title: "v3.4 — The gate-coverage guard stops counting text that merely mentions a gate (scry#208)"
+    status: proposed
+    release: v3.4.0
+    description: >
+      `tools/check-gate-coverage.py` exists so scry#141 cannot recur — CI once
+      ran `cargo test` for 4 of 12 crates and 222 of 273 tests never executed.
+      It matched with `if tool in line`, a bare substring test, so text that
+      MENTIONS a gate counted as RUNNING one.
+
+      VERIFIED BY EXECUTION BEFORE THE FIX. Three shapes each credited
+      `{a, b}` as fully covered:
+
+        * a commented-out invocation inside a `run: |` block;
+        * a step carrying `continue-on-error: true`, which cannot fail;
+        * the tool name inside a string — `echo "run cargo test -p a ..."`.
+
+      The third was not in scry#208; it surfaced writing the red case for the
+      other two. A job-level `continue-on-error` was equally uncounted-for.
+
+      THE SCRIPT'S OWN DOCSTRING already listed "a predicate that counted a
+      comment as a gate" among the failures its YAML rewrite escaped. The
+      rewrite fixed the awk-range bug (scry#157) and reintroduced that one. Its
+      `--self-test` never fed it a comment, which is the recurring shape in
+      this repo's findings: a self-test proves the function discriminates on
+      the inputs its author already imagined.
+
+      TWO MEASUREMENTS DURING THE MUTATION CHECK CHANGED THE TESTS.
+
+      (1) Deleting the comment-stripping line SURVIVED the first four cases.
+      Requiring the tool at the START of a segment already rejects a line
+      beginning with `#`, so the two defences overlap and nothing exercised
+      the gap — a comment carrying a shell SEPARATOR (`# or: ... || cargo test
+      -p b`), which splits into a segment that does start with the tool.
+
+      (2) The replacement case still did not kill it, because in a PLAIN YAML
+      scalar (`run: cmd  # note`) YAML eats the comment before this script sees
+      it. A shell comment only reaches the matcher inside a `run: |` block
+      scalar. Both new cases were rewritten as block scalars, and only then
+      did the mutation die. A test that cannot reach the code it covers is not
+      a weaker test; it is not a test.
+    tags: [gate, gate-potency, tooling, issue-driven, scry208, scry141, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a commented-out `cargo test -p a -p b` inside a `run: |` block, When the guard runs, Then it credits NOTHING. VERIFIED red before the fix (credited {a, b}) and green after."
+        - "Given an invocation in a step or job carrying `continue-on-error: true`, When the guard runs, Then it credits nothing — a step that cannot fail is not a gate, which is scry#207 one level up."
+        - "Given `echo \"remember to run cargo test -p a -p b\"`, When the guard runs, Then it credits nothing. Not in the issue; found writing the red case."
+        - "Given a package named only in a trailing comment (`cargo test -p a  # not -p b yet`, block scalar), When the guard runs, Then it credits {a} and not {a, b} — PKG.findall must not mine the comment."
+        - "POSITIVE DIRECTION, or the fix passes by rejecting everything: six real forms are still credited — plain, `VAR=1 cargo test`, `cargo +1.99.0 test`, chained after `&&`, piped into `tee`, and the real ci.yml, which still reports all 13 publishable crates in BOTH gates."
+        - "MUTATION-CHECKED: 7 mutations, 7 killed, unmutated control green. Includes the over-strict mutation (`invokes()` always False -> 10 cases red), so the suite constrains both directions."
+      residual: >
+        The guard credits an invocation in ANY job that can fail, not only in a
+        job whose name is a REQUIRED status context. A `cargo test -p x` in a
+        non-required job still counts as coverage for x. Closing that needs the
+        required-check list, which lives in `tools/check-required-checks.py`
+        (itself scry#217). Not merged here.
+
+        Comment stripping is textual: a literal `#` inside a quoted shell
+        string would truncate the line. No current workflow line has one, and
+        the alternative is a shell parser, which is not worth it for this.
+
+        This repairs the GUARD, not the gate it guards. The question scry#208
+        raises — what ran green while the guard was blind — is answered by the
+        guard having been correct in practice on the real ci.yml throughout:
+        all 13 crates were genuinely in both gates. Nothing shipped behind it.
+    links:
+      - type: traces-to
+        target: REQ-010
