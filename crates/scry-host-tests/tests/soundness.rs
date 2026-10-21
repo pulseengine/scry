@@ -56,12 +56,24 @@
 //! self-contained, `interval` is declared locally), but dynamic `Val`
 //! remains the simplest no-drift binding.
 //!
-//! Graceful skip: if `bazel-bin/scry.wasm` is missing (e.g. dev
-//! checkout without a Bazel build) the test prints a notice and
-//! returns rather than failing — `#[ignore]` would also skip when
-//! we actually wanted to run, which defeats CI's whole point. CI
-//! always runs `bazel build //:scry` before `cargo test` so the
-//! component is present.
+//! ## scry#211 (v3.4): the missing-component skip is fail-CLOSED
+//!
+//! The FEAT-015 paragraph above says "there is no path that quietly
+//! downgrades to concrete-only". That was true of the skip FEAT-015
+//! deleted (the wac-limitation one) and NOT true of the repo as a whole:
+//! a second skip, on the component FILE being absent, sat in front of all
+//! ten fixture oracles and returned `Ok(())` before `run_analyzer` was
+//! reached. The claim had quietly widened to cover a path it never
+//! examined.
+//!
+//! The skip still exists, because `#[ignore]` would also skip when we
+//! actually want to run, and a dev checkout without a Bazel build is a
+//! legitimate place to run the concrete half. But it is now armed:
+//! when `CI` is set — which GitHub Actions does for every job, and which
+//! no edit to `.github/workflows/` can take away — an absent component
+//! PANICS instead of skipping. `SCRY_ALLOW_MISSING_COMPONENT=1` is the
+//! deliberate escape. See `missing_component_is_fatal` and the two
+//! `feat211_*` oracles at the foot of this file.
 
 use std::path::{Path, PathBuf};
 
@@ -165,15 +177,81 @@ fn fixtures_dir() -> PathBuf {
 /// test calls this and returns early on `true` rather than panicking
 /// — see module-doc rationale.
 fn component_missing_skip(path: &Path) -> bool {
-    if !path.exists() {
-        eprintln!(
-            "::notice title=scry-host-tests::skipping — composed scry component not found at {}; \
-             run `bazel build //:scry` first (CI does this before cargo test)",
+    if path.exists() {
+        return false;
+    }
+
+    let ci = std::env::var("CI").ok();
+    let require = std::env::var("SCRY_REQUIRE_COMPONENT").ok();
+    let allow = std::env::var("SCRY_ALLOW_MISSING_COMPONENT").ok();
+
+    if missing_component_is_fatal(ci.as_deref(), require.as_deref(), allow.as_deref()) {
+        panic!(
+            "scry#211: composed scry component not found at {} — and this run REQUIRES it.\n\
+             \n\
+             Without this check the ten fixture soundness oracles return Ok(()) before the \
+             analyzer is ever invoked, and the Test gate reports green over an analyzer it \
+             never ran. CI builds `//:scry` before `cargo test`; if that step was removed, \
+             reordered, renamed its output, or silently produced nothing, this panic is the \
+             symptom.\n\
+             \n\
+             To skip deliberately (local iteration without a Bazel build), set \
+             SCRY_ALLOW_MISSING_COMPONENT=1.",
             path.display()
         );
-        true
-    } else {
-        false
+    }
+
+    eprintln!(
+        "::notice title=scry-host-tests::skipping — composed scry component not found at {}; \
+         run `bazel build //:scry` first (CI does this before cargo test)",
+        path.display()
+    );
+    true
+}
+
+/// scry#211: is an ABSENT component a skip, or a hard failure?
+///
+/// Pure, and takes the three environment values as already-read
+/// `Option<&str>` rather than reading them itself, so the policy can be
+/// exercised exhaustively without mutating the process environment —
+/// `std::env::set_var` is both `unsafe` in edition 2024 and racy against
+/// the other tests in this binary, which run on sibling threads.
+///
+/// The fatal path is armed by the AMBIENT `CI` variable. That is a
+/// deliberate choice over the more obvious alternative — an explicit
+/// `SCRY_REQUIRE_COMPONENT: "1"` set on the Test job in `ci.yml` —
+/// because GitHub Actions sets `CI` for every job itself, so no edit to
+/// `.github/workflows/` can take this gate away. scry#209 (one typo in a
+/// `claims:` key disarms the doc gate) and scry#217 (a workflow the
+/// required-checks script never reads) are both holes that a one-line
+/// file edit opens. This one cannot be opened that way.
+///
+/// `SCRY_REQUIRE_COMPONENT` is still honoured so the check can be armed
+/// outside CI; `SCRY_ALLOW_MISSING_COMPONENT` is the deliberate escape and
+/// outranks both.
+fn missing_component_is_fatal(
+    ci: Option<&str>,
+    require: Option<&str>,
+    allow: Option<&str>,
+) -> bool {
+    if truthy(allow) {
+        return false;
+    }
+    truthy(ci) || truthy(require)
+}
+
+/// Env-var truthiness, shared by the three inputs above.
+///
+/// Unset, empty, `0` and `false` (any case) are all "not set"; anything
+/// else is set. GitHub writes `CI=true`; a developer who writes `CI=0`
+/// means it, and `CI=` is what a cleared variable looks like.
+fn truthy(v: Option<&str>) -> bool {
+    match v {
+        None => false,
+        Some(s) => {
+            let s = s.trim();
+            !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
+        }
     }
 }
 
@@ -1211,4 +1289,210 @@ fn fixture_16_runtime_peak_within_bound() -> Result<()> {
         "scry-host-tests: fixture-16 reported bound {bound:?} >= measured peak {peak} bytes (sound)"
     );
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// scry#211 — the fail-open skip, and the oracle that closes it.
+//
+// Through v3.3 a missing `bazel-bin/scry.wasm` made all ten fixture
+// oracles below return `Ok(())` before `run_analyzer` was ever called.
+// They printed `test … ok`, the Test job went green, and nothing in the
+// log distinguished "the analyzer is sound" from "the analyzer never
+// ran". Observed in the wild: on a dev checkout one sibling
+// (`feat013_live_analyze_gate`, which hard-fails by construction) went
+// red while the other ten skipped silently through the same absent file.
+//
+// Two oracles below, and they test different things on purpose:
+//
+//   * `feat211_missing_component_policy` exercises the DECISION, over
+//     every interesting environment shape. Mutation-checked — see the
+//     table's trailing column for which mutation each row kills.
+//   * `feat211_fatal_path_is_wired` exercises the WIRING, by re-execing
+//     this binary in a child process with a component path that cannot
+//     exist. A pure policy function nobody calls is scry#217's shape
+//     (defined but not enforced), so the decision being right is not
+//     enough — something has to actually consult it.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn feat211_missing_component_policy() {
+    // (CI, SCRY_REQUIRE_COMPONENT, SCRY_ALLOW_MISSING_COMPONENT,
+    //  fatal?, what this row pins)
+    #[allow(clippy::type_complexity)]
+    let cases: &[(Option<&str>, Option<&str>, Option<&str>, bool, &str)] = &[
+        // ── the two shapes that matter in practice ──────────────────
+        (None, None, None, false, "bare local checkout still skips"),
+        (
+            Some("true"),
+            None,
+            None,
+            true,
+            "GitHub Actions sets CI=true",
+        ),
+        // ── other CI systems, and the explicit opt-in ───────────────
+        (Some("1"), None, None, true, "CI=1 is also CI"),
+        (None, Some("1"), None, true, "armed without CI"),
+        (Some("true"), Some("1"), None, true, "both armed"),
+        // ── the deliberate escape outranks both arming paths ────────
+        (Some("true"), None, Some("1"), false, "escape beats CI"),
+        (None, Some("1"), Some("1"), false, "escape beats the opt-in"),
+        (
+            Some("true"),
+            Some("1"),
+            Some("1"),
+            false,
+            "escape beats both",
+        ),
+        (
+            None,
+            None,
+            Some("1"),
+            false,
+            "escape with nothing to escape",
+        ),
+        // ── falsey spellings are NOT set ────────────────────────────
+        (Some(""), None, None, false, "CI= is a cleared variable"),
+        (Some("0"), None, None, false, "CI=0 means no"),
+        (Some("false"), None, None, false, "CI=false means no"),
+        (
+            Some("FALSE"),
+            None,
+            None,
+            false,
+            "and it is case-insensitive",
+        ),
+        (Some("  "), None, None, false, "whitespace is empty"),
+        (None, Some("0"), None, false, "opt-in explicitly disabled"),
+        // ── a falsey escape does NOT disarm ─────────────────────────
+        (
+            Some("true"),
+            None,
+            Some("0"),
+            true,
+            "ALLOW=0 is not an escape",
+        ),
+        (
+            Some("true"),
+            None,
+            Some(""),
+            true,
+            "ALLOW= is not an escape",
+        ),
+        (
+            Some("true"),
+            None,
+            Some("false"),
+            true,
+            "ALLOW=false is not either",
+        ),
+    ];
+
+    let mut failures = Vec::new();
+    for &(ci, require, allow, expect, why) in cases {
+        let got = missing_component_is_fatal(ci, require, allow);
+        if got != expect {
+            failures.push(format!(
+                "  CI={ci:?} REQUIRE={require:?} ALLOW={allow:?} \
+                 -> fatal={got}, expected {expect}  ({why})"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "scry#211 policy table: {} of {} rows wrong:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+
+    // The table above must contain BOTH verdicts, or it is a tautology
+    // dressed as a table — the vacuous-oracle shape this repo keeps
+    // re-finding. (A table of all-false rows passes against a function
+    // that returns false unconditionally.)
+    assert!(
+        cases.iter().any(|c| c.3) && cases.iter().any(|c| !c.3),
+        "scry#211 policy table must exercise both outcomes"
+    );
+}
+
+/// The negative control (the gate goes red) paired with the positive
+/// control (it is correctly inert when told to be). Either alone proves
+/// little: without the red case the check may be vacuous; without the
+/// green case the red may be coming from the environment rather than
+/// from the property.
+///
+/// Runs in a child process because the thing under test reads the real
+/// process environment and panics — neither of which can be done in-
+/// process without racing the sibling tests in this binary.
+#[test]
+fn feat211_fatal_path_is_wired() {
+    // When this IS the child, do the thing and let the panic escape.
+    if std::env::var("SCRY_211_CHILD").is_ok() {
+        let path = component_path();
+        let skipped = component_missing_skip(&path);
+        // Reached only on the escape-hatch (positive-control) run.
+        assert!(
+            skipped,
+            "child: expected a skip, component unexpectedly present"
+        );
+        return;
+    }
+
+    let exe = std::env::current_exe().expect("current test binary");
+    // A path that cannot exist, so the result does not depend on whether
+    // this machine happens to have run `bazel build //:scry`.
+    let absent = std::env::temp_dir().join("scry-211-no-such-component-9f3c1a.wasm");
+    assert!(
+        !absent.exists(),
+        "fixture path must not exist: {}",
+        absent.display()
+    );
+
+    let child = |extra: &[(&str, &str)]| {
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args(["feat211_fatal_path_is_wired", "--exact", "--nocapture"])
+            .env("SCRY_211_CHILD", "1")
+            .env("SCRY_COMPONENT_PATH", &absent)
+            .env_remove("SCRY_REQUIRE_COMPONENT")
+            .env_remove("SCRY_ALLOW_MISSING_COMPONENT")
+            .env_remove("CI");
+        for (k, v) in extra {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("re-exec the test binary")
+    };
+
+    // ── negative control: under CI, an absent component is FATAL ─────
+    let red = child(&[("CI", "true")]);
+    assert!(
+        !red.status.success(),
+        "scry#211 NEGATIVE CONTROL FAILED: an absent component under CI=true did not fail \
+         the test. The fail-open hole is back — the ten fixture oracles would skip and the \
+         Test gate would report green over an analyzer that never ran.\n--- child stdout ---\n{}\n\
+         --- child stderr ---\n{}",
+        String::from_utf8_lossy(&red.stdout),
+        String::from_utf8_lossy(&red.stderr),
+    );
+    let red_out = format!(
+        "{}{}",
+        String::from_utf8_lossy(&red.stdout),
+        String::from_utf8_lossy(&red.stderr)
+    );
+    assert!(
+        red_out.contains("scry#211"),
+        "scry#211: the child failed, but not with this check's message — so the red may be \
+         coming from something else entirely.\n{red_out}"
+    );
+
+    // ── positive control: the escape hatch makes it correctly inert ──
+    let green = child(&[("CI", "true"), ("SCRY_ALLOW_MISSING_COMPONENT", "1")]);
+    assert!(
+        green.status.success(),
+        "scry#211 POSITIVE CONTROL FAILED: with SCRY_ALLOW_MISSING_COMPONENT=1 the same \
+         absent component should skip cleanly. A check that fails in both configurations \
+         has not been shown to depend on the property at all.\n--- child stdout ---\n{}\n\
+         --- child stderr ---\n{}",
+        String::from_utf8_lossy(&green.stdout),
+        String::from_utf8_lossy(&green.stderr),
+    );
 }
