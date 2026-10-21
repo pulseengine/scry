@@ -60,7 +60,12 @@ artifacts:
       the composed //:scry component and concretely in wasmtime, asserting
       every concrete result lies inside the reported abstract interval — the
       no-under-approximation property REQ-001 defines. Gated in CI by the
-      Test job (cargo test --package scry-host-tests, ci.yml). The interval
+      Test job (cargo test --package scry-host-tests, ci.yml) — and until
+      FEAT-100 that gating was weaker than this sentence: with the composed
+      component absent, every fixture listed above returned Ok(()) before the
+      analyzer was called and the job still went green (scry#211). The CI runs
+      were checked and did exercise the oracles, so this evidence stands; the
+      gate is now fail-closed so it cannot stop doing so unnoticed. The interval
       transfer functions carry the admit-free Rocq soundness proof
       proofs/rocq/Soundness.v, gated by rocq-proofs.yml
       (bazel test //proofs/rocq/...).

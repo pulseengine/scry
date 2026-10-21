@@ -1,0 +1,90 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-100
+    type: feature
+    title: "v3.4 — The soundness oracles cannot skip themselves green (scry#211)"
+    status: proposed
+    release: v3.4.0
+    description: >
+      scry#211: every one of the ten fixture soundness oracles in
+      `crates/scry-host-tests/tests/soundness.rs` opened with
+      `if component_missing_skip(&comp_path) { return Ok(()); }`. With
+      `bazel-bin/scry.wasm` absent they returned `Ok(())` before
+      `run_analyzer` was ever called, printed `test ... ok`, and the required
+      `Test` context went green over an analyzer that never ran. These are the
+      tests that carry scry's headline soundness claim.
+
+      MEASURED FIRST, AND THE MEASUREMENT CORRECTED THE PREMISE. The hole is
+      real but it was NOT firing in CI. Read from the Test job of run
+      38971547286 (main, a2567b9): all eleven soundness tests appear by name
+      with `... ok`, the suite takes 100.28s, and the per-fixture stdout
+      carries concrete analyzer output — `fixture-07 ... abstract local0 =
+      [100, 100] (bounded, non-vacuous)`, `fixture-16 reported bound Bytes(48)
+      >= measured peak 48 bytes (sound)`. Those lines exist only downstream of
+      a real `analyze()` call. So no shipped evidence rests on a vacuous run;
+      the defect is that nothing PREVENTED one.
+
+      Note what did NOT establish that. `test ... ok` proves only that the
+      harness entered the function, because the skip path also returns `Ok`.
+      An absence control on the skip notice is void: `grep -c '::notice'` over
+      the whole job log returns 0, so GitHub strips workflow commands and "no
+      skip happened" is indistinguishable from "skipped silently". Only the
+      per-fixture stdout discriminates.
+
+      ARMED BY THE AMBIENT `CI` VARIABLE, deliberately, over the more obvious
+      `SCRY_REQUIRE_COMPONENT: "1"` on the Test job. GitHub Actions sets `CI`
+      for every job itself, so no edit to `.github/workflows/` can take this
+      gate away. scry#209 (one typo in a `claims:` key disarms the doc gate)
+      and scry#217 (a required-checks script that reads 2 of 6 workflow files)
+      are both holes a one-line file edit opens; this one cannot be opened
+      that way. `SCRY_ALLOW_MISSING_COMPONENT=1` remains as the deliberate
+      escape for a dev checkout with no Bazel build, which is a legitimate way
+      to run the concrete half.
+
+      THE DOC CLAIM WAS ALSO WRONG, and is corrected in the same change. The
+      module header said FEAT-015 left "no path that quietly downgrades to
+      concrete-only". FEAT-015 deleted the wac-limitation skip; the
+      missing-file skip was never in its scope and the sentence absorbed it
+      anyway — a repair re-blessing an adjacent claim.
+    tags: [gate, gate-potency, soundness, oracle, issue-driven, scry211, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given `CI` is set and the composed component is absent, When the soundness suite runs, Then the ten fixture oracles FAIL rather than skip. VERIFIED on a machine with no `bazel-bin/scry.wasm`: `CI=true cargo test -p scry-host-tests --test soundness` turns 11 tests red (10 former silent skips plus `feat013_live_analyze_gate`, which already failed)."
+        - "Given `CI` is NOT set, When the same suite runs on a dev checkout, Then the ten oracles still skip with a notice and the suite does not regress. VERIFIED: 12 passed / 1 failed, the one failure being the pre-existing `feat013_live_analyze_gate`, identical to main."
+        - "Given `SCRY_ALLOW_MISSING_COMPONENT=1` alongside `CI`, When the suite runs, Then it skips — the escape hatch outranks both arming paths. VERIFIED as the POSITIVE control inside `feat211_fatal_path_is_wired`; a check that fails in every configuration has not been shown to depend on the property."
+        - "Given the policy function, When exercised over 18 environment shapes, Then every row holds — including that `CI=`, `CI=0` and `CI=false` are NOT set, and that `SCRY_ALLOW_MISSING_COMPONENT=0` is NOT an escape. The table asserts it contains both verdicts, so it cannot pass against a function returning a constant."
+        - "MUTATION-CHECKED, keyed on the process EXIT CODE: 5 mutations, 5 killed, unmutated control green. Escape hatch deleted -> killed; `CI` no longer arms -> killed; `truthy` stops treating \"0\" as false -> killed; escape hatch ignored -> killed; and the real regression, the skip wired back to fail-open -> killed."
+        - "The two oracles are COMPLEMENTARY, measured per-test rather than assumed: the fail-open regression is caught ONLY by `feat211_fatal_path_is_wired` (the policy table passes), and the `truthy` detail ONLY by `feat211_missing_component_policy` (the wiring test passes). A correct policy function that nothing calls is scry#217's shape."
+      residual: >
+        This closes the FILE-ABSENT path only. A component that exists but is
+        stale, truncated, or built from different sources still loads and still
+        reports green; nothing here checks that `bazel-bin/scry.wasm`
+        corresponds to the current tree. That is the same wrong-subject class
+        as scry#215, and is not addressed.
+
+        The arming signal is `CI`, so a self-hosted or non-GitHub runner that
+        does not set it falls back to skipping. `SCRY_REQUIRE_COMPONENT=1`
+        exists for that case but must be set deliberately — which is the
+        droppable shape this design otherwise avoids. Relevant if scry#227's
+        fleet migration happens.
+
+        `Test` is NOT shown potent by this change, and the wording matters.
+        Run 38971547286 is a POSITIVE control — it shows the oracles execute
+        and emit real analyzer output. Potency needs a negative control: a Test
+        job observed RED in CI with the job unchanged since. That has not been
+        harvested, so `Test` stands at "executes its oracles in CI; red side
+        unproven".
+
+        Two of the twelve required contexts ARE potent on harvested reds, with
+        the job definition unchanged since each: `Clippy` (run 35822262530 at
+        b5ce3a6 — Clippy red, the other eleven green, which is also the
+        positive control) and `cargo-deny` (run 38971547286 — red, eleven
+        green). The remaining nine are UNPROVEN, which is an honest state and
+        not a pass. Separately confirmed by reading all six workflow files:
+        no required context carries a paths filter, a job-level `if:`, or
+        `continue-on-error`, so the skipped-counts-as-passed hole does not
+        apply to the required set.
+    links:
+      - type: traces-to
+        target: REQ-001
