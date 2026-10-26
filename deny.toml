@@ -24,6 +24,30 @@ ignore = [
     # done and did not clear it; it needs a rayon/crossbeam-deque bump, which
     # wasmtime 47 does not pull.
     "RUSTSEC-2026-0204",
+    # RUSTSEC-2026-0391 / -0398 / -0403 / -0410 — the zstd family: stream
+    # encoder/decoder context reuse leaking the previous stream's input
+    # (0391), `Seekable::decompress` setting a Vec length past its capacity
+    # for an out-of-range offset (0398, needs the `seekable` feature),
+    # uninitialized memory on a failed legacy-frame decompression (0403), and
+    # the zstd-sys wasm32 allocator shim writing its size header to address 0
+    # on allocation failure (0410). All four enter the graph ONLY through
+    # scry-host-tests → wasmtime → wasmtime-internal-cache → zstd; that crate
+    # is `publish = false` and is in ZERO published scry-sai-* libraries, and
+    # the analyzer crates carry no wasmtime/zstd dependency, so the shipped
+    # scry.wasm does not contain zstd-sys at all (0410's wasm32 shim never
+    # compiles in). wasmtime-internal-cache compresses its cache blobs with
+    # one-shot encode/decode — not the streaming `with_context` constructors
+    # (0391), not the `seekable` feature (0398), and not legacy v0.4–v0.7
+    # frames (0403). No reachable patched release exists yet: the fixes need
+    # zstd >= 0.14.3 / zstd-safe >= 8.2.0, but wasmtime-internal-cache 48.0.7
+    # pins zstd ^0.13, so clearing them needs a wasmtime 49+ bump, which is a
+    # separate decision from this PR. RE-EVALUATED 2026-10-26 when the
+    # advisories landed in the DB (published 2026-10-26T13:45Z; main's last
+    # green deny run predates them).
+    "RUSTSEC-2026-0391",
+    "RUSTSEC-2026-0398",
+    "RUSTSEC-2026-0403",
+    "RUSTSEC-2026-0410",
 ]
 
 [licenses]

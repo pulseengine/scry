@@ -62,6 +62,71 @@ artifacts:
         class today; this removes ONE named cause of that. Whether removing it
         is sufficient is unmeasured, and AC#4 is written so that "the number
         did not move" is a reportable outcome rather than a silent one.
+
+        BUILT AND MEASURED (2026-09-23, branch feat098-unsigned-guard-refinement).
+        AC#1-#3 met: constant-operand `lt_u/le_u/gt_u/ge_u; br_if` refines the
+        `<u c` / `<=u c` outcome to [0, c-1] / [0, c] under the side condition
+        (c <= 2^31, resp. c < 2^31), never the `>=u` outcome; a local already
+        known non-negative gets the full signed refinement (unsigned = signed
+        there); the relational consumers (`refine_octagon_rel`,
+        `refine_poly_rel`) were NOT touched — they sit on the two-local path,
+        which stays signed-only, and the octagon/poly benefit through the
+        interval injection and the wrap gate. i64 unchanged (never guarded).
+        The shipped body is width-parameterised and γ-swept at w=8 over every
+        (op, c, x, prior) — TOP plus a grid straddling 0 and -1; the negative
+        control is computed in-test (the unconditional reading fails on exactly
+        the 127 constants above 2^(w-1)). SIX MUTANTS, each asserted applied
+        exactly once and lib.rs restored to the same sha256, all RED: M1 drop
+        the side condition (sweep + boundary); M2 refine the not-taken edge
+        too (AC#1 false case + sweep); M3 [0, c-2] under-approximation (5
+        tests); M4 non-negative-prior condition widened to lo >= -1 (sweep);
+        M5 ge_u mapped to Lt (duals + fixture); M6 edges swapped (5 tests).
+
+        AC#4 / AC#5 — THE NUMBER DID NOT MOVE, reported as the artifact asks.
+        Subject held FIXED across before/after: scry_mcdc.wasm built from
+        main@8e6bed1 (sha256 f2ac8e59...), 924 functions. Harness:
+        examples/poly_surface.rs, extended with `AnalysisResult.wrap_gate_sites`
+        (library-only) and an OOB tally so both ACs come from one run.
+          >=3-local linear points        : 0 -> 0
+          `z := x + y` sites at the gate : 14 (+34 aliased `x := x + y`, never
+                                            asked); no-wrap proven 0 -> 0
+          `z := x - y`                   : 26 (+7 aliased); proven 0 -> 0
+          `z := x + c`                   : 267; proven 6 -> 6
+          OOB proven                     : 55 / 8,772 (0.63%) -> unchanged
+                                            (FEAT-069's 0.67% was 55 / 8,217 on
+                                            an earlier build; the proven COUNT
+                                            is identical)
+        The analyzer DID change: points 25,144 -> 24,926 (each recognised
+        4-op guard idiom emits one point, not four), octagon constraints
+        29,858 -> 30,261, linear 5,436 -> 5,388 over the same 141 functions.
+        Self-analysis on the REBUILT subject (sha256 2057e071..., 25,632
+        points): the same zeros — 0 wide, 0/14 proven, OOB 55 / 9,215 (0.60%).
+        The "94 sites" above was not reproduced: with the committed
+        definition (distinct (func, pc) whose producer is the two-local add,
+        converged visit) the count is 48 = 14 gated + 34 aliased.
+
+        WHY THE ZERO STAYED ZERO — inspectable, not guessed (poly_surface
+        names every unproven site with its operand intervals): all 10 unproven
+        `z := x + y` sites with an emitted point have at least one operand at
+        full TOP (core::slice::sort smallsort f85/f273/f274/f277,
+        swap_nonoverlapping_bytes f428, std::io impls f751/f753,
+        prepend_alloc f794, dispose_chunk f799, Iterator f224); the other 4
+        sit at pcs with no emitted point. Those operands are parameters and
+        pointer arithmetic that no CONSTANT guard bounds. Guard census of the
+        subject (tools/guard-census.py over `wasm-tools print`): const-signed
+        640, const-unsigned 388 (369 inside the side condition, 19 above it),
+        two-local-signed 380, TWO-LOCAL-UNSIGNED 625, `if`-terminated 0. The
+        idiom this artifact cites, `index <u len`, is the two-local form and
+        outnumbers the constant form 625:388 — the risk the first paragraph
+        names, now measured. So the diagnosis was right that the guard was
+        declined and WRONG that it was the binding cause at these 14 sites.
+        Status stays `proposed`: AC#1-#3 hold, AC#4/#5 measured and flat.
+        NEXT LEVER, from the data (its own feature): `x <u y` between two
+        locals when y is known non-negative (then x ∈ [0, y-1] AND the
+        relational fact x - y <= -1 both hold) — 625 sites; and params-as-TOP
+        (interprocedural seeding). Fixture evidence that the constant shape
+        unlocks the 3-variable equality when it IS the guard:
+        feat098_unsigned_bounds_checks_unlock_three_local_equality.
     links:
       - type: traces-to
         target: REQ-001

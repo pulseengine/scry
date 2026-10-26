@@ -7,6 +7,33 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Unsigned bounds-check guards are refined** (FEAT-098). `local.get x;
+  i32.const c; i32.lt_u|le_u|gt_u|ge_u; br_if` now bounds `x` on the edge
+  where the comparison says `x <u c` / `x <=u c`, to `[0, c−1]` / `[0, c]`,
+  and ONLY when that interval fits the non-negative half (`c <= 2^31`,
+  resp. `c < 2^31`); the `x >=u c` / `x >u c` outcome is left alone because
+  it admits the whole negative half. A local already known non-negative gets
+  the full signed refinement on every edge (unsigned = signed there). The
+  shipped body is width-parameterised and γ-swept at w=8 over every
+  (op, c, x, prior); six mutants observed red, including the one that drops
+  the side condition (127 constants fail without it at w=8).
+  **Measured on scry_mcdc.wasm and reported because it did NOT move the
+  numbers it was filed to move**: `>=3-local` linear points 0 → 0,
+  `z := x + y` no-wrap-provable 0/14 → 0/14, OOB proven 55/8,772 (0.63%)
+  unchanged. The operands at those sites are parameters and pointer
+  arithmetic bounded by two-local guards (625 in the corpus) or by nothing —
+  not by constants (388, now read). The refinement itself is real (program
+  points 25,144 → 24,926 as the idiom collapses to one point per guard).
+- **`AnalysisResult.wrap_gate_sites`** (library-only): every `z := x ± y` /
+  `z := x + c` site the FEAT-057 wrap gate reached, with its converged
+  outcome (Proven / Unproven / Aliased). `examples/poly_surface.rs` tallies
+  it, names each unproven `z := x + y` site with its operand intervals, and
+  prints the OOB proven rate — so FEAT-057's realization question and
+  FEAT-069's rate are re-derivable from one run instead of quoted.
+  `tools/guard-census.py` counts guard shapes in a `wasm-tools print` dump.
+
 ## [3.3.0] — 2026-09-03
 
 **Agent-consumable scry.** Every feature here exists so a machine, not a
