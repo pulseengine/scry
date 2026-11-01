@@ -34,6 +34,18 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   FEAT-069's rate are re-derivable from one run instead of quoted.
   `tools/guard-census.py` counts guard shapes in a `wasm-tools print` dump.
 
+### Fixed
+
+- **zstd advisories removed from the dependency graph.** wasmtime's default
+  `cache` feature pulled `wasmtime-internal-cache` -> zstd 0.13 / zstd-safe 7 /
+  zstd-sys 2.0 (RUSTSEC-2026-0391, -0398, -0403, -0410, plus a run of unsound
+  advisories), with no fix reachable on that line. The host harness never
+  configures a module cache, so the workspace now takes wasmtime with
+  `default-features = false` and wasmtime 48's full default feature set minus
+  `cache`; zstd is gone from `Cargo.lock`. tokio 1.52.3 -> 1.54.1
+  (RUSTSEC-2026-0386), crossbeam-epoch 0.9.18 -> 0.9.21 (RUSTSEC-2026-0204),
+  chacha20 0.10.0 -> 0.10.2 (yanked).
+
 ## [3.3.0] — 2026-09-03
 
 **Agent-consumable scry.** Every feature here exists so a machine, not a
