@@ -71,7 +71,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -82,11 +82,11 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # scry's wasm-component crates (wasm-lattice, scry-analyzer)
       # depend on Bazel-injected bindings that don't exist on the
       # cargo path; `cargo clippy --workspace --target wasm32-wasip2`
@@ -137,20 +137,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install Nix
         # Same Nix-toolchain rationale as the bazel-build job:
         # FEAT-012's Rocq toolchain is registered unconditionally
         # in MODULE.bazel and resolved during analysis even for
         # `bazel build //:scry`.
-        uses: cachix/install-nix-action@v30
+        uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
         with:
           nix_path: nixpkgs=channel:nixos-unstable
-      - uses: bazelbuild/setup-bazelisk@v3
+      - uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3
       - name: Cache Bazel
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/bazel
@@ -241,14 +241,14 @@ jobs:
     name: Rivet artifact validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install rivet-cli
         run: cargo install --locked --git https://github.com/pulseengine/rivet rivet-cli
       - name: rivet validate
         run: rivet validate
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install PyYAML
@@ -309,12 +309,12 @@ jobs:
     name: Commit traceability (rivet)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # origin/main..HEAD cannot resolve on a shallow clone.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install rivet-cli
         run: cargo install --locked --git https://github.com/pulseengine/rivet rivet-cli
       - name: Guard — every code commit links an artifact that RESOLVES
@@ -339,10 +339,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install PyYAML
@@ -369,8 +369,8 @@ jobs:
     name: Doc claims (claim-check)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install PyYAML
@@ -382,9 +382,9 @@ jobs:
     name: AADL model (spar parse)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install spar
         # spar's CLI binary lives in the `spar` package (the
         # crates/spar-cli directory of the workspace) and installs as
@@ -397,9 +397,9 @@ jobs:
     name: WIT round-trip (wasm-tools)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install wasm-tools
         run: cargo install --locked wasm-tools
       - name: WIT round-trip — wasm-lattice
@@ -419,7 +419,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Install Nix
         # FEAT-012: scry's MODULE.bazel registers the Rocq toolchain
         # unconditionally (mirroring synth's pattern), which forces
@@ -427,12 +427,12 @@ jobs:
         # for `bazel build //:scry`. Install Nix so the resolution
         # succeeds. The actual Rocq build is exercised only by the
         # dedicated Rocq Formal Proofs job (rocq-proofs.yml).
-        uses: cachix/install-nix-action@v30
+        uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
         with:
           nix_path: nixpkgs=channel:nixos-unstable
-      - uses: bazelbuild/setup-bazelisk@v3
+      - uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3
       - name: Cache Bazel
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/bazel
@@ -478,7 +478,7 @@ jobs:
           fi
           echo "OK — built component carries $WS and not the 0.0.0 default"
       - name: Upload composed component as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: scry-wasm-component
           path: bazel-bin/scry.wasm
@@ -489,9 +489,9 @@ jobs:
     name: cargo-deny (licenses, advisories, bans)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny
       - name: cargo deny check
@@ -507,18 +507,18 @@ jobs:
     # the build red — REQ-010 is a live oracle, not a one-shot release
     # artifact. The job also publishes the static truth-table visualisation.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # witness lives in a sibling repo (pulseengine/witness); pin the rev so
       # the coverage numbers are reproducible and the gate is deterministic.
       # Cache the two built binaries keyed by that rev so we don't rebuild
       # witness (~several min) on every run.
       - name: Cache witness binaries
         id: witness-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/bin/witness
@@ -536,7 +536,7 @@ jobs:
         env:
           MCDC_SITE_DIR: ${{ github.workspace }}/mcdc-viz-site
       - name: Upload MC/DC truth-table visualisation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: scry-mcdc-viz
           path: ${{ github.workspace }}/mcdc-viz-site
@@ -564,7 +564,7 @@ jobs:
             -o "${{ github.workspace }}/scry-self-analysis.html" \
             --title "scry analyzing scry (scry_mcdc.wasm)"
       - name: Upload scry self-analysis
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: scry-self-analysis
           path: ${{ github.workspace }}/scry-self-analysis.html
@@ -596,7 +596,7 @@ jobs:
           git fetch --deepen=5 origin "$GITHUB_SHA" 2>/dev/null || true
           bash scripts/self-history.sh 3 "${{ github.workspace }}/self-history"
       - name: Upload self-history observation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: scry-self-history
           # if-no-files-found: warn — an observation that produced nothing is a
