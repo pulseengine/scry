@@ -1,0 +1,28 @@
+# scry#215: the MC/DC subject must be compiled by the SAME rustc as the
+# component we ship and sign.
+#
+# `crates/scry-mcdc` is its own workspace (see the `[workspace]` table in
+# Cargo.toml), and `mcdc-gate.sh` does `cd "$(dirname "$0")"` before
+# building — so this file governs the MC/DC build and nothing else. That
+# separation is what makes the pin possible at all: the MAIN workspace
+# cannot be pinned here, because wasmtime 48.0.8 declares
+# rust-version = 1.95.0 and would not build under 1.91.1.
+#
+# 1.91.1 is not copied from MODULE.bazel on faith. v3.3.0's signed
+# `scry-3.3.0-wasm32-wasip2.wasm` records it directly:
+#
+#   $ wasm-tools metadata show scry-3.3.0-wasm32-wasip2.wasm
+#     name         scry_analyzer_component_wasm_lib_release_wasm_base.wasm
+#     processed-by rustc [1.91.1 (ed61e7d7e 2025-11-07)]
+#
+# Before this file, the MC/DC subject was built by whatever
+# `dtolnay/rust-toolchain@stable` resolved to on the day the job ran, and
+# the skew widened on its own. `tools/check-evidence-substrate.py` asserts
+# this channel against MODULE.bazel's `rust.toolchain(versions = [...])`,
+# so the two cannot drift apart again silently.
+#
+# Keep in step with MODULE.bazel on every Bazel rustc bump; the check will
+# name the file if you forget.
+[toolchain]
+channel = "1.91.1"
+targets = ["wasm32-wasip1"]

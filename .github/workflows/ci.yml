@@ -512,6 +512,36 @@ jobs:
         with:
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
+      # scry#215: before spending several minutes building witness, assert the
+      # evidence this job produces is made on the same substrate as the artifact
+      # we ship. Two skews were MEASURED on shipped artifacts, not inferred:
+      # v3.3.0's signed wasm records `processed-by rustc [1.91.1 ...]` while the
+      # MC/DC subject floated on @stable, and v3.3.0's evidence manifest records
+      # `witness_version: 0.30.0` while this gate pins v0.29.0.
+      #
+      # The rustc half is now closed (crates/scry-mcdc/rust-toolchain.toml).
+      # The witness half is a known-open entry in the script's EXPECTED_SKEWS,
+      # which REPORTS rather than fails — so this can be required today. That
+      # allowlist is self-cleaning: once the witness versions converge, the
+      # stale entry FAILS and names itself, so it cannot outlive the defect.
+      - name: Guard — evidence and artifact share a substrate (scry#215)
+        run: |
+          python3 tools/check-evidence-substrate.py --self-test
+          python3 tools/check-evidence-substrate.py
+          # The script compares rust-toolchain.toml against MODULE.bazel —
+          # which is a claim about what WILL compile, not a measurement of what
+          # does. rustup precedence lets RUSTUP_TOOLCHAIN or a directory
+          # override beat a toolchain file, and a green gate under the wrong
+          # rustc looks identical to a green gate under the right one. So
+          # assert the ACTIVE compiler where the build actually happens, and
+          # put it in the log so the evidence records its own substrate.
+          PINNED=$(sed -n 's/^channel = "\(.*\)"/\1/p' crates/scry-mcdc/rust-toolchain.toml)
+          ACTIVE=$(cd crates/scry-mcdc && rustc --version)
+          echo "MC/DC subject compiler: $ACTIVE  (pinned: $PINNED)"
+          case "$ACTIVE" in
+            *"$PINNED"*) ;;
+            *) echo "::error title=scry#215 substrate::the MC/DC subject is about to be built by '$ACTIVE' but crates/scry-mcdc/rust-toolchain.toml pins $PINNED. A rustup override (RUSTUP_TOOLCHAIN or a directory override) is beating the toolchain file, so the coverage evidence would be produced by a compiler the repo does not declare." >&2; exit 1 ;;
+          esac
       # witness lives in a sibling repo (pulseengine/witness); pin the rev so
       # the coverage numbers are reproducible and the gate is deterministic.
       # Cache the two built binaries keyed by that rev so we don't rebuild
