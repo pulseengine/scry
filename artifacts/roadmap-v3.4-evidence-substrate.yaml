@@ -1,0 +1,143 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-102
+    type: feature
+    title: "v3.4 — The MC/DC evidence and the shipped artifact share a compiler, and the skew that remains is tracked (scry#215)"
+    status: proposed
+    release: v3.4.0
+    description: >
+      scry#215: the MC/DC gate, the released `mcdc-evidence` tarball, the Pages
+      self-analysis dashboard and the FEAT-072 release delta all measure
+      `scry_mcdc.wasm` — a wasip1 core module built by Cargo — while the thing
+      scry ships and signs is `scry.wasm`, a wasip2 component built by Bazel.
+      The wasip1/DWARF choice is deliberate and documented (witness needs a
+      DWARF-bearing core module). TWO OTHER SKEWS WERE NOT.
+
+      BOTH MEASURED ON SHIPPED ARTIFACTS, not read off a config file, because a
+      build config is a hypothesis about an artifact and not evidence about it.
+
+      (1) COMPILER. v3.3.0's signed `scry-3.3.0-wasm32-wasip2.wasm` records
+      `processed-by rustc [1.91.1 (ed61e7d7e 2025-11-07)]`, which confirms
+      MODULE.bazel's `rust.toolchain(versions = ["1.91.1"])`. The MC/DC subject
+      had no `rust-toolchain.toml` anywhere in the repo and was built by
+      whatever `dtolnay/rust-toolchain@stable` resolved to that day — so the
+      skew widened on its own and nothing recorded which compiler produced any
+      given number.
+
+      (2) TOOL. v3.3.0's evidence manifest records
+      `witness_version: "0.30.0"`, while the CI gate installs witness at rev
+      6ff96e75 — which `git ls-remote` resolves to `v0.29.0^{}`, not v0.30.0.
+      So the floors were proved by one tool version and the shipped evidence
+      produced by another. Upstream is already at v0.32.0.
+
+      #215'S PROPOSED FIX IS NOT POSSIBLE AS WRITTEN, and the measurement is
+      why. "Pin the MC/DC path to the same rustc as MODULE.bazel" cannot apply
+      to the workspace: wasmtime 48.0.8 declares `rust-version = 1.95.0` and
+      will not build under 1.91.1. It IS possible for the MC/DC subject alone,
+      because `crates/scry-mcdc` is its own workspace (a `[workspace]` table in
+      its Cargo.toml), depends only on `scry-sai-core`, has zero wasmtime in
+      its graph, and `mcdc-gate.sh` does `cd "$(dirname "$0")"` before building
+      — so a toolchain file there governs exactly that build and nothing else.
+
+      THE SKEW WAS WORTH 13 CONDITIONS. Measured locally with witness held
+      constant at the gate's own pinned rev, changing ONLY the compiler:
+
+        rustc 1.96.1 -> 1.91.1
+        decisions_total      1626 -> 1677   (+51)
+        conditions_proved     395 ->  382   (-13)
+        decisions_full_mcdc    18 ->   16   (-2)
+
+      Both sides clear the floors (155 / 3) with wide margin, so the gate stays
+      green. But the coverage evidence was measurably compiler-dependent while
+      one side of the comparison floated, which is the whole of #215's claim
+      turned into a number.
+
+      A CONSEQUENCE THE MEASUREMENT EXPOSED: the FEAT-072 release delta builds
+      the previous tag in a `git worktree`, which predates the toolchain file —
+      so without intervention the old side would compile under @stable and the
+      new side pinned, and a ~51-decision compiler artifact would be reported
+      as source change, which is the one thing that delta exists to isolate.
+      The delta step now copies the toolchain file into the worktree first.
+
+      A FIFTH REFERENCE WAS FOUND BY WRITING THE CHECK. The witness rev also
+      appears bare in two `actions/cache` keys
+      (`key: witness-bins-${{ runner.os }}-6ff96e75...`). Bumping an install
+      rev while leaving a cache key stale makes the cache serve binaries the
+      install step no longer names — the gate would then report coverage from a
+      witness it does not pin. The check scans for bare 40-hex SHAs on any line
+      that mentions witness, which is the only way that site is reachable.
+    tags: [evidence-transfer, gate, substrate, mcdc, issue-driven, scry215, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the MC/DC subject, When it is built, Then it uses the same rustc as the shipped component. VERIFIED: `rustc --version` inside crates/scry-mcdc reports `1.91.1 (ed61e7d7e 2025-11-07)`, byte-identical to the `processed-by` string in v3.3.0's signed wasm."
+        - "Given the pin, When the MC/DC gate runs, Then it still passes. VERIFIED end-to-end with witness at the gate's own rev 6ff96e75: conditions_proved=382 >= 155, decisions_full_mcdc=16 >= 3, exit 0."
+        - "THE FILE IS NOT THE COMPILER. The script compares rust-toolchain.toml against MODULE.bazel, which is a claim about what WILL compile. The guard step therefore also asserts the ACTIVE rustc where the build happens (`cd crates/scry-mcdc && rustc --version`) and prints it, so the CI log records the evidence's own substrate. NEGATIVE-CONTROLLED locally, and the hazard is real rather than theoretical: `RUSTUP_TOOLCHAIN=1.98.1` DOES beat the toolchain file (measured: rustc 1.98.1), and the assertion catches it."
+        - "Given a substrate skew, When `tools/check-evidence-substrate.py` runs, Then it names the skew, the file and the line. VERIFIED red before the fix: 3 skews reported, exit 1."
+        - "Given the witness skew is known-open, When the check runs, Then it REPORTS rather than fails, so the check can be wired into a REQUIRED job today — the step sits in `MC/DC (witness)`, which carries no `continue-on-error` and no job-level `if:`."
+        - "SELF-CLEANING ALLOWLIST: Given an EXPECTED_SKEWS entry whose skew is no longer present, When the check runs, Then it FAILS and names the stale entry. An allowlist that can outlive its defect is just a silenced gate; a stale entry here is a live regression test of the checker."
+        - "NEVER ALLOWLISTABLE: Given zero witness references found, When the check runs, Then it fails even if someone adds `no-refs` to the allowlist — losing the subject is how a gate goes vacuous, so it cannot be silenced."
+        - "MUTATION-CHECKED on the final file: 9 mutations (M1-M9), 9 killed, unmutated control green. THREE survived a first pass and every one was a gap in the TABLE, not the code: the SHA-format regex was never load-bearing because every tag case also carried two DIFFERENT refs (fixed with identical tags); the lost-subject mutation was never tested by its own allowlist key; and dropping the bare-SHA scan's `witness`-line guard survived because no unrelated 40-hex string exists in the workflows TODAY — scry#232 is pinning every action to a SHA, so an unguarded scan would have started failing CI the day it merged. Fixed by running the PARSER against synthetic workflow text, which nothing else did."
+      residual: >
+        THE WITNESS SKEW IS NOT CLOSED, by decision. The gate proves the floors
+        with v0.29.0 and the released bundle is produced by v0.30.0 — and the
+        v0.30.0 side is internally coherent, since the `cargo install --tag` and
+        the `compliance@v0.30.0` action match each other. Converging them either
+        changes the tool that proved the floors (so the floors must be
+        re-measured) or alters an unsimulated release path. It is tracked by the
+        EXPECTED_SKEWS entry, which cannot rot: the day the versions converge,
+        the check fails until the entry is deleted.
+
+        WHAT THE EVIDENCE DOES SUPPORT, stated so a dossier cannot widen it
+        later: a SOURCE-LEVEL decision-coverage claim over
+        `crates/scry-analyze-core`, measured on a proxy binary that is now built
+        with the same compiler as the shipped component and by the same witness
+        as the gate. It is NOT coverage of the shipped `scry.wasm`. The two
+        binaries differ by target (wasip1 core module vs wasip2 component) and
+        profile (opt-level 1 / debug 2 vs release), deliberately and
+        irreducibly — witness needs DWARF. "Coverage of the shipped component"
+        stays unearned, and the measured 13-condition compiler sensitivity is
+        the reason that gap is not a formality.
+
+        The release's `mcdc-evidence` job runs `mcdc-gate.sh` with floors
+        DISABLED (its own step name says so). The floors are enforced only in
+        CI. Unchanged here, and worth its own item.
+
+        scry#212's third wasm path (`wasm-lattice`, which no CI job compiles) is
+        not covered by this check.
+
+        CORRECTION TO THIS ARTIFACT'S OWN FIRST DRAFT: it called the
+        mcdc-evidence tarball "signed". It is not. MEASURED on v3.3.0 — of 20
+        primary assets, 18 are listed in a cosign-signed `SHA256SUMS.txt` and
+        18 also carry individual .sig/.pem pairs; `scry-v3.3.0-mcdc-evidence.
+        tar.gz` is in NEITHER list and is the ONLY primary asset with no
+        integrity protection at all. The error came from filtering the asset
+        list on `mcdc|evidence`, seeing `compliance-evidence.tar.gz` return with
+        its .pem and .sig, and carrying the signing across to the neighbouring
+        bundle. scry#215's own body says "the evidence bundle we sign and ship",
+        so the mistake was already in circulation; it also propagated into
+        witness#360, which has been corrected there.
+
+        That makes it a REQUIREMENT VIOLATION rather than a gap: REQ-010 — the
+        requirement this feature traces to — asks for the coverage evidence
+        "surfaced as a SIGNED truth-table report". The report is surfaced and
+        is not signed. Filed separately; deliberately not fixed here, because
+        adding an asset to the signing set is a release-path change and this
+        branch already touches release.yml once.
+
+        A FOURTH SUBSTRATE, found while running the gate and NOT fixed here:
+        `crates/scry-mcdc/evidence/report.json` and `viz-summary.json` are
+        TRACKED, and the committed copies record `witness_version: "0.28.0"`
+        with decisions_total=807 / conditions_proved=234 — a tool version no CI
+        job installs, produced on someone's local machine. The gate overwrites
+        both on every run and reads the fresh file, so nothing consumes the
+        stale copy and no gate rests on it. But CHANGELOG.md:1910 says "the
+        canonical truth table ships at crates/scry-mcdc/evidence/report.json"
+        and :1816 says aggregate counts "are committed as
+        evidence/viz-summary.json" — so two documents describe a stale local
+        artifact as canonical and shipped. Deliberately left alone here rather
+        than committing this machine's macOS numbers over it, which would be
+        equally local and 3.3M lines of churn. Filed separately.
+    links:
+      - type: traces-to
+        target: REQ-010
