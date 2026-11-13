@@ -406,12 +406,10 @@ jobs:
         run: wasm-tools component wit crates/wasm-lattice/wit/wasm-lattice.wit > /dev/null
       - name: WIT syntax check — scry-analyzer
         run: |
-          # wasm-tools component wit reports parse errors before
-          # cross-package resolution; full type-check requires
-          # Bazel's deps wiring (covered by the bazel-build job).
-          # Here we only check the file parses syntactically and
-          # has the expected package header.
-          wasm-tools component wit crates/scry-analyzer/wit/scry.wit 2>&1 | head -50 || true
+          # scry.wit has no cross-package imports (the wasm-lattice
+          # interval type is declared locally), so it resolves on its own
+          # and a parse or resolve error must fail this step.
+          wasm-tools component wit crates/scry-analyzer/wit/scry.wit > /dev/null
           grep -q '^package pulseengine:scry@' crates/scry-analyzer/wit/scry.wit
 
   bazel-build:

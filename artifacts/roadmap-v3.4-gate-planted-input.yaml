@@ -1,0 +1,34 @@
+# v3.4.0 addendum — own file per scry#143 fix (1).
+artifacts:
+  - id: FEAT-102
+    type: feature
+    title: "v3.4 — MC/DC, WIT round-trip and claim-check fail on planted-bad input (scry#239)"
+    status: proposed
+    release: v3.4.0
+    description: >
+      Three required checks reported success on input that should fail them.
+
+        * MC/DC (witness): `mcdc-gate.sh` compared `.overall.*` with `[ x -lt y ]`.
+          A report without those fields gives jq `null`, the test errors, `if`
+          reads the error as false, and the script printed "MC/DC gate PASSED".
+        * WIT round-trip: `wasm-tools component wit scry.wit | head -50 || true`
+          discarded the exit code; only a grep for the package header gated.
+        * Doc claims: `claims: []` exited 0, and a claim with no evidence
+          predicates counted as holding.
+    tags: [gate, gate-potency, tooling, issue-driven, scry239, v3.4]
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given a report.json of `{}`, When the MC/DC gate section runs, Then it exits 1. VERIFIED: 0 before, 1 after."
+        - "Given `conditions_proved: \"abc\"`, When the gate runs, Then it exits 1. VERIFIED: 0 before, 1 after."
+        - "Given scry.wit with an appended syntax error, When `wasm-tools component wit` runs, Then it exits 1 and the step no longer masks it. The unmodified scry.wit exits 0 (wasm-tools 1.245.1)."
+        - "Given `claims: []`, When claim-check runs, Then it exits 2. VERIFIED: 0 before."
+        - "Given a claim with no evidence, When claim-check runs, Then it exits 1. VERIFIED: 0 before."
+        - "POSITIVE DIRECTION: a report with 160 proved / 4 full exits 0, and the real claims.yaml gives 7/7, exit 0."
+      residual: >
+        The MC/DC acceptance ran the extracted gate section of mcdc-gate.sh,
+        not the full witness pipeline; CI exercises the full path. No
+        mutation check was run on the three fixes.
+    links:
+      - type: traces-to
+        target: REQ-005
