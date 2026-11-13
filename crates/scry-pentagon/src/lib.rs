@@ -567,8 +567,8 @@ mod tests {
             ];
             for mask in 0..(1u32 << 9) {
                 let mut q = p.clone();
-                for b in 0..9 {
-                    q.lt[b] = (mask >> b) & 1 == 1;
+                for (b, lt) in q.lt.iter_mut().enumerate().take(9) {
+                    *lt = (mask >> b) & 1 == 1;
                 }
                 out.push(q);
             }
