@@ -7,7 +7,7 @@ ledger, and the *actual source* fails the build. Truth-over-time becomes a prope
 of the gate, not the author.
 
 Usage:  claim-check.py [claims.yaml]     (default: ./claims.yaml)
-Exit:   0 = all claims hold · 1 = one or more drifted
+Exit:   0 = all claims hold · 1 = one or more drifted · 2 = nothing to gate
 
 A repo may reimplement this in Rust (cf. tools/fetch-reports); the shape is what
 matters. Evidence predicates re-derive from source — never a number typed in prose.
@@ -68,7 +68,12 @@ def check_claim(c, root):
     if text and text not in doc:
         fails.append(f'claim text not found verbatim in {c["doc"]}: "{text}"')
 
-    for ev in c.get("evidence", []):
+    evidence = c.get("evidence") or []
+    if not evidence:
+        # A claim with no evidence predicate checks nothing; it must not green.
+        fails.append("claim has no evidence predicates (measures nothing)")
+
+    for ev in evidence:
         kind = ev.get("kind")
         if kind == "verbatim":
             s = ev.get("text", text)
@@ -121,8 +126,8 @@ def main():
     data = yaml.safe_load(path.read_text()) or {}
     claims = data.get("claims", [])
     if not claims:
-        print("claim-check: no claims declared — nothing to gate.")
-        return
+        print("claim-check: no claims declared — nothing to gate.", file=sys.stderr)
+        sys.exit(2)
 
     bad = 0
     for c in claims:

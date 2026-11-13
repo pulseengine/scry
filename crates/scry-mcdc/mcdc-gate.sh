@@ -55,6 +55,17 @@ DTOT=$(jq -r '.overall.decisions_total' evidence/report.json)
 echo "MC/DC over the real analyzer core: decisions_total=$DTOT conditions_proved=$PROVED decisions_full_mcdc=$FULL"
 echo "         floors: conditions_proved>=$FLOOR  decisions_full_mcdc>=$FULL_FLOOR"
 
+# A missing or non-numeric field (jq prints "null") makes `[ x -lt y ]` error,
+# which `if` reads as false: the gate would print PASSED. Reject it first.
+for pair in "conditions_proved=$PROVED" "decisions_full_mcdc=$FULL" "decisions_total=$DTOT"; do
+    case "${pair#*=}" in
+        ''|*[!0-9]*)
+            echo "::error title=MC/DC report malformed::overall.${pair%%=*} is '${pair#*=}', expected a non-negative integer" >&2
+            echo "MC/DC gate FAILED" >&2
+            exit 1 ;;
+    esac
+done
+
 fail=0
 if [ "$PROVED" -lt "$FLOOR" ]; then
     echo "::error title=MC/DC regression::conditions_proved=$PROVED dropped below floor $FLOOR" >&2
