@@ -69,7 +69,7 @@ jobs:
 
   fmt:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
@@ -239,13 +239,11 @@ jobs:
 
   rivet-validate:
     name: Rivet artifact validation
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: Install rivet-cli
-        run: cargo install --locked --git https://github.com/pulseengine/rivet rivet-cli
+      - name: Install rivet (release binary)
+        run: tools/ci/install-release-bin.sh rivet rivet v0.42.2
       - name: rivet validate
         run: rivet validate
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -307,16 +305,14 @@ jobs:
   # 1/257) that no pull request can satisfy.
   commit-traceability:
     name: Commit traceability (rivet)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # origin/main..HEAD cannot resolve on a shallow clone.
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: Install rivet-cli
-        run: cargo install --locked --git https://github.com/pulseengine/rivet rivet-cli
+      - name: Install rivet (release binary)
+        run: tools/ci/install-release-bin.sh rivet rivet v0.42.2
       - name: Guard — every code commit links an artifact that RESOLVES
         run: |
           python3 tools/check-commit-trailers.py --self-test
@@ -335,7 +331,7 @@ jobs:
   # open PR.
   required-checks-drift:
     name: Required checks track CI jobs (scry#130)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -359,6 +355,8 @@ jobs:
         run: |
           python3 tools/check-required-checks.py --self-test
           python3 tools/check-required-checks.py --against-file
+      - name: Guard — no fork PR reaches a self-hosted runner
+        run: python3 tools/check_selfhosted_fork_guard.py
 
   # A README is a claim about the system — the same species as a requirement,
   # gated the same way. `claim-check` re-derives every load-bearing doc claim
@@ -367,7 +365,7 @@ jobs:
   # so the status section can't silently rot ~40 versions again (issue #97).
   claim-check:
     name: Doc claims (claim-check)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -380,28 +378,23 @@ jobs:
 
   spar-parse:
     name: AADL model (spar parse)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: Install spar
-        # spar's CLI binary lives in the `spar` package (the
-        # crates/spar-cli directory of the workspace) and installs as
-        # the `spar` binary on $PATH.
-        run: cargo install --locked --git https://github.com/pulseengine/spar spar
+      - name: Install spar (release binary)
+        run: tools/ci/install-release-bin.sh spar spar v0.49.0
       - name: spar parse spar/scry.aadl
         run: spar parse spar/scry.aadl
 
   wit-validate:
     name: WIT round-trip (wasm-tools)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: Install wasm-tools
-        run: cargo install --locked wasm-tools
+      - name: Install wasm-tools (prebuilt)
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2
+        with:
+          tool: wasm-tools
       - name: WIT round-trip — wasm-lattice
         run: wasm-tools component wit crates/wasm-lattice/wit/wasm-lattice.wit > /dev/null
       - name: WIT syntax check — scry-analyzer
@@ -485,13 +478,14 @@ jobs:
 
   deny:
     name: cargo-deny (licenses, advisories, bans)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: Install cargo-deny
-        run: cargo install --locked cargo-deny
+      - name: Install cargo-deny (prebuilt)
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2
+        with:
+          tool: cargo-deny
       - name: cargo deny check
         run: cargo deny check --hide-inclusion-graph
 

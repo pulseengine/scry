@@ -36,7 +36,7 @@ concurrency:
 jobs:
   delta:
     name: Rivet artifact delta
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -55,11 +55,8 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 1
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-
-      - name: Install rivet-cli
-        run: cargo install --locked --git https://github.com/pulseengine/rivet rivet-cli
+      - name: Install rivet (release binary)
+        run: head/tools/ci/install-release-bin.sh rivet rivet v0.42.2
 
       - name: Validate head
         working-directory: head
@@ -88,13 +85,16 @@ jobs:
         continue-on-error: true
         run: rivet stats --format text > ../stats-base.txt 2>&1 || true
 
+      - name: Install spar (release binary)
+        continue-on-error: true
+        run: head/tools/ci/install-release-bin.sh spar spar v0.49.0
+
       - name: AADL parse (head)
         working-directory: head
         continue-on-error: true
         run: |
           set -euo pipefail
           if [ -f spar/scry.aadl ]; then
-            cargo install --locked --git https://github.com/pulseengine/spar spar 2>/dev/null
             spar parse spar/scry.aadl > ../aadl-head.txt 2>&1
           else
             echo "(no AADL model in head)" > ../aadl-head.txt
