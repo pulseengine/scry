@@ -645,6 +645,22 @@ jobs:
           if ! git worktree add --detach -q "$WT" "$PREV"; then
             status "SKIPPED — cannot check out $PREV"; exit 0
           fi
+          # scry#215: build BOTH sides of the delta with the same rustc. The
+          # worktree is the PREVIOUS tag, which predates
+          # crates/scry-mcdc/rust-toolchain.toml, so without this copy the old
+          # side compiles under whatever @stable resolves to while the new side
+          # is pinned — and the delta would attribute compiler-induced
+          # differences to source change, which is the one thing FEAT-072
+          # exists to isolate. Measured locally, witness held constant: rustc
+          # 1.96.1 -> 1.91.1 alone moved decisions_total 1626 -> 1677,
+          # conditions_proved 395 -> 382, decisions_full_mcdc 18 -> 16. That is
+          # far larger than most real source deltas.
+          if [[ -f crates/scry-mcdc/rust-toolchain.toml ]]; then
+            cp crates/scry-mcdc/rust-toolchain.toml "$WT/crates/scry-mcdc/"
+            status "pinned the $PREV side to $(sed -n 's/^channel = "\(.*\)"/\1/p' crates/scry-mcdc/rust-toolchain.toml)"
+          else
+            status "WARNING — no rust-toolchain.toml to copy; the two sides of this delta may use different compilers (scry#215)"
+          fi
           if ! ( cd "$WT/crates/scry-mcdc" && cargo build --release --target wasm32-wasip1 -q ); then
             status "SKIPPED — $PREV does not build"; exit 0
           fi
