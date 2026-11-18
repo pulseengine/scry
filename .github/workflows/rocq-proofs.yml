@@ -36,9 +36,9 @@ jobs:
 
   rocq-proofs:
     name: Rocq Formal Proofs
-    # Stays on ubuntu-latest: requires Nix + Bazel for the hermetic
+    # Stays on ubuntu-24.04: requires Nix + Bazel for the hermetic
     # Rocq 9.0 toolchain. Matches loom's runner choice.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Informational at v0.2 (FEAT-012). Flips to required at v1.0
     # alongside FEAT-011's six-domain credit dossier.
     continue-on-error: true
