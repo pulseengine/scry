@@ -6,9 +6,9 @@ Adapted from ordeal's check of the same name (copy in bazel-file-ops-component).
 non-PR event or a PR from this repository, and fall back to a hosted
 runner otherwise (fail closed):
 
-  ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('[...]') || 'ubuntu-latest' }}
+  ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('[...]') || 'ubuntu-24.04' }}
 
-The `head.repo.fork && 'ubuntu-latest' || ...` form is rejected: it
+The `head.repo.fork && 'ubuntu-24.04' || ...` form is rejected: it
 selects self-hosted whenever `.fork` is not true, including a null head
 repo. A workflow that triggers on `pull_request_target` fails for any
 self-hosted job, guarded or not: there `event_name` is never
@@ -22,7 +22,7 @@ import sys
 
 GUARD = ("${{ (github.event_name != 'pull_request' || "
          "github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('[")
-TAIL = "]') || 'ubuntu-latest' }}"
+TAIL = "]') || 'ubuntu-24.04' }}"
 root = pathlib.Path(__file__).resolve().parent.parent
 bad, seen = [], []
 for wf in sorted((root / ".github" / "workflows").glob("*.y*ml")):

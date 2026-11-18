@@ -57,28 +57,28 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04
             archive: tar.gz
             can_run: true
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04
             archive: tar.gz
             cross: true
             can_run: false   # cross-compiled: not executable on an x86 builder
           # STATIC musl builds alongside the gnu ones (scry#223). The gnu
           # assets are dynamically linked against whatever glibc the runner
-          # image carries — currently a 2.39 floor on ubuntu-latest, which
+          # image carries — currently a 2.39 floor on ubuntu-24.04, which
           # excludes Ubuntu 22.04 (2.35), Debian 12 (2.36), RHEL 9 / AL2023
           # (2.34) and every musl distro. A varve realm layer's portability is
           # the MAXIMUM floor across its payloads, so one 2.39 payload sets the
           # floor for the whole toolchain.
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-24.04
             archive: tar.gz
             musl: true
             can_run: true    # static x86_64: runs on the x86_64 builder
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-24.04
             archive: tar.gz
             cross: true
             can_run: false   # cross-compiled: not executable on an x86 builder
@@ -207,7 +207,7 @@ jobs:
   release:
     name: Build, sign, and release
     needs: build-binaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
 
@@ -449,7 +449,7 @@ jobs:
   mcdc-evidence:
     name: MC/DC evidence bundle
     needs: [release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
@@ -538,7 +538,7 @@ jobs:
   publish-pages:
     name: Publish verification dashboard to GitHub Pages
     needs: [release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment:
       name: github-pages
