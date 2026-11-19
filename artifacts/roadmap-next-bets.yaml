@@ -169,7 +169,7 @@ artifacts:
   - id: FEAT-109
     type: feature
     title: "Every primary scry release asset is inside the signed manifest (#237)"
-    status: proposed
+    status: implemented
     release: v3.5.0
     tags: [north-star, release-integrity]
     description: >
