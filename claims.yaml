@@ -131,28 +131,37 @@ claims:
       - kind: file-exists
         path: docs/qualification-dossier-v1.md
 
-  # ── Proof-gate wording (scry#207, FEAT-104) ──────────────────────────────
-  # The dossier said the proofs are re-checked "on every CI run" and four other
-  # places said "CI-gated", while both proof workflows are path-filtered,
-  # `continue-on-error: true` and absent from the required checks. The corrected
-  # wording is bound to that state in BOTH directions: the old phrases cannot
-  # come back while the jobs are informational, and the day FEAT-105 makes the
-  # proof job required (drops continue-on-error, adds it to required-checks.txt)
-  # this claim goes red, so the text is upgraded with the gate, not before it.
+  # ── Proof-gate wording (scry#207, FEAT-104, FEAT-105) ────────────────────
+  # The dossier said the proofs are re-checked "on every CI run" while both proof
+  # jobs were path-filtered and continue-on-error. FEAT-104 corrected the text;
+  # FEAT-105 slice 1 made the Rocq job required. The wording is bound to that
+  # state: Rocq listed as required and present in ci.yml; Verus still
+  # informational and NOT required; no new continue-on-error key in ci.yml (1
+  # exists, on the MC/DC harness step); and the overclaiming phrases stay out. When
+  # Verus becomes required too, the Verus predicates go red and the text moves
+  # with the gate.
   - id: PROOF-GATE-WORDING
     doc: docs/qualification-dossier-v1.md
-    text: "informational (`continue-on-error: true`) and not required checks (#207)"
+    text: "the required `Rocq Formal Proofs` CI job on every pull request and push to main"
     evidence:
       - kind: count-min
-        pattern: 'continue-on-error: true'
-        glob: ['.github/workflows/rocq-proofs.yml']
+        pattern: '(?m)^Rocq Formal Proofs$'
+        glob: ['.github/required-checks.txt']
         min: 1
+      - kind: count-min
+        pattern: 'name: Rocq Formal Proofs'
+        glob: ['.github/workflows/ci.yml']
+        min: 1
+      - kind: count-max
+        pattern: '(?m)^\s+continue-on-error:'
+        glob: ['.github/workflows/ci.yml']
+        max: 1
       - kind: count-min
         pattern: 'continue-on-error: true'
         glob: ['.github/workflows/verus-proofs.yml']
         min: 1
       - kind: count-max
-        pattern: '(?i)rocq|verus'
+        pattern: '(?i)verus'
         glob: ['.github/required-checks.txt']
         max: 0
       - kind: count-max

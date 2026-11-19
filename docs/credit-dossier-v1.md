@@ -58,7 +58,7 @@ scry's own re-modeling — remains the open TE-004 slice.
 
 | Kind | Meaning | Strength |
 |---|---|---|
-| **mechanized** | Rocq theorem, 0 admits/axioms by text search, checked in CI when proofs change (not yet required, #207) | highest |
+| **mechanized** | Rocq theorem, 0 admits/axioms by text search, re-checked by a required CI job (FEAT-105) | highest |
 | **runnable** | version-pinned artifact + native falsifier in CI | high |
 | **contract** | published, validated schema / typed boundary | medium |
 | **paper** | soundness argued in design docs, not yet mechanized | baseline |

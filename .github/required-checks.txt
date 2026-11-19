@@ -19,6 +19,7 @@ Doc claims (claim-check)
 Format
 MC/DC (witness)
 Required checks track CI jobs (scry#130)
+Rocq Formal Proofs
 Rivet artifact validation
 Test
 WIT round-trip (wasm-tools)

@@ -324,8 +324,7 @@ fn render_header(s: &mut String, r: &AnalysisResult) {
 /// 21.5% of advisories and a 0.6% proven-safe rate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EvidenceKind {
-    /// Rocq, admit-free; CI-checked when proofs change, not yet a required
-    /// check (#207).
+    /// Rocq, admit-free; re-checked by a required CI job (FEAT-105).
     Mechanized,
     /// Exhaustively checked against a concrete oracle on a value grid, NOT
     /// machine-proven.
@@ -351,7 +350,7 @@ impl EvidenceKind {
     /// different failure from prose a machine cannot read, not a fix for it.
     pub fn human(self) -> &'static str {
         match self {
-            EvidenceKind::Mechanized => "Mechanized (Rocq, admit-free, CI not yet required)",
+            EvidenceKind::Mechanized => "Mechanized (Rocq, admit-free, CI-required)",
             EvidenceKind::GammaSwept => "γ-sweep-validated (tested, NOT mechanized)",
             EvidenceKind::RunnableAttested => "Runnable / attested",
         }

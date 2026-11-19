@@ -54,6 +54,15 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   jobs are path-filtered, `continue-on-error: true` and not required checks.
   The wording now says so, and `claims.yaml` `PROOF-GATE-WORDING` binds it to
   that state in both directions.
+- **The Rocq proofs are a required check** (FEAT-105 slice 1, #207). The Rocq
+  job moved from `rocq-proofs.yml` (path-filtered to `proofs/**` and
+  `MODULE.bazel`, `continue-on-error: true`) into `ci.yml` as `Rocq Formal
+  Proofs`, with no path filter and no `continue-on-error`, and is listed in
+  `.github/required-checks.txt`. Before, a PR that broke a proof merged green
+  and a code-only PR never ran it. A planted false lemma fails the job's build
+  step (`coqc failed ... Unable to unify "2" with "1"`, run 44628952211).
+  Verus stays informational: it builds from an unmerged rules_verus branch.
+  Still open in FEAT-105: the kernel axiom audit and the trust-escape ledger.
 - **zstd advisories removed from the dependency graph.** wasmtime's default
   `cache` feature pulled `wasmtime-internal-cache` -> zstd 0.13 / zstd-safe 7 /
   zstd-sys 2.0 (RUSTSEC-2026-0391, -0398, -0403, -0410, plus a run of unsound

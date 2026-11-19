@@ -67,7 +67,7 @@ artifacts:
       were checked and did exercise the oracles, so this evidence stands; the
       gate is now fail-closed so it cannot stop doing so unnoticed. The interval
       transfer functions carry the admit-free Rocq soundness proof
-      proofs/rocq/Soundness.v, gated by rocq-proofs.yml
+      proofs/rocq/Soundness.v, gated by the Rocq Formal Proofs CI job
       (bazel test //proofs/rocq/...).
     tags: [dev-v, soundness]
     fields:
@@ -87,7 +87,7 @@ artifacts:
       wrapping mod-2^32 semantics, including the wrap case), plus per-domain
       proofs (Region.v, OctagonProject.v, OctagonStrongClose.v, Pentagon.v,
       Float.v, Segment.v, BitsCongruence.v). All are built and tested by the
-      CI Rocq Formal Proofs job (.github/workflows/rocq-proofs.yml). Scope is
+      CI Rocq Formal Proofs job (the Rocq Formal Proofs job in ci.yml). Scope is
       exactly what the requirement's v0 bar allows: the WasmCert-Coq import
       remains a named open obligation, and doc claims about proof scope are
       themselves gated by tools/claim-check.py over claims.yaml (CI "Doc
@@ -126,7 +126,7 @@ artifacts:
     status: implemented
     description: >
       proofs/rocq/CallGraph.v mechanizes the resolution soundness of the
-      call-graph construction (gated by rocq-proofs.yml). Unit tests in
+      call-graph construction (gated by the Rocq Formal Proofs CI job). Unit tests in
       crates/scry-analyze-core/src/lib.rs pin the over-approximation
       discipline at the edges where enumeration fails:
       feat043_imported_table_indirect_is_unknown,
@@ -188,7 +188,7 @@ artifacts:
     status: implemented
     description: >
       proofs/rocq/Reachable.v mechanizes concrete-reach ⊆ abstract-reach for
-      reachable_from_exports (gated by rocq-proofs.yml). The unit test
+      reachable_from_exports (gated by the Rocq Formal Proofs CI job). The unit test
       feat022_reachable_from_exports (crates/scry-analyze-core/src/lib.rs)
       checks the include/exclude behaviour on
       crates/scry-analyzer/test-fixtures/fixture-17-reachability.wat, and the
@@ -261,7 +261,7 @@ artifacts:
       feat046_const_out_of_bounds_potential_trap,
       feat046_unknown_address_potential_trap,
       feat046_store_in_bounds_proven_safe. The pentagon domain backing the
-      strict-bound reasoning carries proofs/rocq/Pentagon.v (rocq-proofs.yml)
+      strict-bound reasoning carries proofs/rocq/Pentagon.v (the Rocq Formal Proofs CI job)
       and 17 native unit tests (cargo test -p scry-sai-pentagon). Local run:
       all passing.
     tags: [dev-v, trap-classification]
@@ -279,7 +279,7 @@ artifacts:
       The scry-sai-float crate (crates/scry-float) implements the
       interval-with-rounding domain with 9 native unit tests incl. NaN/inf
       handling (cargo test -p scry-sai-float), backed by the admit-free Rocq
-      proof proofs/rocq/Float.v (rocq-proofs.yml). Integration into the
+      proof proofs/rocq/Float.v (the Rocq Formal Proofs CI job). Integration into the
       analyzer is pinned by feat047_float_add_yields_interval,
       feat047_float_mul_finite_no_nan, and
       feat047_unknown_float_param_not_emitted
@@ -305,7 +305,7 @@ artifacts:
       and feat041_no_relations_when_non_relational asserts a non-relational
       function surfaces none (no noise). The underlying octagon algebra
       carries proofs/rocq/OctagonProject.v + OctagonStrongClose.v
-      (rocq-proofs.yml) and 26 native unit tests
+      (the Rocq Formal Proofs CI job) and 26 native unit tests
       (cargo test -p scry-sai-octagon, also in the CI Test job). Local run:
       all passing.
     tags: [dev-v, relational]
@@ -378,7 +378,7 @@ artifacts:
       forgetting) in crates/scry-analyze-core/src/lib.rs pin the segmented
       memory domain's behaviour; the scry-sai-segment crate adds 10 native
       unit tests (cargo test -p scry-sai-segment) and the admit-free Rocq
-      soundness proof proofs/rocq/Segment.v (rocq-proofs.yml). Local run: all
+      soundness proof proofs/rocq/Segment.v (the Rocq Formal Proofs CI job). Local run: all
       passing.
     tags: [dev-v, memory-segmentation]
     fields:
