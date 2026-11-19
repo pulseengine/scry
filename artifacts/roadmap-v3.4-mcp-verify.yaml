@@ -4,7 +4,6 @@ artifacts:
     type: feature
     title: "v3.4 — Expose `verify` over MCP, once a verdict is worth acting on"
     status: proposed
-    release: v3.4.0
     description: >
       FEAT-066 shipped the MCP server with `analyze` + `query` and made the
       absence of `verify` STRUCTURAL — enforced by the tool list, not by

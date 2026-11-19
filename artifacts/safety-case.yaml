@@ -212,7 +212,7 @@ artifacts:
       at v3.0: proofs/rocq/WrapAdd.v (FEAT-048) proves scry's shipped
       i32.add transfer sound against the official two's-complement wrapping
       semantics, INCLUDING the wrap case — modelled directly, 0 admits,
-      CI-gated. The residual (the named TE-004 slice) is IMPORTING the
+      checked in CI when proofs change, not yet a required check (#207). The residual (the named TE-004 slice) is IMPORTING the
       canonical WasmCert-Coq development as the concrete model rather than
       scry's own faithful re-modeling, and extending the official-semantics
       proof beyond i32.add to the other integer/float transfers (ℤ-model /

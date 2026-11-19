@@ -101,8 +101,10 @@ per DO-330 Table T-0/T-1 (tool operational requirements & verification):
 
 ## 4. Mechanized-soundness inventory (the credit basis)
 
-Admit-free, axiom-free, re-checked by `bazel test //proofs/rocq:...` and
-`//proofs/verus:...` on every CI run:
+0 `Admitted`/`Axiom`/`admit.` by text search (no kernel `Print Assumptions`
+audit yet, FEAT-105). Re-checked by `bazel test //proofs/rocq:...` and
+`//proofs/verus:...` when proof files or `MODULE.bazel` change; both jobs are
+informational (`continue-on-error: true`) and not required checks (#207):
 
 | Proof file | Property | Feature |
 |---|---|---|

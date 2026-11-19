@@ -14,7 +14,7 @@ artifacts:
   - id: FEAT-104
     type: feature
     title: "The assessor-facing proof claims say what CI actually does (#207 wording)"
-    status: draft
+    status: implemented
     release: v3.4.0
     tags: [north-star, O3, claims]
     description: >
@@ -39,7 +39,7 @@ artifacts:
   - id: FEAT-105
     type: feature
     title: "scry's proof check is a required check with a kernel axiom audit and a trust-escape ledger (#207)"
-    status: draft
+    status: proposed
     release: v3.5.0
     tags: [north-star, O3, proofs, ledger]
     description: >
@@ -75,7 +75,7 @@ artifacts:
   - id: FEAT-106
     type: feature
     title: "i32.add, i32.sub and i32.mul intervals are tied to the shipped Rust by translation or conformance test (#210, #212)"
-    status: draft
+    status: proposed
     release: v3.6.0
     tags: [north-star, O3, proofs, ledger]
     description: >
@@ -102,7 +102,7 @@ artifacts:
   - id: FEAT-107
     type: feature
     title: "Baseline: scry run on released chain components under a deterministic budget (#135)"
-    status: draft
+    status: proposed
     release: v3.5.0
     tags: [north-star, baseline, real-components]
     description: >
@@ -138,7 +138,7 @@ artifacts:
   - id: FEAT-108
     type: feature
     title: "scry loop-trip hints accepted by synth's checker on the gale WCET fixture (#144, FEAT-081)"
-    status: draft
+    status: proposed
     release: v3.5.0
     tags: [north-star, O1, wcet]
     description: >
@@ -169,7 +169,7 @@ artifacts:
   - id: FEAT-109
     type: feature
     title: "Every primary scry release asset is inside the signed manifest (#237)"
-    status: draft
+    status: proposed
     release: v3.5.0
     tags: [north-star, release-integrity]
     description: >
