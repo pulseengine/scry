@@ -1,0 +1,210 @@
+# ══════════════════════════════════════════════════════════════════════
+# NEXT-RELEASE BETS — drafts, measured against the North Star
+#
+# Drafted 2026-11-19 from a planner pass and a cold checker pass; the plan
+# and the checker's findings are in docs/release-plan-next.md. Every item is
+# `status: draft`: nothing here is scheduled until the owner decides the
+# release split (factory-notice decision, scry flow `release-plan`).
+#
+# Each description opens with the North Star objective it serves, because the
+# `serves:` field is not in the schema yet. "No indicator moves" is stated
+# where that is the honest answer.
+# ══════════════════════════════════════════════════════════════════════
+artifacts:
+  - id: FEAT-104
+    type: feature
+    title: "The assessor-facing proof claims say what CI actually does (#207 wording)"
+    status: draft
+    release: v3.4.0
+    tags: [north-star, O3, claims]
+    description: >
+      Serves O3 (summary: each public claim that something is proved maps to a
+      CI check that can fail). No indicator moves; this removes a false claim
+      before another release ships it. docs/qualification-dossier-v1.md §4
+      says the proofs are re-checked "on every CI run", and the scry-viz
+      dashboard says "CI-gated". Today the Rocq and Verus jobs are
+      path-filtered (rocq-proofs.yml, verus-proofs.yml `paths:`), carry
+      `continue-on-error: true`, and are not in .github/required-checks.txt.
+      The text is corrected to match; FEAT-105 is what later makes the
+      stronger sentence true.
+    links:
+      - type: satisfies
+        target: REQ-002
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Given the dossier and the dashboard constant, When claim-check runs, Then a claims.yaml entry FAILS if either says the proofs are CI-gated or re-checked on every run while a proof workflow has `continue-on-error: true` or a `paths:` filter, or is absent from required-checks.txt."
+        - "Negative control: restoring the old sentence on a branch turns `Doc claims (claim-check)` red."
+
+  - id: FEAT-105
+    type: feature
+    title: "scry's proof check is a required check with a kernel axiom audit and a trust-escape ledger (#207)"
+    status: draft
+    release: v3.5.0
+    tags: [north-star, O3, proofs, ledger]
+    description: >
+      Serves O3. Indicator: proof-carrying repositories whose proof check, with
+      a kernel axiom audit and a trust-escape ledger, is a required check.
+      scry today: 0 (not required, no kernel audit, no ledger). After: 1.
+      If either kill fallback below is taken, scry does NOT count toward O3,
+      and the plan says so.
+      Trust base as found 2026-11-19: all 20 Rocq files import Stdlib only and
+      prove properties of hand-written models that mirror the Rust
+      (proofs/rocq/WrapAdd.v); rocq-of-rust is enabled in MODULE.bazel but no
+      proof uses it; no WasmCert-Coq import; 0 Admitted/Axiom/admit by grep but
+      no `Print Assumptions` step; Section hypotheses in Reachable.v and
+      StackBound.v; Verus builds from an unmerged rules_verus branch.
+      Closes #207 and #214 items 3-5.
+    links:
+      - type: satisfies
+        target: REQ-002
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "The Rocq proof job is listed in .github/required-checks.txt AND in the live ruleset (`gh api repos/pulseengine/scry/rules/branches/main`), checked by check-required-checks against the live ruleset, not only the file."
+        - "The required context reports on EVERY pull request: no `paths:` filter on the required job, or a reporting job that runs on every PR. Asserted by a docs-only PR whose run shows the context as completed, not skipped."
+        - "Kernel audit: `Print Assumptions` runs for every Theorem/Lemma/Corollary; CI fails if the number audited differs from the number declared in proofs/rocq/*.v (completeness), and fails on any assumption outside a checked-in allow-list."
+        - "Negative controls in CI: a planted `Axiom` and a planted broken proof each turn the job red."
+        - "Ledger: one machine-readable file. Generated entries (Section Variables/Hypotheses, Print Assumptions output) are regenerated in CI and diffed; hand entries (hand-mirror models, gamma-swept-only transfers with width, Verus assumptions, the rules_verus fork pin) live in the same file. CI fails when the entry count grows without a recorded override."
+      residual: >
+        Kill/fallback: before making the job required, time 20 runs. If the
+        median exceeds 30 minutes or more than 1 of 20 runs flakes on toolchain
+        fetch, the job becomes required on pushes to main and release-blocking
+        instead, and scry is reported as not counting toward O3.
+
+  - id: FEAT-106
+    type: feature
+    title: "i32.add, i32.sub and i32.mul intervals are tied to the shipped Rust by translation or conformance test (#210, #212)"
+    status: draft
+    release: v3.6.0
+    tags: [north-star, O3, proofs, ledger]
+    description: >
+      Serves O3 through the guard (ledger entries may only shrink). The O3
+      repository count does not move. The ledger from FEAT-105 loses the
+      "hand mirror" entry for three transfers and gains one entry for the
+      rocq-of-rust translator (trusted, not verified): net -2. On the fallback
+      route the mirror entries become "conformance-tested, not proved", net 0,
+      and the bet is reported as such.
+      Absorbs #212: one interval algebra; crates/wasm-lattice is deleted or
+      compiled and tested by CI. Closes #210 only with the last criterion.
+      Not #95 (no WasmCert-Coq) and not #105.
+    links:
+      - type: satisfies
+        target: REQ-002
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Time-box: 10 working days on i32_add alone via rocq-of-rust. Success = a Rocq target built from crates/scry-interval at build time plus a lemma that the translated i32_add refines the WrapAdd.v model. Otherwise take the fallback: the Rocq model evaluated against the Rust on the exhaustive small-width grid the gamma-sweeps use."
+        - "Mutation controls, each with no .v change: one swapped corner in i32_add, i32_sub and i32_mul (the #210 bug shape) each turn the proof or conformance job red."
+        - "i32_sub, i32_mul, shr_s, sub_wrap_free and mul_wrap_free each have a test that fails on a planted bound error (closes #210)."
+        - "The ledger states the trust base in one entry per element: Rocq kernel, Stdlib, rocq-of-rust (if used), the hand model of wrapping arithmetic."
+
+  - id: FEAT-107
+    type: feature
+    title: "Baseline: scry run on released chain components under a deterministic budget (#135)"
+    status: draft
+    release: v3.5.0
+    tags: [north-star, baseline, real-components]
+    description: >
+      No North Star indicator moves; this is the measurement that decides
+      whether the next scry work is reach or precision, taken on the chain's
+      real released components instead of fixtures. It serves the North Star
+      sentence (evidence an assessor can re-check without running the code)
+      but is not yet such evidence, and is labelled baseline.
+      Inputs: released assets only, pinned by sha256: relay
+      falcon-flight-v1.142.wasm (a component, 49,402 bytes; header checked
+      2026-11-19), scry's own released component, and the north-star-check
+      component once pulseengine.eu publishes it as a release asset.
+      Depends on v3.4.0's native binaries (file-path input; the released
+      component takes its input through argv, measured at about 150 KB in
+      #126) and on meld fuse or component input.
+      Closes #135. Related to #126 (a different, reporter-owned corpus).
+    links:
+      - type: satisfies
+        target: REQ-017
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "First slice: the native scry binary analyses falcon-flight from a file path (after meld fuse if it does not accept components), and the run is reproducible from the pinned sha256."
+        - "Budget in a deterministic unit (abstract-state visits per function, not wall-clock); a function that exhausts it is reported as a named gap kind. A test with a module known to exceed the budget asserts the gap."
+        - "Floor that can fail: at least 50% of falcon-flight's functions finish within the default budget. Below that, this item fails and REQ-007 gets no verifies link."
+        - "Results (four numbers per input: finished y/n, proven-safe trap sites / total, functions on a fallback / total, gaps by kind) are release assets in the signed SHA256SUMS.txt, and CI re-derives them from the pinned inputs and fails on any difference."
+      residual: >
+        Routing, decided by the numbers: if the proven-safe share on
+        falcon-flight is below 2% and the dominant gaps are the known ones
+        (if/else havoc, two-local guards #226), the release after this one is
+        precision work (FEAT-095, #226), not more reach.
+
+  - id: FEAT-108
+    type: feature
+    title: "scry loop-trip hints accepted by synth's checker on the gale WCET fixture (#144, FEAT-081)"
+    status: draft
+    release: v3.5.0
+    tags: [north-star, O1, wcet]
+    description: >
+      Serves O1. Indicator: per target and version, synth's WCET bound as one
+      of three separate numbers. Target: Cortex-M (synth's ARM cycle model),
+      gale's dissolved gust:os fixture (31 functions; 3 bounded, 13 declined
+      on loops, 11 cascading, per #144). Counted per function with a sound
+      bound; no whole-component bound is claimed. No hardware run is part of
+      this, so no rung of jess's ladder moves.
+      synth 0.90.0 has `--wcet-hints` and rejects wrong (below derived trip)
+      and unverifiable hints (checked 2026-11-19). Hints are keyed by function
+      index of the sha256-pinned fixture, so obligation-identity churn
+      (FEAT-064) does not apply. Refines FEAT-081's acceptance; closes #144.
+    links:
+      - type: implements
+        target: FEAT-081
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "Classification first, with a fixed rule: a loop is `counted` iff it matches synth's phase-2 canonical shapes (const init, step and bound; head- or bottom-test); otherwise `parameter-dependent` or `unbounded`. The bounded-function target is frozen in this artifact after classification, before implementation."
+        - "scry emits synth-wcet-hints-v1 for the fixture; synth accepts at least the frozen target and rejects none of scry's hints."
+        - "Negative control in CI: a deliberately too-small hint for one of the 13 declined loops is REJECTED by synth with a machine-readable reason."
+        - "Every loop scry cannot bound is exported as Unbounded with a named reason, never a number."
+      residual: >
+        Kill: fewer than 3 of the 13 loops classify as counted. The need goes
+        back to gale as caller contracts.
+
+  - id: FEAT-109
+    type: feature
+    title: "Every primary scry release asset is inside the signed manifest (#237)"
+    status: draft
+    release: v3.5.0
+    tags: [north-star, release-integrity]
+    description: >
+      No North Star indicator moves: O2 counts consumer repositories, and
+      scry is a toolchain repository (whether toolchain repos count is the
+      owner's call). This makes scry's own MC/DC evidence re-checkable: the
+      MC/DC tarball is today the only primary asset outside the signed
+      SHA256SUMS.txt. Closes #237. #235 (witness version) is not part of it.
+    links:
+      - type: satisfies
+        target: REQ-010
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "The MC/DC evidence tarball is listed in SHA256SUMS.txt and covered by its signature."
+        - "A release check fails if any primary asset is outside the manifest; negative control: a release dry run with one asset dropped from the manifest fails, run once per asset kind."
+
+  - id: FEAT-110
+    type: feature
+    title: "scry's analyzer runs as a signed WASI component under kiln, with wasmtime as the differential (#118; blocked on kiln#480)"
+    status: draft
+    tags: [north-star, O5, kiln, blocked]
+    description: >
+      Serves O5. Indicator: our tools and CI gates that run as signed WASI
+      components under kiln, with wasmtime as the differential, out of all.
+      scry today: 0 of N; N is the owner's to fix (the analyzer plus the ten
+      gate scripts in tools/ gives 11). After: 1 of N, only with no *_GAP
+      switch. Blocked: kiln#480 (entry point for meld-fused command
+      components), open since 2026-08-08. Not scheduled until it closes.
+    links:
+      - type: satisfies
+        target: REQ-009
+    fields:
+      phase: phase-3
+      acceptance-criteria:
+        - "The released scry component is signed (wsc, as in pulseengine.eu's north-star-check pipeline) and kiln runs it with no *_GAP switch."
+        - "Equivalence test in CI: the same pinned module analysed under kiln and under wasmtime gives byte-identical results."
+        - "Negative control: feeding one side a module that differs in one instruction that changes the analysis result makes the equivalence test fail."
