@@ -130,3 +130,32 @@ claims:
     evidence:
       - kind: file-exists
         path: docs/qualification-dossier-v1.md
+
+  # ── Proof-gate wording (scry#207, FEAT-104) ──────────────────────────────
+  # The dossier said the proofs are re-checked "on every CI run" and four other
+  # places said "CI-gated", while both proof workflows are path-filtered,
+  # `continue-on-error: true` and absent from the required checks. The corrected
+  # wording is bound to that state in BOTH directions: the old phrases cannot
+  # come back while the jobs are informational, and the day FEAT-105 makes the
+  # proof job required (drops continue-on-error, adds it to required-checks.txt)
+  # this claim goes red, so the text is upgraded with the gate, not before it.
+  - id: PROOF-GATE-WORDING
+    doc: docs/qualification-dossier-v1.md
+    text: "informational (`continue-on-error: true`) and not required checks (#207)"
+    evidence:
+      - kind: count-min
+        pattern: 'continue-on-error: true'
+        glob: ['.github/workflows/rocq-proofs.yml']
+        min: 1
+      - kind: count-min
+        pattern: 'continue-on-error: true'
+        glob: ['.github/workflows/verus-proofs.yml']
+        min: 1
+      - kind: count-max
+        pattern: '(?i)rocq|verus'
+        glob: ['.github/required-checks.txt']
+        max: 0
+      - kind: count-max
+        pattern: 'CI-gated|on every CI run'
+        glob: ['README.md', 'docs/qualification-dossier-v1.md', 'docs/credit-dossier-v1.md', 'artifacts/safety-case.yaml', 'crates/scry-viz/src/lib.rs']
+        max: 0

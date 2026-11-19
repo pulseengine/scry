@@ -210,7 +210,6 @@ artifacts:
     type: requirement
     title: "An AI agent can CITE a scry obligation: stable identity that survives the edit"
     status: proposed
-    release: v3.4.0
     description: >
       REQ-018 shipped ranked, honesty-classed advisories each carrying a
       VERIFICATION ORACLE — but as PROSE ("re-run scry: this trap_check becomes
@@ -291,7 +290,6 @@ artifacts:
     type: requirement
     title: "An AI agent can be GATED on scry: a machine-checkable verdict on its own edit"
     status: proposed
-    release: v3.4.0
     description: >
       The ADJUDICATION half of the original REQ-020, split out on 2026-08-20
       after adversarial review refuted the first implementation's matching rule.
@@ -861,7 +859,6 @@ artifacts:
     type: feature
     title: "v3.4 — Convex polyhedra domain (ELINA-decomposed)"
     status: proposed
-    release: v3.4.0
     description: >
       Convex polyhedra (Cousot-Halbwachs 1978, AC-012; DD-019) for exact linear
       inequalities Σ a_i·x_i ≤ c above the octagon, made tractable by ELINA-style
@@ -1171,7 +1168,6 @@ artifacts:
     type: feature
     title: "v3.4 — Stable obligation identity (survives the edit)"
     status: proposed
-    release: v3.4.0
     description: >
       Replace raw `(func_index, pc)` as the EXTERNAL key for every finding with a
       content-addressed obligation ID (DD-020). Composed of: function identity
