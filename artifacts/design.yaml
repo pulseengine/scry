@@ -967,7 +967,8 @@ artifacts:
     fields:
       decision: >
         Native binaries for `scry-mcp` and `scry-viz` are built for
-        x86_64/aarch64 on linux-gnu and apple-darwin plus x86_64-pc-windows-msvc,
+        x86_64/aarch64 on linux, aarch64-apple-darwin (Intel macOS dropped
+        fleet-wide, 2026-11-20) and x86_64-pc-windows-msvc,
         archived, folded into the EXISTING signed SHA256SUMS manifest, and
         published as release assets. The wasm32-wasip2 component remains the
         analyzer's deliverable. Both are first-class; neither is "the wrapper".

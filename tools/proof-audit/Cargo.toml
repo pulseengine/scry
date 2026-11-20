@@ -1,0 +1,17 @@
+# FEAT-105: kernel axiom audit for scry's Rocq proofs.
+#
+# Standalone `[workspace]` (not a root member), like crates/scry-mcdc: a CI
+# gate, not a shipped crate, with no dependencies beyond std.
+[package]
+name = "proof-audit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Generate and check a Rocq `Print Assumptions` audit over every theorem in a proof tree"
+
+[[bin]]
+name = "proof-audit"
+path = "src/main.rs"
+
+[workspace]

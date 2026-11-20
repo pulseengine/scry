@@ -506,6 +506,55 @@ jobs:
         run: bazel build //proofs/rocq/...
       - name: Test Rocq proofs
         run: bazel test //proofs/rocq/... --test_output=errors
+      # FEAT-105: kernel axiom audit. Every Theorem/Lemma/... under proofs/rocq
+      # gets a `Print Assumptions`; tools/proof-audit fails unless audited ==
+      # declared and every assumption is allow-listed (the list is empty).
+      - uses: dtolnay/rust-toolchain@stable
+      - name: proof-audit unit tests
+        run: cargo test --manifest-path tools/proof-audit/Cargo.toml
+      - name: Kernel axiom audit (Print Assumptions on every theorem)
+        run: |
+          set -euo pipefail
+          OB=$(bazel info output_base)
+          BIN=$(bazel info bazel-bin)
+          COQC="$OB/external/rules_rocq_rust++rocq+rocq_toolchains/bin/coqc"
+          STDLIB="$OB/external/rules_rocq_rust++rocq+rocq_stdlib/lib/coq/9.0/user-contrib/Stdlib"
+          PA=(cargo run -q --manifest-path tools/proof-audit/Cargo.toml --)
+          A="$RUNNER_TEMP/audit"; mkdir -p "$A"
+          "${PA[@]}" generate --proofs proofs/rocq --prefix proofs.rocq --out "$A/Audit.v"
+          # rules_rocq_rust nests the .vo files below bazel-bin; find the one
+          # directory that holds them, and stop if there is not exactly one.
+          VO=$(find -L "$BIN/proofs/rocq" -name "*.vo" -not -path "*.runfiles*" -exec dirname {} \; | sort -u)
+          if [ -z "$VO" ] || [ "$(printf "%s\n" "$VO" | wc -l)" -ne 1 ]; then
+            echo "::error::expected one .vo directory under $BIN/proofs/rocq, found: ${VO:-none}"; exit 1
+          fi
+          echo "compiled proofs: $VO ($(ls "$VO"/*.vo | wc -l) .vo files)"
+          "$COQC" -q -Q "$STDLIB" Stdlib -Q "$VO" proofs.rocq "$A/Audit.v" > "$A/audit.out" 2>&1 || { echo "::error::coqc failed on the audit file"; cat "$A/audit.out"; exit 1; }
+          "${PA[@]}" check --proofs proofs/rocq --prefix proofs.rocq --output "$A/audit.out" \
+            --allow proofs/rocq/axiom-allowlist.txt
+      # The audit must be able to fail: a planted Axiom, compiled and audited
+      # the same way, has to turn it red on every run.
+      - name: Negative control, a planted Axiom fails the audit
+        run: |
+          set -euo pipefail
+          OB=$(bazel info output_base)
+          COQC="$OB/external/rules_rocq_rust++rocq+rocq_toolchains/bin/coqc"
+          STDLIB="$OB/external/rules_rocq_rust++rocq+rocq_stdlib/lib/coq/9.0/user-contrib/Stdlib"
+          PA=(cargo run -q --manifest-path tools/proof-audit/Cargo.toml --)
+          N="$RUNNER_TEMP/control"; mkdir -p "$N/src"
+          printf 'Axiom planted : False.\nLemma uses_planted : False.\nProof. exact planted. Qed.\nLemma clean : True.\nProof. exact I. Qed.\n' > "$N/src/Planted.v"
+          "$COQC" -q -Q "$STDLIB" Stdlib -Q "$N/src" control "$N/src/Planted.v"
+          "${PA[@]}" generate --proofs "$N/src" --prefix control --out "$N/Audit.v"
+          "$COQC" -q -Q "$STDLIB" Stdlib -Q "$N/src" control "$N/Audit.v" > "$N/audit.out" 2>&1
+          set +e
+          "${PA[@]}" check --proofs "$N/src" --prefix control --output "$N/audit.out" \
+            --allow proofs/rocq/axiom-allowlist.txt | tee "$N/check.out"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 1 ] || ! grep -q 'control.Planted.uses_planted depends on axiom Planted.planted (not allow-listed)' "$N/check.out"; then
+            echo "::error::negative control did not fail as expected (exit $rc)"; exit 1
+          fi
+          echo "::notice::planted Axiom turned the audit red (exit 1), as it must"
 
   deny:
     name: cargo-deny (licenses, advisories, bans)

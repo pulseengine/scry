@@ -9,6 +9,16 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Kernel axiom audit on every Rocq theorem** (FEAT-105 slice 2, #207). The
+  `Rocq Formal Proofs` job now runs `Print Assumptions` on every `Theorem`,
+  `Lemma`, `Corollary`, `Proposition`, `Fact`, `Remark` and `Example` under
+  `proofs/rocq`, against the `.vo` files Bazel built. `tools/proof-audit`
+  (Rust, std only) generates the audit file and fails unless every declared
+  theorem is audited exactly once and every assumption it reports is in
+  `proofs/rocq/axiom-allowlist.txt`, which is empty. On the current tree:
+  declared 101, audited 101, axioms 0. A negative control in the same job
+  compiles a planted `Axiom planted : False.` and requires the audit to fail
+  on it (exit 1) on every run.
 - **Unsigned bounds-check guards are refined** (FEAT-098). `local.get x;
   i32.const c; i32.lt_u|le_u|gt_u|ge_u; br_if` now bounds `x` on the edge
   where the comparison says `x <u c` / `x <=u c`, to `[0, c−1]` / `[0, c]`,
@@ -62,7 +72,7 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   and a code-only PR never ran it. A planted false lemma fails the job's build
   step (`coqc failed ... Unable to unify "2" with "1"`, run 44628952211).
   Verus stays informational: it builds from an unmerged rules_verus branch.
-  Still open in FEAT-105: the kernel axiom audit and the trust-escape ledger.
+  Still open in FEAT-105: the trust-escape ledger.
 - **zstd advisories removed from the dependency graph.** wasmtime's default
   `cache` feature pulled `wasmtime-internal-cache` -> zstd 0.13 / zstd-safe 7 /
   zstd-sys 2.0 (RUSTSEC-2026-0391, -0398, -0403, -0410, plus a run of unsound
@@ -72,6 +82,13 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   `cache`; zstd is gone from `Cargo.lock`. tokio 1.52.3 -> 1.54.1
   (RUSTSEC-2026-0386), crossbeam-epoch 0.9.18 -> 0.9.21 (RUSTSEC-2026-0204),
   chacha20 0.10.0 -> 0.10.2 (yanked).
+
+### Removed
+
+- **No Intel macOS binaries.** The `x86_64-apple-darwin` release target is
+  gone (fleet-wide decision, 2026-11-20). Releases ship `scry-mcp` and
+  `scry-viz` for `aarch64-apple-darwin` on macOS; Intel Macs can still build
+  from source.
 
 ## [3.3.0] — 2026-09-03
 
