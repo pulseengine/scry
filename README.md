@@ -231,8 +231,7 @@ versions allow paper-only soundness. an admit-free Rocq soundness proof of
 the interval domain over the **ℤ integer model** (`Soundness.v`) lands at
 v0.9/v1.0; at v3.0 **`WrapAdd.v` proves `i32.add` sound against the
 *official* two's-complement wrapping semantics — including the wrap case**
-(modelled directly, 0 admits; checked in CI when proofs change, not yet a
-required check, #207). what remains a named, **not-yet-met**
+(modelled directly, 0 admits; re-checked by a required CI job, FEAT-105). what remains a named, **not-yet-met**
 target (TE-004) is *importing the canonical WasmCert-Coq development* as the
 concrete model — rather than scry's own faithful re-modeling of it — and
 extending the official-semantics proof beyond `i32.add` to the other

@@ -102,9 +102,10 @@ per DO-330 Table T-0/T-1 (tool operational requirements & verification):
 ## 4. Mechanized-soundness inventory (the credit basis)
 
 0 `Admitted`/`Axiom`/`admit.` by text search (no kernel `Print Assumptions`
-audit yet, FEAT-105). Re-checked by `bazel test //proofs/rocq:...` and
-`//proofs/verus:...` when proof files or `MODULE.bazel` change; both jobs are
-informational (`continue-on-error: true`) and not required checks (#207):
+audit yet, FEAT-105). Rocq: re-checked by `bazel test //proofs/rocq:...` in
+the required `Rocq Formal Proofs` CI job on every pull request and push to main
+(FEAT-105). Verus: `//proofs/verus:...` runs only when proof files or
+`MODULE.bazel` change and is informational (`continue-on-error: true`, #207):
 
 | Proof file | Property | Feature |
 |---|---|---|

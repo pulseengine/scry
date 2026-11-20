@@ -391,7 +391,7 @@ artifacts:
       acceptance-criteria:
         - "Given a fresh checkout, When `bazel build //proofs/verus/...` runs, Then the Verus proof targets build green and the join-commutativity theorem on wasm-lattice's interval domain is proven."
         - "Given a fresh checkout with Nix available, When `bazel build //proofs/rocq/...` runs, Then the Rocq proof targets build green and the interval-lattice ⊑-reflexivity theorem is closed (no admits)."
-        - "Given CI on a PR, When the workflow runs, Then a dedicated `rocq-proofs` job bootstraps Nix and runs the Rocq proof build (continue-on-error: true at v0.2; required-status-check at v1.0)."
+        - "Given CI on a PR, When the workflow runs, Then a dedicated `rocq-proofs` job bootstraps Nix and runs the Rocq proof build (continue-on-error: true at v0.2; a required status check in ci.yml since FEAT-105)."
         - "Given the v0.9 mechanization milestone (FEAT-010), When the full interval-domain soundness proof against WasmCert-Coq lands, Then it extends the v0.2 scaffold without requiring further toolchain changes."
     links:
       - type: satisfies
