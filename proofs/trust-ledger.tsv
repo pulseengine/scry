@@ -1,0 +1,65 @@
+# scry trust-escape ledger (FEAT-105, #207). What the proofs rest on that the
+# proofs do not themselves establish.
+#
+# Format: origin<TAB>kind<TAB>where<TAB>name<TAB>note, one row per escape.
+#   gen  rows are regenerated in CI by `tools/proof-audit ledger` from the Rocq
+#        sources (Section Variable/Hypothesis premises) and from the kernel
+#        `Print Assumptions` audit (axioms); the file must match in both
+#        directions. Kinds: section-variable, section-hypothesis, axiom.
+#   hand rows record what no tool derives. Kinds: hand-mirror (a Rocq model
+#        written by hand to mirror Rust; nothing checks the two agree),
+#        gamma-swept (a transfer function whose soundness is only falsified by
+#        an exhaustive concrete sweep, with its sweep geometry),
+#        verus-assumption, verus-fork-pin. Every proof file needs a hand-mirror
+#        row until it is extracted from the Rust (rocq-of-rust is enabled in
+#        MODULE.bazel but no proof uses it).
+#
+# Shrink-only: on a pull request the row count may not exceed main's unless an
+# `override<TAB><new count><TAB><reason>` line records why.
+
+# ── generated: Section premises (discharged by generalisation, not axioms) ──
+gen	section-variable	proofs/rocq/Poly.v	point	abstract point type of the polyhedra lattice
+gen	section-variable	proofs/rocq/Reachable.v	node	abstract call-graph node type
+gen	section-variable	proofs/rocq/Reachable.v	cedge	concrete call edge relation
+gen	section-variable	proofs/rocq/Reachable.v	aedge	abstract (over-approximated) call edge relation
+gen	section-variable	proofs/rocq/Reachable.v	is_root	export and start roots
+gen	section-hypothesis	proofs/rocq/Reachable.v	edge_over_approx	every concrete call edge is an abstract edge; the Rust build_static_call_graph is assumed to satisfy it (CallGraph.v covers call_indirect resolution only)
+gen	section-variable	proofs/rocq/StackBound.v	sframe	per-function frame size
+gen	section-variable	proofs/rocq/StackBound.v	scallees	per-function callee list
+gen	section-variable	proofs/rocq/StackBound.v	sb	the stack bound the analyzer computed
+gen	section-hypothesis	proofs/rocq/StackBound.v	sb_postfixpoint	sb is a post-fixpoint of the stack equation; assumed of the Rust fixpoint loop, not proved of it
+
+# ── generated: axioms reported by the kernel audit (allow-list is empty) ──
+
+# ── hand: hand-written models that mirror Rust ──
+hand	hand-mirror	proofs/rocq/BitsCongruence.v	BitsCongruence	known-bits x congruence reduced product of crates/scry-bits
+hand	hand-mirror	proofs/rocq/CallGraph.v	CallGraph	call_indirect target resolution over an index interval (FEAT-011)
+hand	hand-mirror	proofs/rocq/Float.v	Float	FloatAbstract lattice of crates/scry-float (membership mirrors contains)
+hand	hand-mirror	proofs/rocq/GuardRefine.v	GuardRefine	refine_interval in crates/scry-analyze-core/src/lib.rs
+hand	hand-mirror	proofs/rocq/Handle.v	Handle	HandleState domain of crates/scry-handle
+hand	hand-mirror	proofs/rocq/Lattice.v	Lattice	interval order of crates/wasm-lattice/src/lib.rs
+hand	hand-mirror	proofs/rocq/LoopFixpoint.v	LoopFixpoint	loop fixpoint and narrowing in crates/scry-analyze-core/src/lib.rs
+hand	hand-mirror	proofs/rocq/ObligationId.v	ObligationId	obligation identity content address (FEAT-064, DD-020)
+hand	hand-mirror	proofs/rocq/OctagonProject.v	OctagonProject	octagon projection primitives of crates/scry-octagon
+hand	hand-mirror	proofs/rocq/OctagonStrongClose.v	OctagonStrongClose	strong closure of crates/scry-octagon
+hand	hand-mirror	proofs/rocq/Pentagon.v	Pentagon	pentagon lattice of crates/scry-pentagon
+hand	hand-mirror	proofs/rocq/Poly.v	Poly	polyhedra lattice algebra of scry-sai-poly, semantic level only
+hand	hand-mirror	proofs/rocq/Reachability.v	Reachability	two-point reachability lattice (DD-005)
+hand	hand-mirror	proofs/rocq/Reachable.v	Reachable	reachable_from_exports BFS over the static call graph (FEAT-022)
+hand	hand-mirror	proofs/rocq/Region.v	Region	region and offset abstraction of crates/wasm-lattice/src/lib.rs
+hand	hand-mirror	proofs/rocq/Segment.v	Segment	linear-memory segmentation of scry-sai-segment (FEAT-058)
+hand	hand-mirror	proofs/rocq/Soundness.v	Soundness	interval representation and transfers of crates/wasm-lattice/src/lib.rs
+hand	hand-mirror	proofs/rocq/StackBound.v	StackBound	stack bound in crates/scry-analyze-core/src/lib.rs
+hand	hand-mirror	proofs/rocq/WrapAdd.v	WrapAdd	i32_add widen-to-top decision of crates/scry-interval/src/lib.rs
+hand	hand-mirror	proofs/rocq/WriteSetHavoc.v	WriteSetHavoc	run_function_body write-set havoc in crates/scry-analyze-core/src/lib.rs
+
+# ── hand: transfers whose soundness rests on a concrete sweep only ──
+hand	gamma-swept	crates/scry-float/src/lib.rs	float-arith	add/sub/mul/neg/abs rounding transfers; sweep over a concrete f32 and f64 grid incl. +-0, subnormals, +-inf, NaN (Float.v covers the lattice only)
+hand	gamma-swept	crates/scry-bits/src/lib.rs	bits-transfers	known-bits bitwise/shift/const transfers; exhaustive at w = 8
+hand	gamma-swept	crates/scry-pentagon/src/lib.rs	pentagon-transfers	pentagon transfer functions; dim = 2, values in [-2, 3]
+hand	gamma-swept	crates/scry-poly/src/lib.rs	poly-fm-transfers	Fourier-Motzkin transfer functions; dim = 2, values in [-3, 3]
+hand	gamma-swept	crates/scry-analyze-core/src/lib.rs	refine_interval_unsigned	unsigned bounds-check guard refinement (FEAT-098); exhaustive at w = 8, shipped body at w = 32
+
+# ── hand: Verus ──
+# verus-assumption: none. proofs/verus has 0 `assume` and 0 `external_body` (2026-11-20).
+hand	verus-fork-pin	MODULE.bazel	rules_verus	git_override to fc7b636 on branch fix/sysroot-diagnostics-and-verification, not merged to rules_verus main; Verus proofs are informational (continue-on-error)

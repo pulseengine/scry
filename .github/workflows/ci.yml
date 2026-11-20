@@ -72,8 +72,9 @@ jobs:
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           components: rustfmt
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -83,8 +84,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # scry's wasm-component crates (wasm-lattice, scry-analyzer)
@@ -138,7 +140,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install Nix
         # Same Nix-toolchain rationale as the bazel-build job:
@@ -509,7 +513,9 @@ jobs:
       # FEAT-105: kernel axiom audit. Every Theorem/Lemma/... under proofs/rocq
       # gets a `Print Assumptions`; tools/proof-audit fails unless audited ==
       # declared and every assumption is allow-listed (the list is empty).
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
       - name: proof-audit unit tests
         run: cargo test --manifest-path tools/proof-audit/Cargo.toml
       - name: Kernel axiom audit (Print Assumptions on every theorem)
@@ -555,13 +561,67 @@ jobs:
             echo "::error::negative control did not fail as expected (exit $rc)"; exit 1
           fi
           echo "::notice::planted Axiom turned the audit red (exit 1), as it must"
+      # FEAT-105: the trust-escape ledger. Generated rows (Section premises,
+      # audited axioms) must match proofs/trust-ledger.tsv in both directions;
+      # on a pull request the row count may not exceed the base branch's
+      # unless an override line records why.
+      - name: Trust-escape ledger (regenerated, shrink-only)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          PA=(cargo run -q --manifest-path tools/proof-audit/Cargo.toml --)
+          BASE=()
+          if [ -n "${BASE_REF:-}" ]; then
+            git fetch -q --depth=1 origin "$BASE_REF"
+            if git show FETCH_HEAD:proofs/trust-ledger.tsv > "$RUNNER_TEMP/base-ledger.tsv" 2>/dev/null; then
+              BASE=(--baseline "$RUNNER_TEMP/base-ledger.tsv")
+            else
+              echo "::notice::no proofs/trust-ledger.tsv on $BASE_REF: this PR introduces the ledger, no shrink check"
+            fi
+          fi
+          "${PA[@]}" ledger --proofs proofs/rocq --output "$RUNNER_TEMP/audit/audit.out" \
+            --ledger proofs/trust-ledger.tsv "${BASE[@]}"
+      # Both must be able to fail: an unrecorded Hypothesis turns the ledger
+      # red, and a false lemma is rejected by coqc.
+      - name: Negative controls, a planted Hypothesis and a broken proof
+        run: |
+          set -euo pipefail
+          OB=$(bazel info output_base)
+          COQC="$OB/external/rules_rocq_rust++rocq+rocq_toolchains/bin/coqc"
+          STDLIB="$OB/external/rules_rocq_rust++rocq+rocq_stdlib/lib/coq/9.0/user-contrib/Stdlib"
+          PA=(cargo run -q --manifest-path tools/proof-audit/Cargo.toml --)
+          N="$RUNNER_TEMP/control2"; mkdir -p "$N"
+          trap 'git checkout -- proofs/rocq/Lattice.v' EXIT
+          printf '\nSection Planted.\nHypothesis planted_h : False.\nEnd Planted.\n' >> proofs/rocq/Lattice.v
+          set +e
+          "${PA[@]}" ledger --proofs proofs/rocq --output "$RUNNER_TEMP/audit/audit.out" \
+            --ledger proofs/trust-ledger.tsv > "$N/ledger.out"
+          rc=$?
+          set -e
+          cat "$N/ledger.out"
+          if [ "$rc" -ne 1 ] || ! grep -qF "$(printf 'not in the ledger (add this row): gen\tsection-hypothesis\tproofs/rocq/Lattice.v\tplanted_h')" "$N/ledger.out"; then
+            echo "::error::planted Hypothesis did not fail the ledger (exit $rc)"; exit 1
+          fi
+          printf 'Lemma broken : 1 + 1 = 3.\nProof. reflexivity. Qed.\n' > "$N/Broken.v"
+          set +e
+          "$COQC" -q -Q "$STDLIB" Stdlib -Q "$N" control2 "$N/Broken.v" > "$N/broken.out" 2>&1
+          rc=$?
+          set -e
+          cat "$N/broken.out"
+          if [ "$rc" -eq 0 ] || ! grep -q 'Unable to unify' "$N/broken.out"; then
+            echo "::error::a false lemma was not rejected by coqc (exit $rc)"; exit 1
+          fi
+          echo "::notice::planted Hypothesis failed the ledger and coqc rejected the false lemma, as they must"
 
   deny:
     name: cargo-deny (licenses, advisories, bans)
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
       - name: Install cargo-deny (prebuilt)
         uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2
         with:
@@ -580,8 +640,9 @@ jobs:
     # artifact. The job also publishes the static truth-table visualisation.
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # scry#215: before spending several minutes building witness, assert the

@@ -20,6 +20,13 @@
 //! premises are discharged by generalisation and are NOT axioms, so they are
 //! the trust-escape ledger's job, not this audit's.
 //!
+//! `ledger` reconciles `proofs/trust-ledger.tsv`: its `gen` rows must equal the
+//! Section premises scanned from the sources plus the axioms in the audit
+//! output, both directions; every proof file needs a `hand-mirror` row; every
+//! hand row's file must exist; and against a baseline ledger the row count may
+//! only grow when an `override` line names the new count. It cannot tell
+//! whether a hand row is true, only that it is present.
+//!
 //! Exit codes: 0 pass, 1 audit failed, 2 usage or I/O error.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -105,14 +112,15 @@ fn strip_comments(text: &str) -> String {
     out
 }
 
-fn scan_tree(dir: &Path) -> Result<Vec<Decl>, String> {
+/// `(module, text)` for every `*.v` file directly under `dir`, sorted.
+fn read_tree(dir: &Path) -> Result<Vec<(String, String)>, String> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .map_err(|e| format!("reading {}: {e}", dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "v"))
         .collect();
     files.sort();
-    let mut decls = Vec::new();
+    let mut out = Vec::new();
     for f in files {
         let module = f
             .file_stem()
@@ -120,9 +128,16 @@ fn scan_tree(dir: &Path) -> Result<Vec<Decl>, String> {
             .ok_or_else(|| format!("bad file name {}", f.display()))?
             .to_string();
         let text = fs::read_to_string(&f).map_err(|e| format!("reading {}: {e}", f.display()))?;
-        decls.extend(scan_source(&module, &text));
+        out.push((module, text));
     }
-    Ok(decls)
+    Ok(out)
+}
+
+fn scan_tree(dir: &Path) -> Result<Vec<Decl>, String> {
+    Ok(read_tree(dir)?
+        .iter()
+        .flat_map(|(m, t)| scan_source(m, t))
+        .collect())
 }
 
 fn generate(decls: &[Decl], prefix: &str) -> String {
@@ -274,9 +289,302 @@ fn read_allow(path: Option<&str>) -> Result<BTreeSet<String>, String> {
         .collect())
 }
 
+// ── trust-escape ledger ────────────────────────────────────────────────────
+//
+// One TSV file, `origin<TAB>kind<TAB>where<TAB>name<TAB>note` per row, `#`
+// comments, and `override<TAB><count><TAB><reason>` lines. `gen` rows are
+// regenerated here and must equal the file's `gen` rows in both directions;
+// `hand` rows carry what no tool can derive. Against a baseline (main's
+// ledger) the row count may only grow when an override names the new count.
+
+const GEN_KINDS: [&str; 3] = ["section-variable", "section-hypothesis", "axiom"];
+const HAND_KINDS: [&str; 4] = [
+    "hand-mirror",
+    "gamma-swept",
+    "verus-assumption",
+    "verus-fork-pin",
+];
+
+/// Section premises, by keyword, mapped to their ledger kind.
+const PREMISES: [(&str, &str); 6] = [
+    ("Variable", "section-variable"),
+    ("Variables", "section-variable"),
+    ("Parameter", "section-variable"),
+    ("Parameters", "section-variable"),
+    ("Hypothesis", "section-hypothesis"),
+    ("Hypotheses", "section-hypothesis"),
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Row {
+    origin: String,
+    kind: String,
+    place: String,
+    name: String,
+    note: String,
+}
+
+impl Row {
+    fn key(&self) -> (String, String, String) {
+        (self.kind.clone(), self.place.clone(), self.name.clone())
+    }
+    fn tsv(&self) -> String {
+        format!(
+            "{}\t{}\t{}\t{}\t{}",
+            self.origin, self.kind, self.place, self.name, self.note
+        )
+    }
+}
+
+/// Names bound by one premise line: `Variable a b : T.` or `Variables (a : T) (b : U).`
+fn premise_names(rest: &str) -> Vec<String> {
+    let ident = |s: &str| -> Vec<String> {
+        s.split_whitespace()
+            .filter(|w| {
+                w.chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '\'')
+            })
+            .map(String::from)
+            .collect()
+    };
+    let rest = rest.trim_start();
+    if rest.starts_with('(') {
+        let mut names = Vec::new();
+        for group in rest.split('(').skip(1) {
+            if let Some((lhs, _)) = group.split_once(':') {
+                names.extend(ident(lhs));
+            }
+        }
+        names
+    } else {
+        rest.split_once(':')
+            .map(|(lhs, _)| ident(lhs))
+            .unwrap_or_default()
+    }
+}
+
+/// Generated rows from the sources: every Section premise. `Context` is not
+/// parsed, so it is refused rather than silently skipped.
+fn scan_premises(dir: &str, tree: &[(String, String)]) -> Result<Vec<Row>, String> {
+    let mut rows = Vec::new();
+    for (module, text) in tree {
+        let place = format!("{dir}/{module}.v");
+        for line in strip_comments(text).lines() {
+            let t = line.trim_start();
+            if t.strip_prefix("Context")
+                .is_some_and(|r| r.starts_with(char::is_whitespace))
+            {
+                return Err(format!("{place}: `Context` is not parsed by the ledger; declare premises with Variable/Hypothesis"));
+            }
+            for (kw, kind) in PREMISES {
+                let Some(rest) = t.strip_prefix(kw) else {
+                    continue;
+                };
+                if !rest.starts_with(char::is_whitespace) {
+                    continue;
+                }
+                let names = premise_names(rest);
+                if names.is_empty() {
+                    return Err(format!(
+                        "{place}: cannot read the names in `{}`",
+                        t.trim_end()
+                    ));
+                }
+                for name in names {
+                    rows.push(Row {
+                        origin: "gen".into(),
+                        kind: kind.into(),
+                        place: place.clone(),
+                        name,
+                        note: String::new(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// Generated rows from the audit output: every axiom any theorem depends on.
+fn axiom_rows(blocks: &BTreeMap<String, Vec<Verdict>>) -> Vec<Row> {
+    let names: BTreeSet<&String> = blocks
+        .values()
+        .flatten()
+        .filter_map(|v| match v {
+            Verdict::Axioms(a) => Some(a),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    names
+        .into_iter()
+        .map(|n| Row {
+            origin: "gen".into(),
+            kind: "axiom".into(),
+            place: "-".into(),
+            name: n.clone(),
+            note: String::new(),
+        })
+        .collect()
+}
+
+#[derive(Debug, Default)]
+struct Ledger {
+    rows: Vec<Row>,
+    overrides: BTreeMap<usize, String>,
+}
+
+fn parse_ledger(text: &str) -> Result<Ledger, String> {
+    let mut l = Ledger::default();
+    for (i, raw) in text.lines().enumerate() {
+        let n = i + 1;
+        if raw.trim().is_empty() || raw.trim_start().starts_with('#') {
+            continue;
+        }
+        let f: Vec<&str> = raw.split('\t').collect();
+        if f[0] == "override" {
+            let count = f
+                .get(1)
+                .and_then(|c| c.trim().parse::<usize>().ok())
+                .ok_or(format!("line {n}: override needs a row count"))?;
+            let reason = f.get(2).map(|r| r.trim()).unwrap_or("");
+            if reason.is_empty() {
+                return Err(format!("line {n}: override {count} needs a reason"));
+            }
+            l.overrides.insert(count, reason.to_string());
+            continue;
+        }
+        if f.len() != 5 {
+            return Err(format!(
+                "line {n}: expected 5 tab-separated fields, found {}",
+                f.len()
+            ));
+        }
+        let row = Row {
+            origin: f[0].into(),
+            kind: f[1].into(),
+            place: f[2].into(),
+            name: f[3].into(),
+            note: f[4].into(),
+        };
+        let kinds: &[&str] = match row.origin.as_str() {
+            "gen" => &GEN_KINDS,
+            "hand" => &HAND_KINDS,
+            o => return Err(format!("line {n}: origin must be gen or hand, not {o:?}")),
+        };
+        if !kinds.contains(&row.kind.as_str()) {
+            return Err(format!(
+                "line {n}: kind {:?} is not a {} kind",
+                row.kind, row.origin
+            ));
+        }
+        if row.place.is_empty() || row.name.is_empty() {
+            return Err(format!("line {n}: where and name must not be empty"));
+        }
+        l.rows.push(row);
+    }
+    Ok(l)
+}
+
+#[derive(Debug, Default)]
+struct LedgerReport {
+    generated: usize,
+    hand: usize,
+    baseline: Option<usize>,
+    failures: Vec<String>,
+}
+
+/// `exists` answers whether a hand row's `where` path is present.
+fn check_ledger(
+    ledger: &Ledger,
+    regenerated: &[Row],
+    modules: &[String],
+    dir: &str,
+    baseline: Option<&Ledger>,
+    exists: &dyn Fn(&str) -> bool,
+) -> LedgerReport {
+    let mut r = LedgerReport::default();
+    if modules.is_empty() {
+        r.failures.push(format!(
+            "no .v files under {dir}: nothing to reconcile, which is not a pass"
+        ));
+        return r;
+    }
+    let mut seen = BTreeSet::new();
+    for row in &ledger.rows {
+        if !seen.insert(row.key()) {
+            r.failures.push(format!("duplicate row: {}", row.tsv()));
+        }
+    }
+    let have: BTreeSet<_> = ledger
+        .rows
+        .iter()
+        .filter(|x| x.origin == "gen")
+        .map(Row::key)
+        .collect();
+    let want: BTreeSet<_> = regenerated.iter().map(Row::key).collect();
+    for row in regenerated {
+        if !have.contains(&row.key()) {
+            r.failures.push(format!(
+                "generated but not in the ledger (add this row): {}",
+                row.tsv()
+            ));
+        }
+    }
+    for row in ledger.rows.iter().filter(|x| x.origin == "gen") {
+        if !want.contains(&row.key()) {
+            r.failures.push(format!(
+                "in the ledger but no longer generated (remove this row): {}",
+                row.tsv()
+            ));
+        }
+    }
+    let hand: Vec<&Row> = ledger.rows.iter().filter(|x| x.origin == "hand").collect();
+    for row in &hand {
+        if !exists(&row.place) {
+            r.failures
+                .push(format!("hand row points at a missing file: {}", row.tsv()));
+        }
+    }
+    // Every proof file is a hand-written model until shown otherwise: each one
+    // has a hand-mirror row, and each hand-mirror row names a proof file.
+    let mirrored: BTreeSet<&str> = hand
+        .iter()
+        .filter(|x| x.kind == "hand-mirror")
+        .map(|x| x.place.as_str())
+        .collect();
+    let files: BTreeSet<String> = modules.iter().map(|m| format!("{dir}/{m}.v")).collect();
+    for f in &files {
+        if !mirrored.contains(f.as_str()) {
+            r.failures
+                .push(format!("proof file without a hand-mirror row: {f}"));
+        }
+    }
+    for m in &mirrored {
+        if !files.contains(*m) {
+            r.failures.push(format!(
+                "hand-mirror row for a file that is not a proof under {dir}: {m}"
+            ));
+        }
+    }
+    r.generated = have.len();
+    r.hand = hand.len();
+    if let Some(b) = baseline {
+        let (now, before) = (ledger.rows.len(), b.rows.len());
+        r.baseline = Some(before);
+        if now > before && !ledger.overrides.contains_key(&now) {
+            r.failures.push(format!(
+                "the ledger grew from {before} to {now} rows with no recorded override; add `override<TAB>{now}<TAB><reason>`"
+            ));
+        }
+    }
+    r
+}
+
 const USAGE: &str = "usage:
   proof-audit generate --proofs <dir> --prefix <logical.prefix> --out <file.v>
   proof-audit check    --proofs <dir> --prefix <logical.prefix> --output <coqc-output> [--allow <file>] [--format text|json]
+  proof-audit ledger   --proofs <dir> --output <coqc-output> --ledger <file.tsv> [--baseline <file.tsv>] [--format text|json]
   proof-audit --version | --help";
 
 fn arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -288,7 +596,14 @@ fn arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 
 fn run(args: &[String]) -> Result<bool, String> {
     let known = [
-        "--proofs", "--prefix", "--out", "--output", "--allow", "--format",
+        "--proofs",
+        "--prefix",
+        "--out",
+        "--output",
+        "--allow",
+        "--format",
+        "--ledger",
+        "--baseline",
     ];
     let mut i = 1;
     while i < args.len() {
@@ -303,6 +618,9 @@ fn run(args: &[String]) -> Result<bool, String> {
         }
     }
     let proofs = arg(args, "--proofs").ok_or("missing --proofs")?;
+    if args[0] == "ledger" {
+        return run_ledger(args, proofs);
+    }
     let prefix = arg(args, "--prefix").ok_or("missing --prefix")?;
     let decls = scan_tree(Path::new(proofs))?;
     match args[0].as_str() {
@@ -352,6 +670,68 @@ fn run(args: &[String]) -> Result<bool, String> {
         }
         other => Err(format!("unknown command {other}\n{USAGE}")),
     }
+}
+
+fn read_ledger(path: &str) -> Result<Ledger, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("reading {path}: {e}"))?;
+    parse_ledger(&text).map_err(|e| format!("{path}: {e}"))
+}
+
+fn run_ledger(args: &[String], proofs: &str) -> Result<bool, String> {
+    let output = arg(args, "--output").ok_or("missing --output")?;
+    let ledger = read_ledger(arg(args, "--ledger").ok_or("missing --ledger")?)?;
+    let baseline = arg(args, "--baseline").map(read_ledger).transpose()?;
+    let tree = read_tree(Path::new(proofs))?;
+    let modules: Vec<String> = tree.iter().map(|(m, _)| m.clone()).collect();
+    let text = fs::read_to_string(output).map_err(|e| format!("reading {output}: {e}"))?;
+    let mut regenerated = scan_premises(proofs, &tree)?;
+    regenerated.extend(axiom_rows(&parse_output(&text)?));
+    let exists = |p: &str| Path::new(p).exists();
+    let r = check_ledger(
+        &ledger,
+        &regenerated,
+        &modules,
+        proofs,
+        baseline.as_ref(),
+        &exists,
+    );
+    let ok = r.failures.is_empty();
+    let base = r.baseline.map_or("none".to_string(), |b| b.to_string());
+    if arg(args, "--format") == Some("json") {
+        let fails: Vec<String> = r
+            .failures
+            .iter()
+            .map(|f| {
+                format!(
+                    "\"{}\"",
+                    f.replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\t', "\\t")
+                )
+            })
+            .collect();
+        println!(
+            "{{\"rows\":{},\"generated\":{},\"hand\":{},\"baseline\":{},\"pass\":{},\"failures\":[{}]}}",
+            ledger.rows.len(),
+            r.generated,
+            r.hand,
+            r.baseline.map_or("null".to_string(), |b| b.to_string()),
+            ok,
+            fails.join(",")
+        );
+    } else {
+        for f in &r.failures {
+            println!("FAIL: {f}");
+        }
+        println!(
+            "proof-audit ledger: {} rows ({} generated, {} hand), baseline {base}: {}",
+            ledger.rows.len(),
+            r.generated,
+            r.hand,
+            if ok { "PASS" } else { "FAIL" }
+        );
+    }
+    Ok(ok)
 }
 
 fn main() -> ExitCode {
@@ -496,5 +876,165 @@ mod tests {
         assert!(g.contains("Require proofs.rocq.A.\nRequire proofs.rocq.B.\n"));
         assert_eq!(g.matches("Print Assumptions ").count(), 2);
         assert_eq!(g.matches(MARKER).count(), 2);
+    }
+
+    // ── ledger ──
+
+    const SRC: &str = "Section S.\nVariable node : Type.\nVariables a b : nat.\nVariables (c : nat) (d e : bool).\n(* Hypothesis hidden : False. *)\nHypothesis h : a = b.\nEnd S.\n";
+
+    fn tree() -> Vec<(String, String)> {
+        vec![("A".into(), SRC.into())]
+    }
+
+    fn regen() -> Vec<Row> {
+        scan_premises("p", &tree()).unwrap()
+    }
+
+    const GOOD: &str = "# comment\n\
+gen\tsection-variable\tp/A.v\tnode\t\n\
+gen\tsection-variable\tp/A.v\ta\t\n\
+gen\tsection-variable\tp/A.v\tb\t\n\
+gen\tsection-variable\tp/A.v\tc\t\n\
+gen\tsection-variable\tp/A.v\td\t\n\
+gen\tsection-variable\tp/A.v\te\t\n\
+gen\tsection-hypothesis\tp/A.v\th\tpremise of every lemma in S\n\
+hand\thand-mirror\tp/A.v\tA\tmodel of foo\n";
+
+    fn run_ledger_check(text: &str, base: Option<&str>) -> LedgerReport {
+        let l = parse_ledger(text).unwrap();
+        let b = base.map(|t| parse_ledger(t).unwrap());
+        check_ledger(&l, &regen(), &["A".to_string()], "p", b.as_ref(), &|_| true)
+    }
+
+    #[test]
+    fn premises_are_scanned_in_both_binder_forms() {
+        let names: Vec<(String, String)> = regen().into_iter().map(|r| (r.kind, r.name)).collect();
+        let n: Vec<&str> = names.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(n, ["node", "a", "b", "c", "d", "e", "h"]);
+        assert_eq!(names[6].0, "section-hypothesis");
+    }
+
+    #[test]
+    fn context_is_refused_not_skipped() {
+        let t = vec![(
+            "A".to_string(),
+            "Section S.\nContext (x : nat).\nEnd S.\n".to_string(),
+        )];
+        assert!(scan_premises("p", &t).is_err());
+    }
+
+    #[test]
+    fn matching_ledger_passes() {
+        let r = run_ledger_check(GOOD, Some(GOOD));
+        assert!(r.failures.is_empty(), "{:?}", r.failures);
+        assert_eq!((r.generated, r.hand, r.baseline), (7, 1, Some(8)));
+    }
+
+    #[test]
+    fn missing_and_stale_generated_rows_fail() {
+        let missing = GOOD.replace(
+            "gen\tsection-hypothesis\tp/A.v\th\tpremise of every lemma in S\n",
+            "",
+        );
+        let r = run_ledger_check(&missing, None);
+        assert!(
+            r.failures
+                .iter()
+                .any(|f| f.contains("not in the ledger") && f.contains("\th\t")),
+            "{:?}",
+            r.failures
+        );
+        let stale = format!("{GOOD}gen\tsection-variable\tp/A.v\tgone\t\n");
+        let r = run_ledger_check(&stale, None);
+        assert!(
+            r.failures
+                .iter()
+                .any(|f| f.contains("no longer generated") && f.contains("gone")),
+            "{:?}",
+            r.failures
+        );
+    }
+
+    #[test]
+    fn growth_needs_an_override_naming_the_new_count() {
+        let grown = format!("{GOOD}hand\tgamma-swept\tp/A.v\tadd\tw=8\n");
+        let r = run_ledger_check(&grown, Some(GOOD));
+        assert!(
+            r.failures.iter().any(|f| f.contains("grew from 8 to 9")),
+            "{:?}",
+            r.failures
+        );
+        let wrong = format!("{grown}override\t10\tstale count\n");
+        assert!(!run_ledger_check(&wrong, Some(GOOD)).failures.is_empty());
+        let ok = format!("{grown}override\t9\tnew gamma-swept transfer, FEAT-x\n");
+        let r = run_ledger_check(&ok, Some(GOOD));
+        assert!(r.failures.is_empty(), "{:?}", r.failures);
+        let shrunk = GOOD.replace("gen\tsection-variable\tp/A.v\tnode\t\n", "");
+        let r = run_ledger_check(&shrunk, Some(GOOD));
+        assert!(
+            r.failures.iter().all(|f| !f.contains("grew")),
+            "{:?}",
+            r.failures
+        );
+    }
+
+    #[test]
+    fn every_proof_file_needs_a_hand_mirror_row() {
+        let no_mirror = GOOD.replace("hand\thand-mirror\tp/A.v\tA\tmodel of foo\n", "");
+        let r = run_ledger_check(&no_mirror, None);
+        assert!(
+            r.failures
+                .iter()
+                .any(|f| f.contains("without a hand-mirror row: p/A.v")),
+            "{:?}",
+            r.failures
+        );
+        let extra = format!("{GOOD}hand\thand-mirror\tp/B.v\tB\tx\n");
+        let r = run_ledger_check(&extra, None);
+        assert!(
+            r.failures
+                .iter()
+                .any(|f| f.contains("not a proof under p: p/B.v")),
+            "{:?}",
+            r.failures
+        );
+    }
+
+    #[test]
+    fn malformed_rows_and_missing_files_fail() {
+        assert!(parse_ledger("gen\taxiom\t-\tx\n").is_err(), "4 fields");
+        assert!(
+            parse_ledger("hand\taxiom\t-\tx\t\n").is_err(),
+            "gen kind on a hand row"
+        );
+        assert!(parse_ledger("oops\taxiom\t-\tx\t\n").is_err(), "bad origin");
+        assert!(
+            parse_ledger("override\t3\t\n").is_err(),
+            "override without reason"
+        );
+        let l = parse_ledger(GOOD).unwrap();
+        let r = check_ledger(&l, &regen(), &["A".to_string()], "p", None, &|_| false);
+        assert!(
+            r.failures.iter().any(|f| f.contains("missing file")),
+            "{:?}",
+            r.failures
+        );
+        let r = check_ledger(&l, &regen(), &[], "p", None, &|_| true);
+        assert!(
+            r.failures.iter().any(|f| f.contains("not a pass")),
+            "{:?}",
+            r.failures
+        );
+    }
+
+    #[test]
+    fn axioms_from_the_audit_are_generated_rows() {
+        let blocks = parse_output("@@PROOF-AUDIT p.M.a\nAxioms:\nfunext : forall x, x\n@@PROOF-AUDIT p.M.b\nAxioms:\nfunext : forall x, x\n").unwrap();
+        let rows = axiom_rows(&blocks);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (rows[0].kind.as_str(), rows[0].name.as_str()),
+            ("axiom", "funext")
+        );
     }
 }

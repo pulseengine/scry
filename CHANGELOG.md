@@ -9,6 +9,19 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Trust-escape ledger** (FEAT-105 slice 3, #207). `proofs/trust-ledger.tsv`
+  lists what scry's proofs rest on without proving: 10 generated rows (the
+  Section `Variable`/`Hypothesis` premises of Poly.v, Reachable.v and
+  StackBound.v, regenerated in CI and compared in both directions, plus any
+  axiom the kernel audit reports, currently none) and 26 hand rows (each of
+  the 20 Rocq files is a hand-written model of the Rust, 5 transfer families
+  rest on a concrete γ-sweep only, with its width, and the rules_verus pin is
+  an unmerged branch). `tools/proof-audit ledger` fails when a generated row
+  is missing or stale, when a proof file has no hand-mirror row, or when a
+  pull request grows the ledger without an `override` line naming the new
+  count. Two more negative controls run in the `Rocq Formal Proofs` job: an
+  unrecorded `Hypothesis` must fail the ledger, and a false lemma must be
+  rejected by coqc.
 - **Kernel axiom audit on every Rocq theorem** (FEAT-105 slice 2, #207). The
   `Rocq Formal Proofs` job now runs `Print Assumptions` on every `Theorem`,
   `Lemma`, `Corollary`, `Proposition`, `Fact`, `Remark` and `Example` under
@@ -72,7 +85,7 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   and a code-only PR never ran it. A planted false lemma fails the job's build
   step (`coqc failed ... Unable to unify "2" with "1"`, run 44628952211).
   Verus stays informational: it builds from an unmerged rules_verus branch.
-  Still open in FEAT-105: the trust-escape ledger.
+  Still open in FEAT-105: checking the required list against the live ruleset, and the O3 release asset.
 - **zstd advisories removed from the dependency graph.** wasmtime's default
   `cache` feature pulled `wasmtime-internal-cache` -> zstd 0.13 / zstd-safe 7 /
   zstd-sys 2.0 (RUSTSEC-2026-0391, -0398, -0403, -0410, plus a run of unsound
