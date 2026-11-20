@@ -101,17 +101,17 @@ jobs:
       # and benches/ in addition to the lib stub; `-D warnings`
       # promotes clippy to a hard gate per the witness/spar pattern.
       - name: cargo clippy --package scry-host-tests
-        run: cargo clippy --package scry-host-tests --all-targets -- -D warnings
+        run: cargo clippy --locked --package scry-host-tests --all-targets -- -D warnings
       # FEAT-002: the pure meld<->scry boundary crate also lints on the
       # cargo path (it compiles natively as well as to wasm32-wasip2).
       - name: cargo clippy --package scry-sai-provenance
-        run: cargo clippy --package scry-sai-provenance --all-targets -- -D warnings
+        run: cargo clippy --locked --package scry-sai-provenance --all-targets -- -D warnings
       # FEAT-009: the pure security-label (taint) lattice crate also
       # lints on the cargo path (it compiles natively as well as to
       # wasm32-wasip2, where wasm-lattice's WIT label-* exports delegate
       # to it).
       - name: cargo clippy --package scry-sai-taint
-        run: cargo clippy --package scry-sai-taint --all-targets -- -D warnings
+        run: cargo clippy --locked --package scry-sai-taint --all-targets -- -D warnings
       # FEAT-010: the pure octagon relational-domain crate also lints on
       # the cargo path (it compiles natively as well as to
       # wasm32-wasip2, where wasm-lattice's WIT octagon-* exports
@@ -127,12 +127,12 @@ jobs:
       # and drifted independently, so the guard below now checks BOTH.
       - name: cargo clippy — analyzer core, viz, and the domain crates
         run: |
-          cargo clippy -p scry-sai-core -p scry-sai-viz -p scry-sai-mcp -p scry-sai-interval \
+          cargo clippy --locked -p scry-sai-core -p scry-sai-viz -p scry-sai-mcp -p scry-sai-interval \
                        -p scry-sai-bits -p scry-sai-float -p scry-sai-handle \
                        -p scry-sai-pentagon -p scry-sai-segment -p scry-sai-poly \
                        --all-targets -- -D warnings
       - name: cargo clippy --package scry-sai-octagon
-        run: cargo clippy --package scry-sai-octagon --all-targets -- -D warnings
+        run: cargo clippy --locked --package scry-sai-octagon --all-targets -- -D warnings
 
   test:
     name: Test
@@ -173,20 +173,20 @@ jobs:
         # which is where `bazel build //:scry` puts the artifact. No
         # override needed in CI; the env var is supported for local
         # iteration where bazel-bin may be elsewhere.
-        run: cargo test --package scry-host-tests -- --nocapture
+        run: cargo test --locked --package scry-host-tests -- --nocapture
       - name: cargo test --package scry-sai-provenance
         # FEAT-002: inline encode/decode/project unit tests for the
         # meld<->scry boundary crate (the same source the analyzer
         # links into the wasm component). The provenance round-trip is
         # additionally exercised through scry-host-tests/tests/provenance.rs.
-        run: cargo test --package scry-sai-provenance -- --nocapture
+        run: cargo test --locked --package scry-sai-provenance -- --nocapture
       # FEAT-009: the security-label lattice kill-criterion — the label
       # lattice obeys its algebraic laws and forward propagation never
       # moves down the lattice (exhaustive over the height-1 lattice).
       # The same crate links into the wasm component; the host harness
       # (tests/taint.rs) re-exercises it on the cargo path.
       - name: cargo test --package scry-sai-taint
-        run: cargo test --package scry-sai-taint -- --nocapture
+        run: cargo test --locked --package scry-sai-taint -- --nocapture
       # FEAT-010: the octagon relational-domain kill-criterion — the DBM
       # operations are sound w.r.t. the concretization γ (closure
       # preserves γ; join over-approximates the union; meet =
@@ -231,12 +231,12 @@ jobs:
           python3 tools/check-gate-coverage.py
       - name: cargo test — analyzer core, viz, and the domain crates
         run: |
-          cargo test -p scry-sai-core -p scry-sai-viz -p scry-sai-mcp -p scry-sai-interval \
+          cargo test --locked -p scry-sai-core -p scry-sai-viz -p scry-sai-mcp -p scry-sai-interval \
                      -p scry-sai-bits -p scry-sai-float -p scry-sai-handle \
                      -p scry-sai-pentagon -p scry-sai-segment -p scry-sai-poly \
                      -- --nocapture
       - name: cargo test --package scry-sai-octagon
-        run: cargo test --package scry-sai-octagon -- --nocapture
+        run: cargo test --locked --package scry-sai-octagon -- --nocapture
       # FEAT-011: the full-stack Rocq soundness proofs (Soundness /
       # Region / CallGraph / Reachability) are gated by the dedicated
       # Rocq Formal Proofs job (bazel test //proofs/rocq/...).
@@ -437,6 +437,19 @@ jobs:
             bazel-${{ runner.os }}-
       - name: bazel build //:scry
         run: bazel build //:scry
+      # .bazelrc sets `common --lockfile_mode=error`, so the build above ran
+      # against the committed MODULE.bazel.lock. This control proves the flag
+      # bites: a bazel_dep the lock has no checksum for must fail resolution.
+      - name: Negative control, a stale MODULE.bazel.lock fails Bazel
+        run: |
+          trap 'git checkout -- MODULE.bazel' EXIT
+          printf '\nbazel_dep(name = "rules_license", version = "0.0.4")  # planted control\n' >> MODULE.bazel
+          set +e; bazel mod deps > "$RUNNER_TEMP/lockctl.out" 2>&1; rc=$?; set -e
+          grep -m2 -E 'ERROR' "$RUNNER_TEMP/lockctl.out" || true
+          if [ "$rc" -eq 0 ] || ! grep -q 'not permitted with --lockfile_mode=error' "$RUNNER_TEMP/lockctl.out"; then
+            echo "::error::stale-lock control did not fail as expected (exit $rc)"; exit 1
+          fi
+          echo "::notice::a stale MODULE.bazel.lock turned Bazel red (exit $rc), as it must"
       - name: Install wasm-tools
         run: cargo install --locked wasm-tools
       - name: wasm-tools validate bazel-bin/scry.wasm
@@ -517,7 +530,7 @@ jobs:
         with:
           toolchain: stable
       - name: proof-audit unit tests
-        run: cargo test --manifest-path tools/proof-audit/Cargo.toml
+        run: cargo test --locked --manifest-path tools/proof-audit/Cargo.toml
       - name: Kernel axiom audit (Print Assumptions on every theorem)
         run: |
           set -euo pipefail
@@ -525,7 +538,7 @@ jobs:
           BIN=$(bazel info bazel-bin)
           COQC="$OB/external/rules_rocq_rust++rocq+rocq_toolchains/bin/coqc"
           STDLIB="$OB/external/rules_rocq_rust++rocq+rocq_stdlib/lib/coq/9.0/user-contrib/Stdlib"
-          PA=(cargo run -q --manifest-path tools/proof-audit/Cargo.toml --)
+          PA=(cargo run --locked -q --manifest-path tools/proof-audit/Cargo.toml --)
           A="$RUNNER_TEMP/audit"; mkdir -p "$A"
           "${PA[@]}" generate --proofs proofs/rocq --prefix proofs.rocq --out "$A/Audit.v"
           # rules_rocq_rust nests the .vo files below bazel-bin; find the one
@@ -546,7 +559,7 @@ jobs:
           OB=$(bazel info output_base)
           COQC="$OB/external/rules_rocq_rust++rocq+rocq_toolchains/bin/coqc"
           STDLIB="$OB/external/rules_rocq_rust++rocq+rocq_stdlib/lib/coq/9.0/user-contrib/Stdlib"
-          PA=(cargo run -q --manifest-path tools/proof-audit/Cargo.toml --)
+          PA=(cargo run --locked -q --manifest-path tools/proof-audit/Cargo.toml --)
           N="$RUNNER_TEMP/control"; mkdir -p "$N/src"
           printf 'Axiom planted : False.\nLemma uses_planted : False.\nProof. exact planted. Qed.\nLemma clean : True.\nProof. exact I. Qed.\n' > "$N/src/Planted.v"
           "$COQC" -q -Q "$STDLIB" Stdlib -Q "$N/src" control "$N/src/Planted.v"
@@ -570,7 +583,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          PA=(cargo run -q --manifest-path tools/proof-audit/Cargo.toml --)
+          PA=(cargo run --locked -q --manifest-path tools/proof-audit/Cargo.toml --)
           BASE=()
           if [ -n "${BASE_REF:-}" ]; then
             git fetch -q --depth=1 origin "$BASE_REF"
@@ -590,7 +603,7 @@ jobs:
           OB=$(bazel info output_base)
           COQC="$OB/external/rules_rocq_rust++rocq+rocq_toolchains/bin/coqc"
           STDLIB="$OB/external/rules_rocq_rust++rocq+rocq_stdlib/lib/coq/9.0/user-contrib/Stdlib"
-          PA=(cargo run -q --manifest-path tools/proof-audit/Cargo.toml --)
+          PA=(cargo run --locked -q --manifest-path tools/proof-audit/Cargo.toml --)
           N="$RUNNER_TEMP/control2"; mkdir -p "$N"
           trap 'git checkout -- proofs/rocq/Lattice.v' EXIT
           printf '\nSection Planted.\nHypothesis planted_h : False.\nEnd Planted.\n' >> proofs/rocq/Lattice.v
@@ -626,8 +639,77 @@ jobs:
         uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2
         with:
           tool: cargo-deny
-      - name: cargo deny check
-        run: cargo deny check --hide-inclusion-graph
+      # Lockfile sweep (2026-11-20). Every Cargo workspace in the tree (the
+      # root plus the standalone crates/scry-mcdc and tools/proof-audit) has a
+      # committed Cargo.lock, each lock is current (`cargo metadata --locked`),
+      # and cargo-deny audits every tracked lock, not only the root one. The
+      # set of workspace roots and the set of tracked locks must be equal, in
+      # both directions. The planted controls run the same functions.
+      - name: Every Cargo.lock committed, current and audited (with planted controls)
+        run: |
+          roots() {
+            git ls-files '*Cargo.toml' | while read -r t; do
+              cargo locate-project --workspace --manifest-path "$t" --message-format plain
+            done | sed "s|^$PWD/||" | sort -u
+          }
+          check_locks() {
+            local r m l want rc=0
+            r=$(roots)
+            [ -n "$r" ] || { echo "::error::no Cargo workspace found"; return 1; }
+            want=$(for m in $r; do l="$(dirname "$m")/Cargo.lock"; echo "${l#./}"; done | sort)
+            if [ "$want" != "$(git ls-files '*Cargo.lock' | sort)" ]; then
+              echo "::error::workspace roots and committed Cargo.lock files differ:"
+              diff <(echo "$want") <(git ls-files '*Cargo.lock' | sort) || true
+              rc=1
+            fi
+            for m in $r; do
+              l="$(dirname "$m")/Cargo.lock"; l=${l#./}
+              if cargo metadata --locked --format-version 1 --manifest-path "$m" >/dev/null; then
+                echo "current: $l"
+              else
+                echo "::error::$l is out of date for $m"; rc=1
+              fi
+            done
+            return $rc
+          }
+          audit_locks() {
+            local l locks rc=0
+            locks=$(git ls-files '*Cargo.lock')
+            [ -n "$locks" ] || { echo "::error::no committed Cargo.lock"; return 1; }
+            for l in $locks; do
+              echo "== cargo deny: $l"
+              cargo deny --manifest-path "$(dirname "$l")/Cargo.toml" check \
+                --config "$GITHUB_WORKSPACE/deny.toml" --hide-inclusion-graph || rc=1
+            done
+            return $rc
+          }
+
+          echo "### the real check"
+          check_locks
+          audit_locks
+
+          echo "### control 1: a stale nested lock must fail check_locks"
+          printf "\n[target.'cfg(any())'.dependencies]\nitoa = \"1\"\n" >> tools/proof-audit/Cargo.toml
+          set +e; check_locks > "$RUNNER_TEMP/c1.out" 2>&1; rc=$?; set -e
+          git checkout -- tools/proof-audit/Cargo.toml tools/proof-audit/Cargo.lock
+          tail -3 "$RUNNER_TEMP/c1.out"
+          if [ "$rc" -eq 0 ] || ! grep -q 'tools/proof-audit/Cargo.lock is out of date' "$RUNNER_TEMP/c1.out"; then
+            echo "::error::control 1 did not fail as expected (exit $rc)"; exit 1
+          fi
+
+          echo "### control 2: an advisory in a nested lock must fail audit_locks"
+          C=tools/zz-lock-control
+          mkdir -p "$C/src"; : > "$C/src/lib.rs"
+          printf '[package]\nname = "zz-lock-control"\nversion = "0.0.0"\nedition = "2021"\npublish = false\nlicense = "MIT OR Apache-2.0"\n\n[dependencies]\nsmallvec = "=1.6.0"\n\n[workspace]\n' > "$C/Cargo.toml"
+          cargo generate-lockfile --manifest-path "$C/Cargo.toml"
+          git add "$C"
+          set +e; audit_locks > "$RUNNER_TEMP/c2.out" 2>&1; rc=$?; set -e
+          git rm -rq --cached "$C"; rm -rf "$C"
+          grep -E 'cargo deny: tools/zz|RUSTSEC-2021-0003' "$RUNNER_TEMP/c2.out" | head -3
+          if [ "$rc" -eq 0 ] || ! grep -q 'RUSTSEC-2021-0003' "$RUNNER_TEMP/c2.out"; then
+            echo "::error::control 2 did not fail as expected (exit $rc)"; exit 1
+          fi
+          echo "::notice::a stale nested lock and an advisory in a nested lock both turned the check red, as they must"
 
   mcdc:
     name: MC/DC (witness)
@@ -718,11 +800,11 @@ jobs:
       # before the render so a malformed result fails loudly, not silently.
       - name: Dogfood gate — scry-viz check on scry's own module (FEAT-031)
         run: |
-          cargo run --release -p scry-sai-viz -- check \
+          cargo run --locked --release -p scry-sai-viz -- check \
             crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm
       - name: Dogfood — scry-viz on scry's own module (FEAT-025)
         run: |
-          cargo run --release -p scry-sai-viz -- \
+          cargo run --locked --release -p scry-sai-viz -- \
             crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm \
             -o "${{ github.workspace }}/scry-self-analysis.html" \
             --title "scry analyzing scry (scry_mcdc.wasm)"

@@ -38,7 +38,7 @@ command -v "$VIZ" >/dev/null 2>&1 || { echo "witness-viz binary not found: $VIZ"
 rustup target add wasm32-wasip1 >/dev/null 2>&1 || true
 
 echo "== build harness (wasm32-wasip1, debug=2) =="
-cargo build --release --target wasm32-wasip1
+cargo build --locked --release --target wasm32-wasip1
 WASM="target/wasm32-wasip1/release/scry_mcdc.wasm"
 test -f "$WASM" || { echo "missing $WASM" >&2; exit 1; }
 

@@ -59,6 +59,18 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Every lockfile is committed, enforced and audited.** `MODULE.bazel.lock`
+  was gitignored; it is now committed. A new `.bazelrc` sets
+  `common --lockfile_mode=error`, and `.bazelversion` pins Bazel 9.3.3, which
+  bazelisk had resolved to "latest". Every cargo build, test, clippy and run in
+  CI passes `--locked`. The cargo-deny job now checks three things: the
+  Cargo workspace roots and the committed `Cargo.lock` files are the same set;
+  each lock is current; and every lock is audited (it used to audit the root
+  lock only, missing `crates/scry-mcdc` and `tools/proof-audit`). Planted
+  controls prove each check can fail: a stale nested lock, an advisory in a
+  nested lock (RUSTSEC-2021-0003), and a `bazel_dep` the Bazel lock has no
+  checksum for. A change to `Cargo.lock` now also needs
+  `bazel mod deps --lockfile_mode=update`.
 - **The MC/DC evidence is inside the signed manifest** (FEAT-109, #237). The
   `mcdc-evidence` release job used to run after the release and upload its
   tarball once `SHA256SUMS.txt` was already signed, so it was the only primary

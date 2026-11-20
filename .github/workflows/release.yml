@@ -110,7 +110,7 @@ jobs:
 
       - name: Build (native)
         if: ${{ !matrix.cross }}
-        run: cargo build --release --target ${{ matrix.target }} -p scry-sai-mcp -p scry-sai-viz
+        run: cargo build --locked --release --target ${{ matrix.target }} -p scry-sai-mcp -p scry-sai-viz
 
       - name: Build (cross)
         if: matrix.cross
@@ -655,11 +655,11 @@ jobs:
         run: |
           set -euo pipefail
           # FEAT-031 gate first: a malformed self-analysis fails the deploy.
-          cargo run --release -p scry-sai-viz -- check \
+          cargo run --locked --release -p scry-sai-viz -- check \
             crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm
           # Emits BOTH dist/self-analysis.html (capped, human) and
           # dist/self-analysis.guidance.json (full, machine-consumable feed).
-          cargo run --release -p scry-sai-viz -- \
+          cargo run --locked --release -p scry-sai-viz -- \
             crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm \
             -o "$GITHUB_WORKSPACE/dist/self-analysis.html" \
             --title "scry ${VERSION} — self-analysis (scry_mcdc.wasm)"
@@ -715,7 +715,7 @@ jobs:
           if ! ( cd "$WT/crates/scry-mcdc" && cargo build --release --target wasm32-wasip1 -q ); then
             status "SKIPPED — $PREV does not build"; exit 0
           fi
-          cargo run --release -p scry-sai-viz -- delta \
+          cargo run --locked --release -p scry-sai-viz -- delta \
             "$WT/crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm" \
             crates/scry-mcdc/target/wasm32-wasip1/release/scry_mcdc.wasm \
             -o "$GITHUB_WORKSPACE/dist/delta.html" \
@@ -730,7 +730,7 @@ jobs:
       - name: Build landing page (scry-viz index)
         run: |
           set -euo pipefail
-          cargo run --release -p scry-sai-viz -- index \
+          cargo run --locked --release -p scry-sai-viz -- index \
             --site-dir "$GITHUB_WORKSPACE/dist" \
             --title "scry ${VERSION} — verification dashboard"
 
