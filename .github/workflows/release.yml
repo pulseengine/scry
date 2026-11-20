@@ -206,7 +206,9 @@ jobs:
 
   release:
     name: Build, sign, and release
-    needs: build-binaries
+    # FEAT-109 (#237): the MC/DC evidence is built BEFORE the release, so it is
+    # staged with every other asset and covered by SHA256SUMS + cosign.
+    needs: [build-binaries, mcdc-evidence]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -357,6 +359,27 @@ jobs:
           echo "::notice::staged $found native archive(s)"
           ls -la release-assets/
 
+      # FEAT-109 (#237): the MC/DC evidence joins the same staging directory,
+      # so the manifest, its signature and the per-asset cosign loop cover it.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mcdc-evidence
+          path: mcdc-evidence
+
+      - name: Stage MC/DC evidence
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(mcdc-evidence/*-mcdc-evidence.tar.gz)
+          # Fail closed: mcdc-evidence is a `needs:` dependency, so no archive
+          # here means the hand-off produced nothing.
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "::error::expected exactly 1 MC/DC evidence archive, got ${#files[@]}"
+            exit 1
+          fi
+          cp "${files[0]}" release-assets/
+          echo "::notice::staged $(basename "${files[0]}")"
+
       - name: Generate SHA256SUMS.txt
         run: |
           set -euo pipefail
@@ -427,6 +450,27 @@ jobs:
             --verify-tag \
             release-assets/*
 
+      # FEAT-109 (#237): every primary asset of the PUBLISHED release is in the
+      # signed manifest, and every manifest entry was published. Signatures,
+      # certificates and the manifest's own files are the only exemptions.
+      - name: Every primary asset is inside the signed manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$VERSION" --json assets --jq '.assets[].name' \
+            | { grep -vE '\.(sig|pem)$|^SHA256SUMS\.txt' || true; } | sort > published.txt
+          awk '{print $2}' release-assets/SHA256SUMS.txt | sed 's/^\*//' | sort > manifest.txt
+          if [ ! -s published.txt ] || [ ! -s manifest.txt ]; then
+            echo "::error::empty side: published=$(wc -l < published.txt) manifest=$(wc -l < manifest.txt)"
+            exit 1
+          fi
+          if ! diff -u manifest.txt published.txt; then
+            echo "::error::published primary assets and SHA256SUMS.txt differ (lines: - manifest only, + published only)"
+            exit 1
+          fi
+          echo "::notice::$(wc -l < manifest.txt) primary assets, all inside the signed manifest"
+
   # ── MC/DC evidence bundle (witness) ──────────────────────────────────
   #
   # Publishes scry's witness MC/DC evidence as
@@ -435,7 +479,9 @@ jobs:
   # like rivet compliance reports. The bundle is built by witness's own
   # compliance composite action (fed scry's run.json + module paths) so it
   # carries the canonical verdict-evidence/suite-index.html viewer the
-  # website links to. Runs after the release exists and uploads to it.
+  # website links to. Runs BEFORE the release job and hands the archive over
+  # as a workflow artifact, so it is covered by SHA256SUMS + cosign (FEAT-109,
+  # #237); before that it was uploaded after the manifest was signed.
   #
   # ⚠ NEEDS VALIDATION WITH A TEST RELEASE. Three scry-specific assumptions
   # below are unverified until a tag is cut:
@@ -448,10 +494,9 @@ jobs:
   # `verdict-evidence/suite-index.html` before relying on it.
   mcdc-evidence:
     name: MC/DC evidence bundle
-    needs: [release]
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     env:
       WITNESS_VERSION: v0.30.0
     steps:
@@ -498,17 +543,22 @@ jobs:
           archive: 'true'
           archive-name: scry-${{ env.VERSION }}-mcdc-evidence
 
-      - name: Upload MC/DC evidence to release
+      - name: Check the evidence archive exists
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ARCHIVE_PATH: ${{ steps.evidence.outputs.archive-path }}
         run: |
           set -euo pipefail
           if [ -z "${ARCHIVE_PATH:-}" ] || [ ! -f "$ARCHIVE_PATH" ]; then
             echo "::error::compliance action produced no archive-path"; exit 1
           fi
-          gh release upload "$VERSION" "$ARCHIVE_PATH" --clobber
-          echo "::notice title=MC/DC evidence::uploaded $(basename "$ARCHIVE_PATH")"
+          echo "::notice title=MC/DC evidence::built $(basename "$ARCHIVE_PATH")"
+
+      # Handed to the release job, which stages it before SHA256SUMS (FEAT-109).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mcdc-evidence
+          path: ${{ steps.evidence.outputs.archive-path }}
+          if-no-files-found: error
 
   # ── GitHub Pages: scry verification dashboard (FEAT-026) ─────────────────
   #

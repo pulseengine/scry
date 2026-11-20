@@ -36,6 +36,24 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The MC/DC evidence is inside the signed manifest** (FEAT-109, #237). The
+  `mcdc-evidence` release job used to run after the release and upload its
+  tarball once `SHA256SUMS.txt` was already signed, so it was the only primary
+  asset with no integrity protection. It now runs before the release job and
+  hands the tarball over as a workflow artifact; the release stages it with
+  the other assets, so the manifest, its cosign bundle and the per-asset
+  signature cover it. A new step after `gh release create` fails the release
+  unless the published primary assets and the manifest are the same set, in
+  both directions. Negative controls run locally against the step's own
+  script: an extra published asset, each of four asset kinds dropped from the
+  manifest, and an empty release each fail. Not yet exercised on a real tag.
+  A failing evidence job now blocks the release instead of shipping one
+  without evidence.
+- **The proof claims say what CI does** (FEAT-104, #207). Five places said the
+  Rocq and Verus proofs are "CI-gated" or re-checked "on every CI run"; both
+  jobs are path-filtered, `continue-on-error: true` and not required checks.
+  The wording now says so, and `claims.yaml` `PROOF-GATE-WORDING` binds it to
+  that state in both directions.
 - **zstd advisories removed from the dependency graph.** wasmtime's default
   `cache` feature pulled `wasmtime-internal-cache` -> zstd 0.13 / zstd-safe 7 /
   zstd-sys 2.0 (RUSTSEC-2026-0391, -0398, -0403, -0410, plus a run of unsound
