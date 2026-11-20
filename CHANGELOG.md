@@ -83,6 +83,13 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   (RUSTSEC-2026-0386), crossbeam-epoch 0.9.18 -> 0.9.21 (RUSTSEC-2026-0204),
   chacha20 0.10.0 -> 0.10.2 (yanked).
 
+### Removed
+
+- **No Intel macOS binaries.** The `x86_64-apple-darwin` release target is
+  gone (fleet-wide decision, 2026-11-20). Releases ship `scry-mcp` and
+  `scry-viz` for `aarch64-apple-darwin` on macOS; Intel Macs can still build
+  from source.
+
 ## [3.3.0] — 2026-09-03
 
 **Agent-consumable scry.** Every feature here exists so a machine, not a

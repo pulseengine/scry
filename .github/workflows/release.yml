@@ -82,10 +82,6 @@ jobs:
             archive: tar.gz
             cross: true
             can_run: false   # cross-compiled: not executable on an x86 builder
-          - target: x86_64-apple-darwin
-            os: macos-14
-            archive: tar.gz
-            can_run: true    # arm64 host runs x86_64 via Rosetta
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
