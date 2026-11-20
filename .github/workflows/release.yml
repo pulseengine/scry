@@ -92,8 +92,9 @@ jobs:
             can_run: true
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -273,7 +274,9 @@ jobs:
           echo "ASSET=$ASSET" >> "$GITHUB_ENV"
           ls -la release-assets/
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Install cargo-cyclonedx
@@ -302,7 +305,7 @@ jobs:
       - name: Generate rivet compliance evidence
         id: compliance
         continue-on-error: true
-        uses: pulseengine/rivet/.github/actions/compliance@v0.6.0
+        uses: pulseengine/rivet/.github/actions/compliance@189f020e9b36242556cd77b3a553299d1a84910a # v0.6.0
         with:
           # v0.3.0 was too old to parse scry's research-ext schema —
           # the action's internal `rivet validate` failed on v0.2.0
@@ -508,8 +511,9 @@ jobs:
           case "$TAG" in v*) ;; *) echo "::error::tag '$TAG' must start with v"; exit 1 ;; esac
           echo "VERSION=$TAG" >> "$GITHUB_ENV"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           targets: wasm32-wasip1
 
       - name: Install witness + witness-viz (${{ env.WITNESS_VERSION }})
@@ -528,7 +532,7 @@ jobs:
 
       - name: Build evidence bundle (witness compliance action)
         id: evidence
-        uses: pulseengine/witness/.github/actions/compliance@v0.30.0
+        uses: pulseengine/witness/.github/actions/compliance@beef955ea724b10615f77686392781ed695c7b7a # v0.30.0
         with:
           report-label: ${{ env.VERSION }}
           run-json: crates/scry-mcdc/evidence/run.json
@@ -613,8 +617,9 @@ jobs:
           case "$TAG" in v*) ;; *) echo "::error::tag '$TAG' must start with v"; exit 1 ;; esac
           echo "VERSION=$TAG" >> "$GITHUB_ENV"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
