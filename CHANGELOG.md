@@ -71,6 +71,10 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   nested lock (RUSTSEC-2021-0003), and a `bazel_dep` the Bazel lock has no
   checksum for. A change to `Cargo.lock` now also needs
   `bazel mod deps --lockfile_mode=update`.
+- **The release jobs build with Rust 1.100.0, not floating stable.** All four
+  `dtolnay/rust-toolchain` uses in `release.yml` (build-binaries, release,
+  mcdc-evidence, publish-pages) name `toolchain: 1.100.0`, the fleet release
+  toolchain; 1.97 stays the MSRV floor. CI stays on stable.
 - **The MC/DC evidence is inside the signed manifest** (FEAT-109, #237). The
   `mcdc-evidence` release job used to run after the release and upload its
   tarball once `SHA256SUMS.txt` was already signed, so it was the only primary
