@@ -638,7 +638,7 @@ jobs:
       - name: Install cargo-deny (prebuilt)
         uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2
         with:
-          tool: cargo-deny
+          tool: cargo-deny@0.20.2
       # Lockfile sweep (2026-11-20). Every Cargo workspace in the tree (the
       # root plus the standalone crates/scry-mcdc and tools/proof-audit) has a
       # committed Cargo.lock, each lock is current (`cargo metadata --locked`),
@@ -678,8 +678,8 @@ jobs:
             [ -n "$locks" ] || { echo "::error::no committed Cargo.lock"; return 1; }
             for l in $locks; do
               echo "== cargo deny: $l"
-              cargo deny --manifest-path "$(dirname "$l")/Cargo.toml" check \
-                --config "$GITHUB_WORKSPACE/deny.toml" --hide-inclusion-graph || rc=1
+              cargo deny --manifest-path "$(dirname "$l")/Cargo.toml" \
+                --config "$GITHUB_WORKSPACE/deny.toml" check --hide-inclusion-graph || rc=1
             done
             return $rc
           }
