@@ -1,0 +1,7 @@
+# MODULE.bazel.lock is committed and every invocation must match it. A change to
+# MODULE.bazel, Cargo.toml or Cargo.lock that moves module resolution or a
+# module extension's result fails here until the lock is regenerated with
+#   bazel mod deps --lockfile_mode=update
+# and committed. The Bazel build job runs a planted control that proves this
+# flag turns a stale lock red.
+common --lockfile_mode=error
