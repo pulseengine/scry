@@ -135,6 +135,7 @@ artifacts:
         (if/else havoc, two-local guards #226), the release after this one is
         precision work (FEAT-095, #226), not more reach.
 
+      baseline: "First slice, 2026-11-22. Input: relay release falcon-v1.142.0 asset falcon-flight-v1.142.wasm, 49,402 B, sha256 7c65bf9165b1308c42621d206c814640369dfca5be511a22cb5948c5d4a4481b (matches the published .sha256). It is a component: before this slice scry's native binary analysed it as an empty module and `scry-viz check` printed OK with 0 functions; analyze() now refuses component input. Reproducible recipe: meld 0.69.0 `fuse --reproducible` gives a core module of    45454 B, sha256 7afdb27f86ae22f7286fd00f7d405e5baa55b77f30fa8b6df3d5e4d9128e28fa, byte-identical across runs and input directories (the attestation timestamp is the epoch and the input path is normalised). Default `meld fuse` is not reproducible: its attestation carries a random id, the wall-clock time and the absolute input path, though the code is identical (custom sections stripped). scry-viz 3.3.0 (native, built from main; v3.4.0 is not tagged) `check` on the fused module: 29 functions, 237 program points, 5 call edges, well-formed, about 15 ms. Not yet measured: the deterministic budget, finished-per-function, proven-safe trap sites, fallbacks and gaps by kind (the other acceptance criteria)."
   - id: FEAT-108
     type: feature
     title: "scry loop-trip hints accepted by synth's checker on the gale WCET fixture (#144, FEAT-081)"

@@ -72,6 +72,13 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A WebAssembly component is refused instead of analysed as an empty module**
+  (FEAT-107). `analyze()` read a component's bytes as a core module with no
+  functions and returned success, so `scry-viz check` on relay's
+  `falcon-flight-v1.142.wasm` printed "OK — 0 functions". It now returns
+  `InvalidModule` and tells you to fuse the component first. After
+  `meld fuse --reproducible`, the same file analyses as 29 functions, 237
+  program points and 5 call edges.
 - **Every lockfile is committed, enforced and audited.** `MODULE.bazel.lock`
   was gitignored; it is now committed. A new `.bazelrc` sets
   `common --lockfile_mode=error`, and `.bazelversion` pins Bazel 9.3.3, which
