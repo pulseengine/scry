@@ -39,7 +39,7 @@ artifacts:
   - id: FEAT-105
     type: feature
     title: "scry's proof check is a required check with a kernel axiom audit and a trust-escape ledger (#207)"
-    status: proposed
+    status: implemented
     release: v3.5.0
     tags: [north-star, O3, proofs, ledger]
     description: >
@@ -66,11 +66,7 @@ artifacts:
         - "Kernel audit: `Print Assumptions` runs for every Theorem/Lemma/Corollary; CI fails if the number audited differs from the number declared in proofs/rocq/*.v (completeness), and fails on any assumption outside a checked-in allow-list."
         - "Negative controls in CI: a planted `Axiom` and a planted broken proof each turn the job red."
         - "Ledger: one machine-readable file. Generated entries (Section Variables/Hypotheses, Print Assumptions output) are regenerated in CI and diffed; hand entries (hand-mirror models, gamma-swept-only transfers with width, Verus assumptions, the rules_verus fork pin) live in the same file. CI fails when the entry count grows without a recorded override."
-      residual: >
-        Kill/fallback: before making the job required, time 20 runs. If the
-        median exceeds 30 minutes or more than 1 of 20 runs flakes on toolchain
-        fetch, the job becomes required on pushes to main and release-blocking
-        instead, and scry is reported as not counting toward O3.
+      residual: "Kill/fallback: before making the job required, time 20 runs. If the median exceeds 30 minutes or more than 1 of 20 runs flakes on toolchain fetch, the job becomes required on pushes to main and release-blocking instead, and scry is reported as not counting toward O3. Measured 2026-11-22: the job has run 19 times since #248; 15 completed successfully (median about 2 minutes, at most 144 s in the 13 timed earlier), 4 were cancelled by cancel-in-progress on a newer push, 0 failed, 0 flaked on toolchain fetch. 5 more completed runs reach the 20 this criterion names; the job was made required before that count, on the owner's approval (#248). Evidence for the acceptance criteria: live-ruleset check-required-checks exit 0 with 13 contexts (2026-11-22); docs-only PR #254, run 45022643954, Rocq job completed success; kernel audit and planted Axiom #249; ledger, planted Hypothesis and broken proof #250; O3 release asset #255."
 
   - id: FEAT-106
     type: feature
