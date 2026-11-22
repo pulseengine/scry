@@ -32,6 +32,8 @@ permissions:
   contents: write
   id-token: write
   attestations: write
+  # Read main's CI run on the tagged commit for the North Star O3 input.
+  actions: read
 
 jobs:
 
@@ -378,6 +380,54 @@ jobs:
           fi
           cp "${files[0]}" release-assets/
           echo "::notice::staged $(basename "${files[0]}")"
+
+      # FEAT-105 (pulseengine.eu#393): the North Star O3 input, staged before
+      # SHA256SUMS.txt so the signed manifest (and the FEAT-109 check below)
+      # covers it. The facts come from what was measured: the required-check
+      # contexts from the branch rules API now, and the "Rocq Formal Proofs"
+      # job of main's CI run on the tagged commit, whose log carries the kernel
+      # audit, the ledger and their planted controls. A missing input makes the
+      # fact ran=false (counted as failed by the consumer), never zero-filled.
+      - name: Stage North Star O3 input (north-star-input.O3.json)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          N="$RUNNER_TEMP/north-star"; mkdir -p "$N"
+          SHA=$(git rev-parse "$VERSION^{commit}")
+          ARGS=(--repo "$REPO" --version-tag "$VERSION" --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+          if gh api "repos/$REPO/rules/branches/main" \
+              --jq '.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context' \
+              > "$N/required.txt"; then
+            ARGS+=(--required "$N/required.txt" --rules-evidence "https://api.github.com/repos/$REPO/rules/branches/main")
+          else
+            echo "::warning::could not read the branch rules; proof_check_required is ran=false"
+          fi
+          JOB=""
+          for _ in $(seq 1 15); do
+            RUN=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&per_page=1" \
+              --jq '.workflow_runs[0].id // empty')
+            if [ -n "$RUN" ]; then
+              JOB=$(gh api "repos/$REPO/actions/runs/$RUN/jobs?per_page=100" \
+                --jq '.jobs[] | select(.name=="Rocq Formal Proofs" and .status=="completed") | "\(.id) \(.conclusion) \(.html_url)"' | head -1)
+              [ -n "$JOB" ] && break
+            fi
+            sleep 60
+          done
+          if [ -n "$JOB" ]; then
+            read -r JID CONCL URL <<< "$JOB"
+            curl -sSfL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/actions/jobs/$JID/logs" -o "$N/rocq.log"
+            ARGS+=(--rocq-log "$N/rocq.log" --job-conclusion "$CONCL" --job-evidence "$URL")
+          else
+            echo "::warning::no completed Rocq Formal Proofs job in main's CI run for $SHA; axiom_audit and ledger are ran=false"
+          fi
+          cargo run --locked -q --manifest-path tools/proof-audit/Cargo.toml -- north-star "${ARGS[@]}" \
+            > release-assets/north-star-input.O3.json
+          jq -e '.schema_version == 1 and .objective == "O3" and (.facts | length) == 3' \
+            release-assets/north-star-input.O3.json > /dev/null
+          jq -c '.facts[] | {id, ran, pass, control_failed_as_expected}' release-assets/north-star-input.O3.json
 
       - name: Generate SHA256SUMS.txt
         run: |

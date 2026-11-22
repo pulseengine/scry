@@ -1,0 +1,13 @@
+Format
+Clippy
+Test
+Bazel build (//:scry)
+MC/DC (witness)
+cargo-deny (licenses, advisories, bans)
+Doc claims (claim-check)
+Rivet artifact validation
+WIT round-trip (wasm-tools)
+AADL model (spar parse)
+Commit traceability (rivet)
+Required checks track CI jobs (scry#130)
+Rocq Formal Proofs

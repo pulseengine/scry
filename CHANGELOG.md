@@ -9,6 +9,19 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **North Star O3 input as a signed release asset** (FEAT-105, pulseengine.eu#393).
+  Each release attaches `north-star-input.O3.json` (schema_version 1 of
+  pulseengine.eu's `data/north-star/input.schema.json`), listed in the
+  cosign-signed `SHA256SUMS.txt`. It carries three facts:
+  - `proof_check_required`, read from the branch rules API when the release
+    runs;
+  - `axiom_audit` and `ledger`, read from the log of the "Rocq Formal Proofs"
+    job of main's CI run on the tagged commit, together with whether their
+    planted controls turned red.
+
+  A missing input gives `ran: false`, never a zero. `proof-audit north-star`
+  generates the file, and its tests use a recorded main job log and the
+  vendored schema.
 - **Trust-escape ledger** (FEAT-105 slice 3, #207). `proofs/trust-ledger.tsv`
   lists what scry's proofs rest on without proving: 10 generated rows (the
   Section `Variable`/`Hypothesis` premises of Poly.v, Reachable.v and
@@ -102,7 +115,8 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   and a code-only PR never ran it. A planted false lemma fails the job's build
   step (`coqc failed ... Unable to unify "2" with "1"`, run 44628952211).
   Verus stays informational: it builds from an unmerged rules_verus branch.
-  Still open in FEAT-105: checking the required list against the live ruleset, and the O3 release asset.
+  On 2026-11-22, `tools/check-required-checks.py` in live-ruleset mode
+  reported that the file and ruleset 16891064 agree on 13 contexts.
 - **zstd advisories removed from the dependency graph.** wasmtime's default
   `cache` feature pulled `wasmtime-internal-cache` -> zstd 0.13 / zstd-safe 7 /
   zstd-sys 2.0 (RUSTSEC-2026-0391, -0398, -0403, -0410, plus a run of unsound
