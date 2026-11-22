@@ -581,10 +581,267 @@ fn check_ledger(
     r
 }
 
+// ── North Star O3 input (FEAT-105, pulseengine.eu#393) ──────────────────────
+//
+// `north-star` writes `north-star-input.O3.json` (schema_version 1 of
+// pulseengine.eu's data/north-star/input.schema.json) from what was measured:
+// the required-check contexts read from the branch rules API at release time,
+// and the raw log of the "Rocq Formal Proofs" job of main's CI run on the
+// tagged commit. The facts are read from that job's own output lines, so the
+// controls reported here are the controls that ran. A missing input makes the
+// fact `ran: false`, which the consumer counts as failed; nothing is zero-filled.
+
+const ROCQ_CONTEXT: &str = "Rocq Formal Proofs";
+const AUDIT_LINE: &str = "proof-audit: declared ";
+const LEDGER_LINE: &str = "proof-audit ledger: ";
+const AXIOM_CONTROL: &str = "##[notice]planted Axiom turned the audit red";
+const LEDGER_CONTROL: &str = "##[notice]planted Hypothesis failed the ledger";
+const NOT_MEASURED: [&str; 5] = [
+    "The Rocq proofs are about hand-written models that mirror the Rust; nothing checks a model against the code (see the hand-mirror rows of proofs/trust-ledger.tsv).",
+    "The Verus proofs are informational (continue-on-error) and are not among these facts.",
+    "proof_check_required is read from the branch rules API when the release runs; it says nothing about the ruleset between releases.",
+    "The ledger's shrink-only check runs on pull requests; on main the ledger is checked against the regenerated rows with no baseline.",
+    "That the required context reports on every pull request was shown once, by the docs-only pull request scry#254, and is not re-measured per release.",
+];
+
+struct Fact {
+    id: &'static str,
+    ran: bool,
+    pass: bool,
+    control: bool,
+    detail: Vec<(&'static str, String)>,
+    evidence: Option<String>,
+}
+
+fn json_str(s: &str) -> String {
+    let mut o = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+/// The first line containing `marker`, from the marker on. The real check runs
+/// before its control in the job, so the first occurrence is the real result.
+fn first_after<'a>(log: &'a str, marker: &str) -> Option<&'a str> {
+    log.lines()
+        .find_map(|l| l.find(marker).map(|i| l[i + marker.len()..].trim_end()))
+}
+
+/// "101, audited 101, allow-listed axioms 0: PASS" -> (101, 101, 0, true)
+fn parse_audit_line(rest: &str) -> Option<(u64, u64, u64, bool)> {
+    let (nums, verdict) = rest.rsplit_once(": ")?;
+    let mut it = nums.split(", ");
+    let declared = it.next()?.parse().ok()?;
+    let audited = it.next()?.strip_prefix("audited ")?.parse().ok()?;
+    let allowed = it
+        .next()?
+        .strip_prefix("allow-listed axioms ")?
+        .parse()
+        .ok()?;
+    Some((declared, audited, allowed, verdict == "PASS"))
+}
+
+/// "36 rows (10 generated, 26 hand), baseline none: PASS"
+/// -> (36, 10, 26, "none", true)
+fn parse_ledger_line(rest: &str) -> Option<(u64, u64, u64, String, bool)> {
+    let (body, verdict) = rest.rsplit_once(": ")?;
+    let (rows, tail) = body.split_once(" rows (")?;
+    let (gen, tail) = tail.split_once(" generated, ")?;
+    let (hand, tail) = tail.split_once(" hand), baseline ")?;
+    Some((
+        rows.parse().ok()?,
+        gen.parse().ok()?,
+        hand.parse().ok()?,
+        tail.to_string(),
+        verdict == "PASS",
+    ))
+}
+
+fn required_fact(required: Option<&[String]>, evidence: Option<String>) -> Fact {
+    let Some(list) = required else {
+        return Fact {
+            id: "proof_check_required",
+            ran: false,
+            pass: false,
+            control: false,
+            detail: vec![("context", json_str(ROCQ_CONTEXT))],
+            evidence,
+        };
+    };
+    let lookup = |l: &[String]| l.iter().any(|c| c == ROCQ_CONTEXT);
+    let without: Vec<String> = list
+        .iter()
+        .filter(|c| *c != ROCQ_CONTEXT)
+        .cloned()
+        .collect();
+    Fact {
+        id: "proof_check_required",
+        ran: !list.is_empty(),
+        pass: lookup(list),
+        // The same lookup over the list with the context removed must report
+        // "not required"; a lookup that cannot say no proves nothing.
+        control: !list.is_empty() && !lookup(&without),
+        detail: vec![
+            ("context", json_str(ROCQ_CONTEXT)),
+            ("required_contexts", list.len().to_string()),
+            ("control", json_str("the same lookup over the list with this context removed reports it not required")),
+        ],
+        evidence,
+    }
+}
+
+fn audit_fact(log: Option<&str>, conclusion: &str, evidence: Option<String>) -> Fact {
+    let parsed = log
+        .and_then(|l| first_after(l, AUDIT_LINE))
+        .and_then(parse_audit_line);
+    let mut detail = vec![("job_conclusion", json_str(conclusion))];
+    let Some((declared, audited, allowed, ok)) = parsed else {
+        return Fact {
+            id: "axiom_audit",
+            ran: false,
+            pass: false,
+            control: false,
+            detail,
+            evidence,
+        };
+    };
+    detail.extend([
+        ("declared", declared.to_string()),
+        ("audited", audited.to_string()),
+        ("allow_listed_axioms", allowed.to_string()),
+    ]);
+    Fact {
+        id: "axiom_audit",
+        ran: true,
+        pass: conclusion == "success" && ok && declared > 0 && declared == audited,
+        control: log.is_some_and(|l| l.contains(AXIOM_CONTROL)),
+        detail,
+        evidence,
+    }
+}
+
+fn ledger_fact(log: Option<&str>, conclusion: &str, evidence: Option<String>) -> Fact {
+    let parsed = log
+        .and_then(|l| first_after(l, LEDGER_LINE))
+        .and_then(parse_ledger_line);
+    let mut detail = vec![("job_conclusion", json_str(conclusion))];
+    let Some((rows, gen, hand, baseline, ok)) = parsed else {
+        return Fact {
+            id: "ledger",
+            ran: false,
+            pass: false,
+            control: false,
+            detail,
+            evidence,
+        };
+    };
+    detail.extend([
+        ("rows", rows.to_string()),
+        ("generated", gen.to_string()),
+        ("hand", hand.to_string()),
+        ("baseline", json_str(&baseline)),
+    ]);
+    Fact {
+        id: "ledger",
+        ran: true,
+        pass: conclusion == "success" && ok && rows == gen + hand,
+        control: log.is_some_and(|l| l.contains(LEDGER_CONTROL)),
+        detail,
+        evidence,
+    }
+}
+
+struct NorthStar<'a> {
+    repo: &'a str,
+    version: &'a str,
+    generated_at: &'a str,
+    required: Option<Vec<String>>,
+    rules_evidence: Option<String>,
+    log: Option<String>,
+    conclusion: &'a str,
+    job_evidence: Option<String>,
+}
+
+fn north_star_json(n: &NorthStar) -> String {
+    let facts = [
+        required_fact(n.required.as_deref(), n.rules_evidence.clone()),
+        audit_fact(n.log.as_deref(), n.conclusion, n.job_evidence.clone()),
+        ledger_fact(n.log.as_deref(), n.conclusion, n.job_evidence.clone()),
+    ];
+    let facts: Vec<String> = facts
+        .iter()
+        .map(|f| {
+            let detail: Vec<String> = f.detail.iter().map(|(k, v)| format!("{}: {v}", json_str(k))).collect();
+            let mut s = format!(
+                "    {{\"id\": {}, \"ran\": {}, \"pass\": {}, \"control_failed_as_expected\": {}, \"detail\": {{{}}}",
+                json_str(f.id), f.ran, f.pass, f.control, detail.join(", ")
+            );
+            if let Some(e) = &f.evidence {
+                s.push_str(&format!(", \"evidence\": {}", json_str(e)));
+            }
+            s.push('}');
+            s
+        })
+        .collect();
+    let blind: Vec<String> = NOT_MEASURED
+        .iter()
+        .map(|s| format!("    {}", json_str(s)))
+        .collect();
+    format!(
+        "{{\n  \"schema_version\": 1,\n  \"objective\": \"O3\",\n  \"repo\": {},\n  \"version\": {},\n  \"generated_at\": {},\n  \"generator\": {{\"tool\": \"proof-audit\", \"version\": {}}},\n  \"facts\": [\n{}\n  ],\n  \"not_measured\": [\n{}\n  ]\n}}\n",
+        json_str(n.repo),
+        json_str(n.version),
+        json_str(n.generated_at),
+        json_str(env!("CARGO_PKG_VERSION")),
+        facts.join(",\n"),
+        blind.join(",\n"),
+    )
+}
+
+fn run_north_star(args: &[String]) -> Result<bool, String> {
+    let read = |flag: &str| -> Result<Option<String>, String> {
+        arg(args, flag)
+            .map(|p| fs::read_to_string(p).map_err(|e| format!("reading {p}: {e}")))
+            .transpose()
+    };
+    let required = read("--required")?.map(|t| {
+        t.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect()
+    });
+    let n = NorthStar {
+        repo: arg(args, "--repo").ok_or("missing --repo")?,
+        version: arg(args, "--version-tag").ok_or("missing --version-tag")?,
+        generated_at: arg(args, "--generated-at").ok_or("missing --generated-at")?,
+        required,
+        rules_evidence: arg(args, "--rules-evidence").map(String::from),
+        log: read("--rocq-log")?,
+        conclusion: arg(args, "--job-conclusion").unwrap_or("not found"),
+        job_evidence: arg(args, "--job-evidence").map(String::from),
+    };
+    print!("{}", north_star_json(&n));
+    Ok(true)
+}
+
 const USAGE: &str = "usage:
-  proof-audit generate --proofs <dir> --prefix <logical.prefix> --out <file.v>
-  proof-audit check    --proofs <dir> --prefix <logical.prefix> --output <coqc-output> [--allow <file>] [--format text|json]
-  proof-audit ledger   --proofs <dir> --output <coqc-output> --ledger <file.tsv> [--baseline <file.tsv>] [--format text|json]
+  proof-audit generate   --proofs <dir> --prefix <logical.prefix> --out <file.v>
+  proof-audit check      --proofs <dir> --prefix <logical.prefix> --output <coqc-output> [--allow <file>] [--format text|json]
+  proof-audit ledger     --proofs <dir> --output <coqc-output> --ledger <file.tsv> [--baseline <file.tsv>] [--format text|json]
+  proof-audit north-star --repo <owner/name> --version-tag <vX.Y.Z> --generated-at <rfc3339>
+                         [--required <contexts.txt>] [--rules-evidence <url>]
+                         [--rocq-log <job.log>] [--job-conclusion <conclusion>] [--job-evidence <url>]
   proof-audit --version | --help";
 
 fn arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -604,6 +861,14 @@ fn run(args: &[String]) -> Result<bool, String> {
         "--format",
         "--ledger",
         "--baseline",
+        "--repo",
+        "--version-tag",
+        "--generated-at",
+        "--required",
+        "--rules-evidence",
+        "--rocq-log",
+        "--job-conclusion",
+        "--job-evidence",
     ];
     let mut i = 1;
     while i < args.len() {
@@ -616,6 +881,9 @@ fn run(args: &[String]) -> Result<bool, String> {
         } else {
             return Err(format!("unexpected argument {a}\n{USAGE}"));
         }
+    }
+    if args[0] == "north-star" {
+        return run_north_star(args);
     }
     let proofs = arg(args, "--proofs").ok_or("missing --proofs")?;
     if args[0] == "ledger" {
@@ -1036,5 +1304,181 @@ hand\thand-mirror\tp/A.v\tA\tmodel of foo\n";
             (rows[0].kind.as_str(), rows[0].name.as_str()),
             ("axiom", "funext")
         );
+    }
+
+    // ── north-star (O3 input) ──
+    const MAIN_LOG: &str = include_str!("../tests/fixtures/rocq-job-main.log");
+    const CONTEXTS: &str = include_str!("../tests/fixtures/required-contexts.txt");
+    const SCHEMA: &str = include_str!("../tests/fixtures/input.schema.json");
+
+    fn contexts() -> Vec<String> {
+        CONTEXTS.lines().map(String::from).collect()
+    }
+
+    fn ns(required: Option<Vec<String>>, log: Option<&str>, conclusion: &str) -> serde_json::Value {
+        let n = NorthStar {
+            repo: "pulseengine/scry",
+            version: "v3.5.0",
+            generated_at: "2026-11-22T12:00:00Z",
+            required,
+            rules_evidence: Some(
+                "https://api.github.com/repos/pulseengine/scry/rules/branches/main".into(),
+            ),
+            log: log.map(String::from),
+            conclusion,
+            job_evidence: Some("https://github.com/pulseengine/scry/actions/runs/1/job/2".into()),
+        };
+        serde_json::from_str(&north_star_json(&n)).expect("north-star output is JSON")
+    }
+
+    fn fact<'a>(v: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+        v["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == id)
+            .unwrap()
+    }
+
+    /// Checks the output against the vendored pulseengine.eu schema: every
+    /// required key present, no key outside `properties` (both levels set
+    /// additionalProperties: false), and the declared JSON types.
+    fn conforms(v: &serde_json::Value) {
+        let s: serde_json::Value = serde_json::from_str(SCHEMA).unwrap();
+        let level = |obj: &serde_json::Value, sch: &serde_json::Value, what: &str| {
+            let o = obj
+                .as_object()
+                .unwrap_or_else(|| panic!("{what} is not an object"));
+            for k in sch["required"].as_array().unwrap() {
+                assert!(
+                    o.contains_key(k.as_str().unwrap()),
+                    "{what} lacks required {k}"
+                );
+            }
+            let props = sch["properties"].as_object().unwrap();
+            for (k, val) in o {
+                let p = props
+                    .get(k)
+                    .unwrap_or_else(|| panic!("{what} has {k}, not in the schema"));
+                let ok = match p.get("type").and_then(|t| t.as_str()) {
+                    Some("string") => val.is_string(),
+                    Some("boolean") => val.is_boolean(),
+                    Some("object") => val.is_object(),
+                    Some("array") => val.is_array(),
+                    _ => true,
+                };
+                assert!(ok, "{what}.{k} has the wrong type: {val}");
+            }
+        };
+        level(v, &s, "input");
+        assert_eq!(
+            v["schema_version"],
+            s["properties"]["schema_version"]["const"]
+        );
+        assert_eq!(v["objective"], "O3");
+        level(&v["generator"], &s["properties"]["generator"], "generator");
+        for f in v["facts"].as_array().unwrap() {
+            level(f, &s["properties"]["facts"]["items"], "fact");
+        }
+        assert!(!v["not_measured"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn north_star_from_the_real_main_job_log_passes_with_controls() {
+        let v = ns(Some(contexts()), Some(MAIN_LOG), "success");
+        conforms(&v);
+        assert_eq!(v["facts"].as_array().unwrap().len(), 3);
+        for id in ["proof_check_required", "axiom_audit", "ledger"] {
+            let f = fact(&v, id);
+            assert_eq!(
+                (
+                    f["ran"].as_bool(),
+                    f["pass"].as_bool(),
+                    f["control_failed_as_expected"].as_bool()
+                ),
+                (Some(true), Some(true), Some(true)),
+                "{id}: {f}"
+            );
+        }
+        // The REAL lines, not the control's (declared 2 ... FAIL; ledger ... FAIL).
+        let a = &fact(&v, "axiom_audit")["detail"];
+        assert_eq!(
+            (
+                a["declared"].as_u64(),
+                a["audited"].as_u64(),
+                a["allow_listed_axioms"].as_u64()
+            ),
+            (Some(101), Some(101), Some(0))
+        );
+        let l = &fact(&v, "ledger")["detail"];
+        assert_eq!(
+            (
+                l["rows"].as_u64(),
+                l["generated"].as_u64(),
+                l["hand"].as_u64()
+            ),
+            (Some(36), Some(10), Some(26))
+        );
+        assert_eq!(l["baseline"], "none");
+        assert_eq!(
+            fact(&v, "proof_check_required")["detail"]["required_contexts"].as_u64(),
+            Some(13)
+        );
+    }
+
+    #[test]
+    fn north_star_missing_inputs_are_not_run_never_zero_filled() {
+        let v = ns(None, None, "not found");
+        conforms(&v);
+        for f in v["facts"].as_array().unwrap() {
+            assert_eq!(
+                (f["ran"].as_bool(), f["pass"].as_bool()),
+                (Some(false), Some(false)),
+                "{f}"
+            );
+        }
+    }
+
+    #[test]
+    fn north_star_failed_job_fails_the_facts_it_carries() {
+        let v = ns(Some(contexts()), Some(MAIN_LOG), "failure");
+        assert_eq!(fact(&v, "axiom_audit")["pass"], false);
+        assert_eq!(fact(&v, "ledger")["pass"], false);
+        assert_eq!(fact(&v, "axiom_audit")["ran"], true);
+    }
+
+    #[test]
+    fn north_star_needs_the_control_lines_and_the_context() {
+        let stripped: String = MAIN_LOG
+            .lines()
+            .filter(|l| !l.contains(AXIOM_CONTROL) && !l.contains(LEDGER_CONTROL))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let v = ns(Some(contexts()), Some(&stripped), "success");
+        assert_eq!(fact(&v, "axiom_audit")["control_failed_as_expected"], false);
+        assert_eq!(fact(&v, "ledger")["control_failed_as_expected"], false);
+
+        let without: Vec<String> = contexts()
+            .into_iter()
+            .filter(|c| c != ROCQ_CONTEXT)
+            .collect();
+        let v = ns(Some(without), Some(MAIN_LOG), "success");
+        let r = fact(&v, "proof_check_required");
+        assert_eq!(
+            (r["ran"].as_bool(), r["pass"].as_bool()),
+            (Some(true), Some(false))
+        );
+    }
+
+    #[test]
+    fn north_star_a_failing_real_audit_is_not_masked_by_the_control() {
+        let bad = MAIN_LOG.replacen(
+            "allow-listed axioms 0: PASS",
+            "allow-listed axioms 0: FAIL",
+            1,
+        );
+        assert_ne!(bad, MAIN_LOG);
+        let v = ns(Some(contexts()), Some(&bad), "success");
+        assert_eq!(fact(&v, "axiom_audit")["pass"], false);
     }
 }

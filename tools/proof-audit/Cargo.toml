@@ -1,7 +1,9 @@
 # FEAT-105: kernel axiom audit for scry's Rocq proofs.
 #
 # Standalone `[workspace]` (not a root member), like crates/scry-mcdc: a CI
-# gate, not a shipped crate, with no dependencies beyond std.
+# gate, not a shipped crate. The binary uses std only; serde_json is a
+# dev-dependency so the tests can parse the North Star output against the
+# vendored schema (tests/fixtures/input.schema.json).
 [package]
 name = "proof-audit"
 version = "0.1.0"
@@ -15,3 +17,6 @@ name = "proof-audit"
 path = "src/main.rs"
 
 [workspace]
+
+[dev-dependencies]
+serde_json = "1"
