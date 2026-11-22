@@ -1647,6 +1647,16 @@ pub fn analyze(
             "module bytes are empty".to_string(),
         ));
     }
+    // FEAT-107: a component's sections are not core sections, so analysing one
+    // used to "succeed" with 0 functions, and `scry-viz check` printed OK over
+    // nothing (relay falcon-flight-v1.142.wasm, 2026-11-22). Refuse it instead.
+    if Parser::is_component(&module_bytes) {
+        return Err(AnalyzeError::InvalidModule(
+            "input is a WebAssembly component, not a core module; scry analyses core \
+             modules, so fuse the component first (for example with `meld fuse`)"
+                .to_string(),
+        ));
+    }
     if let Some(threshold) = config.widening_threshold
         && threshold == 0
     {
@@ -9094,6 +9104,21 @@ fn op_name(op: &Operator<'_>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-107: a component is refused, never analysed as an empty module
+    /// (the "OK — 0 functions" fail-open on relay's falcon-flight component).
+    /// The core-module header on the same bytes is the control: it must parse.
+    #[test]
+    fn component_input_is_refused_not_analysed_as_empty() {
+        let component = b"\0asm\x0d\x00\x01\x00".to_vec();
+        match analyze(component, AnalysisConfig::default()) {
+            Err(AnalyzeError::InvalidModule(m)) => assert!(m.contains("component"), "{m}"),
+            other => panic!("a component must be refused, got {other:?}"),
+        }
+        let core = b"\0asm\x01\x00\x00\x00".to_vec();
+        let r = analyze(core, AnalysisConfig::default()).expect("an empty core module parses");
+        assert!(r.function_meta.is_empty());
+    }
 
     /// The mirror surface is constructible and the reused pure types line
     /// up with the analyzer's expectations (Interval/Region field-identical
