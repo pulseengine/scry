@@ -1,8 +1,9 @@
-# scry: the next releases, measured against the North Star (draft)
+# scry: the next releases, measured against the North Star
 
-Status: work in progress, drafted 2026-11-19. The items are rivet drafts in
-`artifacts/roadmap-next-bets.yaml` (FEAT-104 to FEAT-110). The release split
-below is a recommendation awaiting the owner's decision; nothing is tagged.
+Status: work in progress, drafted 2026-11-19, progress recorded 2026-11-22.
+The items are rivet artifacts in `artifacts/roadmap-next-bets.yaml` (FEAT-104
+to FEAT-110). The owner approved the release split below on 2026-11-19;
+nothing in it is tagged yet.
 
 The yardstick is the North Star in pulseengine.eu (`data/north-star.toml`):
 a safety-critical team takes a WebAssembly component from architecture model
@@ -65,7 +66,7 @@ ledger it creates is what FEAT-106 is measured against. FEAT-107 waits for the
 v3.4.0 native binaries. FEAT-108 refines FEAT-081, which is already scoped to
 v3.5.0.
 
-## The release split (recommendation, for the owner)
+## The release split (approved by the owner, 2026-11-19)
 
 - **v3.4.0 ships near its current scope plus FEAT-104.** Six of its 11
   not-ready items (FEAT-098 to FEAT-103) have commits on main; their
@@ -78,6 +79,25 @@ v3.5.0.
 - **v3.6.0 takes FEAT-106**, which depends on FEAT-105's ledger.
 - **FEAT-110 stays unscheduled** until kiln#480 closes.
 
+## Progress (2026-11-22)
+
+- FEAT-104 merged in #246.
+- FEAT-109 merged in #247: the signed manifest covers the MC/DC evidence.
+- FEAT-105, three of its slices merged:
+  - #248: "Rocq Formal Proofs" is a required check, listed in
+    `.github/required-checks.txt` and in ruleset 16891064.
+  - #249: kernel axiom audit, 101 theorems declared and 101 audited, 0
+    allow-listed axioms.
+  - #250: trust-escape ledger, 36 rows.
+  - In CI, a planted `Axiom`, a planted `Hypothesis` and a false lemma each turn
+    the job red.
+  - `tools/check-required-checks.py` in live-ruleset mode reports the
+    file and the ruleset agree on 13 contexts (exit 0, 2026-11-22).
+  - Still open: a docs-only pull request whose run shows the Rocq context
+    completed (this change is that pull request), and the O3 release asset
+    `north-star-input.O3.json`.
+- FEAT-107 and FEAT-108 not started.
+
 ## Backlog effect
 
 Unconditional closures if the scheduled items land: #207, #210, #212, #135,
@@ -89,7 +109,14 @@ plan files no new issue; new work is these rivet items.
 
 - Whether scry's native binary accepts a component directly, or needs
   `meld fuse` first.
-- Proof job wall-clock and flake rate (FEAT-105 measures them first).
+- Proof job wall-clock and flake rate: FEAT-105's kill criterion times 20
+  runs. As of 2026-11-22 there are 17 runs of the job (it was added in #248).
+  - 13 succeeded, with a median of 123 s (100 to 144 s), against the 30-minute
+    limit.
+  - 4 were cancelled by `cancel-in-progress` within seconds of a newer push to
+    the same branch.
+  - 0 failed, and 0 flaked on toolchain fetch. 7 more completed runs reach the
+    criterion's 20.
 - Whether rules_rocq_rust's rocq-of-rust path translates scry-interval.
 - That FEAT-098 to FEAT-103 meet their acceptance criteria.
 - Whether toolchain repositories count for O2, and the O5 denominator.
