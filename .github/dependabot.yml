@@ -1,0 +1,64 @@
+version: 2
+# Grouped monthly updates (fleet template from pulseengine/rivet, owner
+# decision 2026-11-21). One entry per ecosystem, its directories in one
+# `directories:` list, so a release opens one PR and not one per directory.
+# Every entry runs monthly (the 1st, 02:00 UTC), keeps at most 2 PRs open, and
+# waits 7 days after a release (cooldown). Lockstep groups come first because
+# Dependabot puts a dependency in the FIRST group it matches; then one
+# minor-patch group. Majors stay ungrouped, one PR each, so a breaking change
+# is read on its own. Security updates ignore the schedule and the limit.
+#
+# Cargo updates also move MODULE.bazel.lock's crate_universe entry, which
+# Dependabot cannot regenerate. .bazelrc sets `--lockfile_mode=error`, so such a
+# PR fails the Bazel jobs until someone runs
+# `bazel mod deps --lockfile_mode=update` on its branch and pushes the lock.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      time: "02:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+    labels:
+      - dependencies
+    groups:
+      github-actions-all:
+        patterns:
+          - "*"
+  - package-ecosystem: cargo
+    # The root workspace and the two standalone workspaces, each with its own
+    # committed Cargo.lock (the lockfile gate in ci.yml asserts the same set).
+    directories:
+      - /
+      - /crates/scry-mcdc
+      - /tools/proof-audit
+    schedule:
+      interval: monthly
+      time: "02:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+    labels:
+      - dependencies
+    groups:
+      wasm-tools-family:
+        patterns:
+          - "wasmparser"
+          - "wasm-encoder"
+          - "wasmprinter"
+          - "wat"
+          - "wast"
+          - "wit-component"
+          - "wit-parser"
+      wasmtime:
+        patterns:
+          - "wasmtime"
+          - "wasmtime-*"
+      minor-patch:
+        update-types:
+          - minor
+          - patch
