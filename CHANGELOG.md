@@ -7,6 +7,25 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.4.0] — 2026-11-27
+
+**Evidence an assessor can re-check.** The proof claims now say what CI does;
+the Rocq proofs are a required check with a kernel axiom audit and a
+trust-escape ledger; every primary asset, the MC/DC evidence included, is in
+the cosign-signed manifest; every lockfile is committed and audited. The
+release toolchain is pinned to Rust 1.100.0. Work in progress, not a
+production claim.
+
+The approved plan (`docs/release-plan-next.md`) put FEAT-105 and FEAT-109 in
+v3.5.0. Both were finished on main before this tag, so they ship here, along
+with FEAT-107's first slice. FEAT-107's remaining slices and FEAT-108 stay
+with v3.5.0. FEAT-108 is waiting on a kill decision, since synth verifies 0 of
+the 28 loops it classified.
+
+This is the first release with static musl Linux binaries (FEAT-099). They
+attach to the release when the build matrix finishes, a few minutes after the
+tag.
+
 ### Added
 
 - **North Star O3 input as a signed release asset** (FEAT-105, pulseengine.eu#393).
@@ -140,6 +159,30 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   gone (fleet-wide decision, 2026-11-20). Releases ship `scry-mcp` and
   `scry-viz` for `aarch64-apple-darwin` on macOS; Intel Macs can still build
   from source.
+
+### Not promoted in this release
+
+FEAT-098 to FEAT-103 ship as code on this tag, but their rivet status stays
+`proposed`. Their acceptance criteria were recorded when each merged, and the
+release plan requires a re-run before promotion; that re-run has not happened.
+FEAT-099 (static musl binaries) can only be checked on a release run, and this
+tag's run is its first.
+
+### Falsification
+
+This release is wrong if any of the following holds:
+
+1. A module that analysed successfully under 3.3.0 returns an error from
+   `analyze`, other than a WebAssembly component now being refused (FEAT-107
+   slice 1, intended).
+2. `north-star-input.O3.json` reports `proof_check_required: true` while
+   "Rocq Formal Proofs" is missing from the required contexts of `main`'s
+   branch rules on the tagged date.
+3. A primary release asset is missing from `SHA256SUMS.txt`, or its hash does
+   not match the file attached to the release.
+4. A `*-linux-musl` binary from this release is dynamically linked.
+5. The Pages site, after the deploy job reports success, serves an
+   `index.html` other than the one that job built.
 
 ## [3.3.0] — 2026-09-03
 
