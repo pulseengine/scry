@@ -805,3 +805,25 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      # A deploy that reports success is not a site that changed. The live URL
+      # must answer 200 and serve the index.html this job just built, byte for
+      # byte; the CDN can lag, so retry for up to 10 minutes, then fail.
+      - name: Post-deploy check, the live site serves this build
+        env:
+          PAGE_URL: ${{ steps.deploy.outputs.page_url }}
+        run: |
+          set -u
+          want=$(sha256sum dist/index.html | cut -d' ' -f1)
+          for i in $(seq 1 20); do
+            code=$(curl -sS -o live-index.html -w '%{http_code}' -H 'Cache-Control: no-cache' "${PAGE_URL}?v=${VERSION}-${i}" || echo 000)
+            got=$(sha256sum live-index.html 2>/dev/null | cut -d' ' -f1)
+            echo "attempt $i: HTTP $code, live sha256 ${got:-none}, built sha256 $want"
+            if [ "$code" = 200 ] && [ "$got" = "$want" ]; then
+              echo "live site ${PAGE_URL} serves the ${VERSION} build"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::${PAGE_URL} did not serve the ${VERSION} build within 10 minutes (last HTTP $code)"
+          exit 1
