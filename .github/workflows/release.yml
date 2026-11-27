@@ -94,6 +94,11 @@ jobs:
             can_run: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A manual dispatch (workflow_dispatch, input `tag`) builds the TAGGED
+          # source with this workflow file, so a release-workflow fix can finish
+          # an existing tag without moving it.
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           toolchain: 1.100.0
@@ -152,15 +157,22 @@ jobs:
       # it carries the triple that promises portability and does not deliver
       # it, and nothing downstream would notice. Assert the property the
       # target exists for, on the binary itself.
+      # Runs on BOTH musl targets: the aarch64 one is cross-built (no
+      # `matrix.musl`), and v3.4.0's first run skipped it there. `file`,
+      # `readelf` and `strings` read an aarch64 ELF on the x86_64 builder.
+      # Rust's x86_64 musl target links static-pie, which `file` reports as
+      # "static-pie linked", not "statically linked" (v3.4.0 run 45977250957).
+      # Static-pie is static: no interpreter, no libc. The two checks below
+      # still assert exactly that.
       - name: Verify musl binaries are statically linked
-        if: matrix.musl
+        if: endsWith(matrix.target, '-musl')
         run: |
           set -euo pipefail
           for bin in scry-mcp scry-viz; do
             P="target/${{ matrix.target }}/release/${bin}"
             OUT="$(file -b "$P")"
             case "$OUT" in
-              *"statically linked"*) echo "::notice::$bin is static: $OUT" ;;
+              *"statically linked"*|*"static-pie linked"*) echo "::notice::$bin is static: $OUT" ;;
               *) echo "::error::$bin is NOT statically linked — musl asset would not be portable: $OUT"; exit 1 ;;
             esac
             # Belt and braces: a static binary has no interpreter and no
@@ -214,6 +226,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Resolve version from tag
@@ -550,6 +563,8 @@ jobs:
       WITNESS_VERSION: v0.30.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Resolve version from tag
         env:
@@ -652,6 +667,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # A manual dispatch builds the TAGGED source with this workflow.
+          ref: ${{ inputs.tag || github.ref }}
           # scry#132: the delta view resolves the PREVIOUS tag, so this job
           # needs tags and history. Without it `git tag --list` is empty and the
           # step silently rendered nothing (delta.html 404 on v3.2.5).
