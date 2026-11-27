@@ -54,6 +54,11 @@ jobs:
   build-binaries:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    env:
+      # The tag being released: the pushed tag, or the `tag` input of a manual
+      # dispatch. GITHUB_REF is refs/heads/main on a dispatch, which made run
+      # 45981475502 expect `scry-mcp refs/heads/main` and name archives after it.
+      RELEASE_REF: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -136,7 +141,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF#refs/tags/}"; EXPECTED="${VERSION#v}"
+          VERSION="${RELEASE_REF#refs/tags/}"; EXPECTED="${VERSION#v}"
           EXT=""; [ "${{ matrix.archive }}" = "zip" ] && EXT=".exe"
           for bin in scry-mcp scry-viz; do
             P="target/${{ matrix.target }}/release/${bin}${EXT}"
@@ -195,7 +200,7 @@ jobs:
           ARCHIVE_KIND: ${{ matrix.archive }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${RELEASE_REF#refs/tags/}"
           EXT=""; [ "$ARCHIVE_KIND" = "zip" ] && EXT=".exe"
           mkdir -p staging
           for bin in scry-mcp scry-viz; do
