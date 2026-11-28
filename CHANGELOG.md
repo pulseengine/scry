@@ -7,6 +7,23 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **proof-audit runs as a WASI component in CI** (FEAT-105). The Rocq job
+  builds `tools/proof-audit` for `wasm32-wasip2`, runs its 23 unit tests under
+  wasmtime 50.0.3, and requires the component to match the native binary
+  (stdout and exit code) on the real audit, the ledger, the planted-Axiom
+  control, two usage errors and the generated audit file. The same comparison
+  runs under kiln 0.9.0 on the `meld fuse --reproducible` output, as an
+  advisory step.
+
+### Fixed
+
+- **proof-audit's exit code 2 survives on wasip2.** With Rust 1.100,
+  `main -> ExitCode` lowers to `wasi:cli/exit.exit(result)`, so
+  `ExitCode::from(2)` reached the host as 1 under wasmtime 50.0.2. Every exit
+  path now goes through `std::process::exit`, natively too.
+
 ## [3.4.0] — 2026-11-27
 
 **Evidence an assessor can re-check.** The proof claims now say what CI does;

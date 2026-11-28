@@ -626,6 +626,115 @@ jobs:
             echo "::error::a false lemma was not rejected by coqc (exit $rc)"; exit 1
           fi
           echo "::notice::planted Hypothesis failed the ledger and coqc rejected the false lemma, as they must"
+      # Run what we build: proof-audit as a wasm32-wasip2 component must give
+      # the same stdout and exit code as the native binary on the real audit,
+      # the ledger, the planted-Axiom control and the usage errors (0, 1, 2).
+      # wasmtime is pinned by sha256. Rust 1.100 loses `main -> ExitCode`
+      # codes on wasip2 (2 arrives as 1), so the binary exits through
+      # `std::process::exit`, and the component must import `exit-with-code`.
+      - name: proof-audit as a WASI component, identical to native (wasmtime)
+        env:
+          WT_VERSION: "50.0.3"
+          WT_SHA256: c59133a9334e96eaca5e26f0d4c35199bfe43ab34049aa254ef4b47af1361476
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/component"; mkdir -p "$T"
+          curl -fsSL --retry 3 -o "$T/wasmtime.tar.xz" \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/v${WT_VERSION}/wasmtime-v${WT_VERSION}-x86_64-linux.tar.xz"
+          echo "${WT_SHA256}  $T/wasmtime.tar.xz" | sha256sum -c -
+          tar xJf "$T/wasmtime.tar.xz" -C "$T"
+          WASMTIME="$T/wasmtime-v${WT_VERSION}-x86_64-linux/wasmtime"
+          "$WASMTIME" --version
+          rustup target add wasm32-wasip2 --toolchain 1.100.0
+          M=tools/proof-audit/Cargo.toml
+          cargo build --locked -q --release --manifest-path "$M"
+          cargo build --locked -q --release --manifest-path "$M" --target wasm32-wasip2
+          NAT=tools/proof-audit/target/release/proof-audit
+          COMP=tools/proof-audit/target/wasm32-wasip2/release/proof-audit.wasm
+          grep -aq exit-with-code "$COMP" || { echo "::error::$COMP does not import exit-with-code"; exit 1; }
+          echo "component: $COMP ($(wc -c < "$COMP") bytes, sha256 $(sha256sum "$COMP" | cut -d' ' -f1))"
+          CARGO_TARGET_WASM32_WASIP2_RUNNER="$WASMTIME run --dir=." \
+            cargo test --locked --manifest-path "$M" --target wasm32-wasip2
+          RUN=("$WASMTIME" run --dir=. --dir="$RUNNER_TEMP::$RUNNER_TEMP" "$COMP")
+          n=0
+          compare() {
+            local want=$1; shift
+            set +e
+            "$NAT" "$@" > "$T/nat.out" 2> /dev/null; local rn=$?
+            "${RUN[@]}" "$@" > "$T/comp.out" 2> /dev/null; local rc=$?
+            set -e
+            if [ "$rn" -ne "$want" ] || [ "$rc" -ne "$want" ] || ! cmp -s "$T/nat.out" "$T/comp.out"; then
+              echo "::error::proof-audit $*: native exit $rn, component exit $rc, expected $want"
+              diff "$T/nat.out" "$T/comp.out" | head -20 || true
+              exit 1
+            fi
+            n=$((n + 1)); echo "identical, exit $want: proof-audit $*"
+          }
+          A="$RUNNER_TEMP/audit"; C="$RUNNER_TEMP/control"
+          compare 0 check --proofs proofs/rocq --prefix proofs.rocq --output "$A/audit.out" --allow proofs/rocq/axiom-allowlist.txt
+          compare 0 ledger --proofs proofs/rocq --output "$A/audit.out" --ledger proofs/trust-ledger.tsv
+          compare 1 check --proofs "$C/src" --prefix control --output "$C/audit.out" --allow proofs/rocq/axiom-allowlist.txt
+          compare 2
+          compare 2 check --prefix proofs.rocq
+          # generate writes a file: both write the same path, the bytes must match
+          compare 0 generate --proofs proofs/rocq --prefix proofs.rocq --out "$T/Audit.v"
+          cp "$T/Audit.v" "$T/Audit.native.v"
+          "${RUN[@]}" generate --proofs proofs/rocq --prefix proofs.rocq --out "$T/Audit.v" > /dev/null
+          cmp "$T/Audit.native.v" "$T/Audit.v"
+          echo "::notice::proof-audit component (wasmtime ${WT_VERSION}) matched native on $n invocations and the generated audit file; exit codes 0, 1, 2 asserted"
+      # ADVISORY: the same comparison under kiln 0.9.0, which runs meld-fused
+      # components, not raw ones. Both pinned by sha256. continue-on-error, so
+      # a kiln or meld defect is reported here and does not block the gate.
+      - name: proof-audit component under kiln (meld-fused, advisory)
+        continue-on-error: true
+        env:
+          KILN_TAG: v0.9.0
+          KILN_SHA256: 6a1e334ba319fbaaca5858d333088c0d82a13b789e7479b5af119028b5f32aaf
+          MELD_TAG: v0.69.0
+          MELD_SHA256: cef5a7fdeb497b3415baa454a2d064c2083aa3a532a2b40fbfe6a7543786787c
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/component"; mkdir -p "$T/k"
+          fetch() {
+            local repo=$1 tag=$2 sha=$3
+            local asset="$repo-$tag-x86_64-unknown-linux-gnu.tar.gz"
+            curl -fsSL --retry 3 -o "$T/k/$asset" "https://github.com/pulseengine/$repo/releases/download/$tag/$asset"
+            echo "$sha  $T/k/$asset" | sha256sum -c -
+            mkdir -p "$T/k/$repo" && tar xzf "$T/k/$asset" -C "$T/k/$repo"
+            find "$T/k/$repo" -type f -name "$repo" -perm -u+x | head -1
+          }
+          KILN=$(fetch kiln "$KILN_TAG" "$KILN_SHA256" | tail -1)
+          MELD=$(fetch meld "$MELD_TAG" "$MELD_SHA256" | tail -1)
+          "$KILN" --version; "$MELD" --version
+          NAT=tools/proof-audit/target/release/proof-audit
+          COMP=tools/proof-audit/target/wasm32-wasip2/release/proof-audit.wasm
+          "$MELD" fuse --reproducible "$COMP" -o "$T/proof-audit.fused.wasm"
+          RUN=("$KILN" --wasi --wasi-version preview2 --dir . --dir "$RUNNER_TEMP" "$T/proof-audit.fused.wasm")
+          bad=0; n=0
+          compare() {
+            local want=$1; shift
+            set +e
+            "$NAT" "$@" > "$T/nat.out" 2> /dev/null; local rn=$?
+            "${RUN[@]}" "$@" > "$T/kiln.out" 2> /dev/null; local rk=$?
+            set -e
+            n=$((n + 1))
+            if [ "$rn" -ne "$want" ] || [ "$rk" -ne "$want" ] || ! cmp -s "$T/nat.out" "$T/kiln.out"; then
+              echo "::warning::kiln differs: proof-audit $*: native exit $rn, kiln exit $rk, expected $want"
+              bad=$((bad + 1))
+            else
+              echo "identical, exit $want: proof-audit $*"
+            fi
+          }
+          A="$RUNNER_TEMP/audit"; C="$RUNNER_TEMP/control"
+          compare 0 check --proofs proofs/rocq --prefix proofs.rocq --output "$A/audit.out" --allow proofs/rocq/axiom-allowlist.txt
+          compare 0 ledger --proofs proofs/rocq --output "$A/audit.out" --ledger proofs/trust-ledger.tsv
+          compare 1 check --proofs "$C/src" --prefix control --output "$C/audit.out" --allow proofs/rocq/axiom-allowlist.txt
+          compare 2
+          compare 2 check --prefix proofs.rocq
+          if [ "$bad" -ne 0 ]; then
+            echo "::warning::kiln ${KILN_TAG}: $bad of $n invocations differ from native (advisory)"; exit 1
+          fi
+          echo "::notice::kiln ${KILN_TAG} (meld ${MELD_TAG} fused) matched native on $n invocations"
 
   deny:
     name: cargo-deny (licenses, advisories, bans)
