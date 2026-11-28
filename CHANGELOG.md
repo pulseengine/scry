@@ -14,7 +14,7 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
   wasmtime 50.0.3, and requires the component to match the native binary
   (stdout and exit code) on the real audit, the ledger, the planted-Axiom
   control, two usage errors and the generated audit file. The same comparison
-  runs under kiln 0.9.0 on the `meld fuse --reproducible` output, in the
+  runs under kiln 0.9.1 on the `meld fuse --reproducible` output, in the
   separate advisory workflow `component-kiln.yml`.
 
 ### Fixed
