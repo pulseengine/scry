@@ -1,0 +1,106 @@
+name: Components on kiln (advisory)
+
+# ADVISORY, by design: a separate workflow, not a ci.yml job, because scry's
+# required-checks gate (tools/check-required-checks.py) requires every ci.yml
+# job that runs on every PR, and claims.yaml allows no new continue-on-error
+# in ci.yml. The gating comparison runs under wasmtime in the required
+# "Rocq Formal Proofs" job; this one repeats it under kiln, our own runtime.
+#
+# kiln runs meld-fused components, not raw ones, so the proof-audit component
+# goes through `meld fuse --reproducible` first. kiln 0.9.0 and meld 0.69.0
+# are pinned by sha256. The cases need no coqc output: an empty audit output
+# makes `check` exit 1 (declared 101, audited 0) and `ledger` exit 0.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  proof-audit-kiln:
+    name: proof-audit component under kiln (meld-fused)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      KILN_TAG: v0.9.0
+      KILN_SHA256: 6a1e334ba319fbaaca5858d333088c0d82a13b789e7479b5af119028b5f32aaf
+      MELD_TAG: v0.69.0
+      MELD_SHA256: cef5a7fdeb497b3415baa454a2d064c2083aa3a532a2b40fbfe6a7543786787c
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.100.0
+          targets: wasm32-wasip2
+      - name: Install kiln and meld (sha256-pinned)
+        run: |
+          set -euo pipefail
+          K="$RUNNER_TEMP/k"; mkdir -p "$K/bin"
+          fetch() {
+            local repo=$1 tag=$2 sha=$3
+            local asset="$repo-$tag-x86_64-unknown-linux-gnu.tar.gz"
+            curl -fsSL --retry 3 -o "$K/$asset" "https://github.com/pulseengine/$repo/releases/download/$tag/$asset"
+            echo "$sha  $K/$asset" | sha256sum -c -
+            mkdir -p "$K/$repo" && tar xzf "$K/$asset" -C "$K/$repo"
+            install -m 0755 "$(find "$K/$repo" -type f -name "$repo" -perm -u+x | head -1)" "$K/bin/$repo"
+          }
+          fetch kiln "$KILN_TAG" "$KILN_SHA256"
+          fetch meld "$MELD_TAG" "$MELD_SHA256"
+          echo "$K/bin" >> "$GITHUB_PATH"
+          "$K/bin/kiln" --version
+          "$K/bin/meld" --version
+      - name: Build proof-audit, native and wasm32-wasip2, then fuse
+        run: |
+          set -euo pipefail
+          M=tools/proof-audit/Cargo.toml
+          cargo build --locked -q --release --manifest-path "$M"
+          cargo build --locked -q --release --manifest-path "$M" --target wasm32-wasip2
+          COMP=tools/proof-audit/target/wasm32-wasip2/release/proof-audit.wasm
+          grep -aq exit-with-code "$COMP" || { echo "::error::$COMP does not import exit-with-code"; exit 1; }
+          meld fuse --reproducible "$COMP" -o "$RUNNER_TEMP/proof-audit.fused.wasm"
+          sha256sum "$COMP" "$RUNNER_TEMP/proof-audit.fused.wasm"
+      - name: Same stdout and exit code as native, under kiln
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/cmp"; mkdir -p "$T"
+          : > "$T/empty.out"
+          NAT=tools/proof-audit/target/release/proof-audit
+          RUN=(kiln --wasi --wasi-version preview2 --dir . --dir "$RUNNER_TEMP" "$RUNNER_TEMP/proof-audit.fused.wasm")
+          bad=0; n=0
+          compare() {
+            local want=$1; shift
+            set +e
+            "$NAT" "$@" > "$T/nat.out" 2> /dev/null; local rn=$?
+            "${RUN[@]}" "$@" > "$T/kiln.out" 2> /dev/null; local rk=$?
+            set -e
+            n=$((n + 1))
+            if [ "$rn" -ne "$want" ] || [ "$rk" -ne "$want" ] || ! cmp -s "$T/nat.out" "$T/kiln.out"; then
+              echo "::error::kiln differs: proof-audit $*: native exit $rn, kiln exit $rk, expected $want"
+              diff "$T/nat.out" "$T/kiln.out" | head -20 || true
+              bad=$((bad + 1))
+            else
+              echo "identical, exit $want: proof-audit $*"
+            fi
+          }
+          compare 0 --version
+          compare 0 ledger --proofs proofs/rocq --output "$T/empty.out" --ledger proofs/trust-ledger.tsv
+          compare 1 check --proofs proofs/rocq --prefix proofs.rocq --output "$T/empty.out" --allow proofs/rocq/axiom-allowlist.txt
+          compare 2
+          compare 2 check --prefix proofs.rocq
+          compare 0 generate --proofs proofs/rocq --prefix proofs.rocq --out "$T/Audit.v"
+          cp "$T/Audit.v" "$T/Audit.native.v"
+          "${RUN[@]}" generate --proofs proofs/rocq --prefix proofs.rocq --out "$T/Audit.v" > /dev/null
+          if ! cmp "$T/Audit.native.v" "$T/Audit.v"; then bad=$((bad + 1)); fi
+          if [ "$bad" -ne 0 ]; then
+            echo "::error::kiln ${KILN_TAG}: $bad check(s) differ from native"; exit 1
+          fi
+          echo "::notice::kiln ${KILN_TAG} (meld ${MELD_TAG} fused) matched native on $n invocations and the generated audit file"
