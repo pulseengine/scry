@@ -250,6 +250,18 @@ jobs:
         run: tools/ci/install-release-bin.sh rivet rivet v0.42.2
       - name: rivet validate
         run: rivet validate
+      # The release job's compliance bundle runs these exports and now fails
+      # closed. Run them on every PR too, so a change that breaks them (a doc
+      # title once panicked the HTML export, rivet#1360) fails here and not
+      # at tag time.
+      - name: rivet export (the compliance bundle's formats)
+        run: |
+          set -euo pipefail
+          O="$RUNNER_TEMP/rivet-export"
+          rivet export --format html --output "$O" --theme dark --version-label ci
+          rivet export --format reqif --output "$O/requirements.reqif"
+          rivet export --format generic-yaml --output "$O/artifacts.yaml"
+          echo "rivet export: $(du -sh "$O" | cut -f1) in $O"
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
