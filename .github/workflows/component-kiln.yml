@@ -7,8 +7,12 @@ name: Components on kiln (advisory)
 # "Rocq Formal Proofs" job; this one repeats it under kiln, our own runtime.
 #
 # kiln runs meld-fused components, not raw ones, so the proof-audit component
-# goes through `meld fuse --reproducible` first. kiln 0.9.0 and meld 0.69.0
-# are pinned by sha256. The cases need no coqc output: an empty audit output
+# goes through `meld fuse --reproducible` first. Versions follow the covalent
+# layer: meld 0.71.0 is what layer 2026.11.29 pins; kiln 0.9.1 (the startup
+# hang fix, kiln#748) is newer than that layer. Each sha256 below is the
+# x86_64-linux line of the release's SHA256SUMS.txt, after `cosign verify-blob`
+# against the tag's release-workflow identity; both match GitHub's recorded
+# asset digests. The cases need no coqc output: an empty audit output
 # makes `check` exit 1 (declared 101, audited 0) and `ledger` exit 0.
 
 on:
@@ -31,10 +35,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      KILN_TAG: v0.9.0
-      KILN_SHA256: 6a1e334ba319fbaaca5858d333088c0d82a13b789e7479b5af119028b5f32aaf
-      MELD_TAG: v0.69.0
-      MELD_SHA256: cef5a7fdeb497b3415baa454a2d064c2083aa3a532a2b40fbfe6a7543786787c
+      KILN_TAG: v0.9.1
+      KILN_SHA256: 2be8b0c9f06287a658e7be6bd51434639e5d382e58f2f4ec20b701bcc5c87af5
+      MELD_TAG: v0.71.0
+      MELD_SHA256: 01a7c612f39bbfa3e02309fb1af001012c4fac1941e536bf4486b911ba3dca2c
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
