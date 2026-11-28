@@ -347,17 +347,18 @@ jobs:
       # to release-assets/ so cosign signs it alongside the other
       # release artifacts in the next step.
 
+      # Fail closed: v3.4.0 shipped without this bundle because this step was
+      # continue-on-error and ran rivet 0.22.0, which does not know the
+      # `verification` type (15 errors). It now runs the rivet CI validates
+      # with, and a missing bundle fails the job before anything is signed.
       - name: Generate rivet compliance evidence
         id: compliance
-        continue-on-error: true
         uses: pulseengine/rivet/.github/actions/compliance@a712e840b213825922066021e526968bec9a3e72 # v0.42.2
         with:
-          # v0.3.0 was too old to parse scry's research-ext schema —
-          # the action's internal `rivet validate` failed on v0.2.0
-          # (see issue #10). Bumped to v0.22.0 so the compliance action's
-          # internal `rivet validate` understands the top-level `release:`
-          # field (rivet >= 0.21) the roadmap now uses for release planning.
-          rivet-version: v0.22.0
+          # Same version as ci.yml's rivet jobs (tools/ci/install-release-bin.sh
+          # rivet rivet v0.42.2); bump both together (rivet#1113: this input can
+          # silently freeze).
+          rivet-version: v0.42.2
           theme: dark
           archive: 'true'
           archive-name: scry-${{ env.BARE_VERSION }}-compliance-evidence
@@ -372,7 +373,8 @@ jobs:
             cp "$ARCHIVE_PATH" "release-assets/$(basename "$ARCHIVE_PATH")"
             echo "::notice title=Compliance evidence::staged $(basename "$ARCHIVE_PATH")"
           else
-            echo "::warning title=Compliance evidence::action emitted no archive-path; skipping"
+            echo "::error title=Compliance evidence::the compliance action produced no archive; refusing to release without it"
+            exit 1
           fi
           ls -la release-assets/
 

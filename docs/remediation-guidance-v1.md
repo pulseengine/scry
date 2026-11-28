@@ -2,7 +2,7 @@
 id: DOC-REMEDIATION-GUIDANCE-V1
 type: spec
 status: draft
-title: scry remediation guidance — advisory schema + AI-agent fix-verify loop (v1)
+title: "scry remediation guidance: advisory schema + AI-agent fix-verify loop (v1)"
 tags: [remediation, guidance, ai-agent, schema, oracle-gate, v3.1]
 references: [FEAT-059, FEAT-060, REQ-018, TE-011]
 ---

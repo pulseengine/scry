@@ -19,6 +19,14 @@ Versioning: [SemVer 2.0](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The compliance-evidence bundle is back and can no longer go missing
+  silently.** v3.4.0 shipped without `scry-<v>-compliance-evidence.tar.gz`
+  (v3.3.0 had it): the release step ran rivet 0.22.0, which does not know the
+  `verification` type, and it was `continue-on-error`. It now runs rivet
+  0.42.2 (as CI does), a missing bundle fails the release job, and CI runs the
+  bundle's three exports on every PR. Doing that exposed a rivet panic in the
+  HTML export on a document title with an em-dash at byte 28 (rivet#1360); the
+  remediation-guidance title uses a colon until that is fixed.
 - **proof-audit's exit code 2 survives on wasip2.** With Rust 1.100,
   `main -> ExitCode` lowers to `wasi:cli/exit.exit(result)`, so
   `ExitCode::from(2)` reached the host as 1 under wasmtime 50.0.2. Every exit
