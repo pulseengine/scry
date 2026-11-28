@@ -301,6 +301,29 @@ jobs:
           toolchain: 1.100.0
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
+      # Run what we ship. CI's Test job runs ITS OWN bazel build of //:scry
+      # through the soundness harness; the component this job stages, signs and
+      # releases was only validated and signed. Run the staged bytes through the
+      # same harness before anything is signed: every fixture is analysed by
+      # the release component under wasmtime and checked against concrete
+      # execution. SCRY_REQUIRE_COMPONENT=1 makes a missing file fail, not skip.
+      # A truncated copy must fail the same suite, so a pass cannot come from
+      # a harness that ignored the path.
+      - name: Run the staged component through the soundness harness
+        run: |
+          set -euo pipefail
+          C="$GITHUB_WORKSPACE/release-assets/$ASSET"
+          echo "component under test: $ASSET, sha256 $(sha256sum "$C" | cut -d' ' -f1)"
+          SCRY_COMPONENT_PATH="$C" SCRY_REQUIRE_COMPONENT=1 \
+            cargo test --locked -p scry-host-tests --test soundness -- --nocapture
+          head -c 4096 "$C" > "$RUNNER_TEMP/truncated.wasm"
+          if SCRY_COMPONENT_PATH="$RUNNER_TEMP/truncated.wasm" SCRY_REQUIRE_COMPONENT=1 \
+               cargo test --locked -q -p scry-host-tests --test soundness > "$RUNNER_TEMP/truncated.log" 2>&1; then
+            echo "::error::the soundness harness passed on a truncated component; it is not testing the release asset"
+            exit 1
+          fi
+          echo "::notice::$ASSET passed the soundness harness; a truncated copy failed it, as it must"
+
       - name: Install cargo-cyclonedx
         run: cargo install --locked cargo-cyclonedx
 
