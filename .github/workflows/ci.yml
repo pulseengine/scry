@@ -626,6 +626,62 @@ jobs:
             echo "::error::a false lemma was not rejected by coqc (exit $rc)"; exit 1
           fi
           echo "::notice::planted Hypothesis failed the ledger and coqc rejected the false lemma, as they must"
+      # Run what we build: proof-audit as a wasm32-wasip2 component must give
+      # the same stdout and exit code as the native binary on the real audit,
+      # the ledger, the planted-Axiom control and the usage errors (0, 1, 2).
+      # wasmtime is pinned by sha256. Rust 1.100 loses `main -> ExitCode`
+      # codes on wasip2 (2 arrives as 1), so the binary exits through
+      # `std::process::exit`, and the component must import `exit-with-code`.
+      - name: proof-audit as a WASI component, identical to native (wasmtime)
+        env:
+          WT_VERSION: "50.0.3"
+          WT_SHA256: c59133a9334e96eaca5e26f0d4c35199bfe43ab34049aa254ef4b47af1361476
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/component"; mkdir -p "$T"
+          curl -fsSL --retry 3 -o "$T/wasmtime.tar.xz" \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/v${WT_VERSION}/wasmtime-v${WT_VERSION}-x86_64-linux.tar.xz"
+          echo "${WT_SHA256}  $T/wasmtime.tar.xz" | sha256sum -c -
+          tar xJf "$T/wasmtime.tar.xz" -C "$T"
+          WASMTIME="$T/wasmtime-v${WT_VERSION}-x86_64-linux/wasmtime"
+          "$WASMTIME" --version
+          rustup target add wasm32-wasip2 --toolchain 1.100.0
+          M=tools/proof-audit/Cargo.toml
+          cargo build --locked -q --release --manifest-path "$M"
+          cargo build --locked -q --release --manifest-path "$M" --target wasm32-wasip2
+          NAT=tools/proof-audit/target/release/proof-audit
+          COMP=tools/proof-audit/target/wasm32-wasip2/release/proof-audit.wasm
+          grep -aq exit-with-code "$COMP" || { echo "::error::$COMP does not import exit-with-code"; exit 1; }
+          echo "component: $COMP ($(wc -c < "$COMP") bytes, sha256 $(sha256sum "$COMP" | cut -d' ' -f1))"
+          CARGO_TARGET_WASM32_WASIP2_RUNNER="$WASMTIME run --dir=." \
+            cargo test --locked --manifest-path "$M" --target wasm32-wasip2
+          RUN=("$WASMTIME" run --dir=. --dir="$RUNNER_TEMP::$RUNNER_TEMP" "$COMP")
+          n=0
+          compare() {
+            local want=$1; shift
+            set +e
+            "$NAT" "$@" > "$T/nat.out" 2> /dev/null; local rn=$?
+            "${RUN[@]}" "$@" > "$T/comp.out" 2> /dev/null; local rc=$?
+            set -e
+            if [ "$rn" -ne "$want" ] || [ "$rc" -ne "$want" ] || ! cmp -s "$T/nat.out" "$T/comp.out"; then
+              echo "::error::proof-audit $*: native exit $rn, component exit $rc, expected $want"
+              diff "$T/nat.out" "$T/comp.out" | head -20 || true
+              exit 1
+            fi
+            n=$((n + 1)); echo "identical, exit $want: proof-audit $*"
+          }
+          A="$RUNNER_TEMP/audit"; C="$RUNNER_TEMP/control"
+          compare 0 check --proofs proofs/rocq --prefix proofs.rocq --output "$A/audit.out" --allow proofs/rocq/axiom-allowlist.txt
+          compare 0 ledger --proofs proofs/rocq --output "$A/audit.out" --ledger proofs/trust-ledger.tsv
+          compare 1 check --proofs "$C/src" --prefix control --output "$C/audit.out" --allow proofs/rocq/axiom-allowlist.txt
+          compare 2
+          compare 2 check --prefix proofs.rocq
+          # generate writes a file: both write the same path, the bytes must match
+          compare 0 generate --proofs proofs/rocq --prefix proofs.rocq --out "$T/Audit.v"
+          cp "$T/Audit.v" "$T/Audit.native.v"
+          "${RUN[@]}" generate --proofs proofs/rocq --prefix proofs.rocq --out "$T/Audit.v" > /dev/null
+          cmp "$T/Audit.native.v" "$T/Audit.v"
+          echo "::notice::proof-audit component (wasmtime ${WT_VERSION}) matched native on $n invocations and the generated audit file; exit codes 0, 1, 2 asserted"
 
   deny:
     name: cargo-deny (licenses, advisories, bans)

@@ -3,7 +3,8 @@
 # pipeline over the real analyzer core (FEAT-014 / DD-012).
 #
 # Usage:  WITNESS_BIN=/path/to/witness ./build-and-measure.sh
-# Default WITNESS_BIN: /Users/r/git/pulseengine/witness/target/release/witness
+# Default WITNESS_BIN: a sibling witness checkout next to this repo,
+#   ../witness/target/release/witness relative to the scry root.
 #
 # Emits, under ./evidence/:
 #   scry-mcdc.instrumented.wasm        instrumented module
@@ -17,10 +18,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
-W="${WITNESS_BIN:-/Users/r/git/pulseengine/witness/target/release/witness}"
+WITNESS_DIR="$(cd "$HERE/../../.." && pwd)/witness"
+W="${WITNESS_BIN:-$WITNESS_DIR/target/release/witness}"
 if [ ! -x "$W" ]; then
     echo "witness binary not found/executable at: $W" >&2
-    echo "build it: (cd /Users/r/git/pulseengine/witness && cargo build --release -p witness)" >&2
+    echo "build it: (cd $WITNESS_DIR && cargo build --release -p witness)" >&2
     exit 127
 fi
 

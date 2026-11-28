@@ -127,7 +127,7 @@ artifacts:
             sources directly; preserving them in meld output is
             useful for a no-source post-hoc analysis story but is
             out-of-scope for the v0.7 milestone.
-      source-ref: "Investigation of meld at /Users/r/git/pulseengine/meld/ — emitter in src/lib.rs:1259-1437, merger origin tuples in src/merger.rs:59-63, Rocq proofs in proofs/rocq/ (esp. fusion_spec.v)"
+      source-ref: "Investigation of pulseengine/meld — emitter in src/lib.rs:1259-1437, merger origin tuples in src/merger.rs:59-63, Rocq proofs in proofs/rocq/ (esp. fusion_spec.v)"
     links:
       - type: satisfies
         target: REQ-003
@@ -491,7 +491,7 @@ artifacts:
             analyses (timing, ports, modes) need to attach to;
             without it the rivet traceability story loses its top
             layer.
-      source-ref: "spar-codegen status: /Users/r/git/pulseengine/spar/crates/spar-codegen/src/wit_gen.rs (complete) ; no Bazel rule yet in rules_wasm_component"
+      source-ref: "spar-codegen status: pulseengine/spar crates/spar-codegen/src/wit_gen.rs (complete) ; no Bazel rule yet in rules_wasm_component"
     links:
       - type: satisfies
         target: REQ-001

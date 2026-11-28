@@ -4,7 +4,7 @@ name: rivet-delta
 # touches artifacts/, schemas/, spar/, or rivet.yaml. Posts a sticky
 # comment so reviewers see what changed without diffing YAML by hand.
 #
-# Pattern adapted from /Users/r/git/pulseengine/rivet/.github/
+# Pattern adapted from pulseengine/rivet's .github/
 # workflows/rivet-delta.yml. scry installs the rivet CLI rather
 # than building it from source.
 #

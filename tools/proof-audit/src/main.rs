@@ -32,7 +32,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
 const MARKER: &str = "@@PROOF-AUDIT ";
 const KEYWORDS: [&str; 7] = [
@@ -1002,29 +1001,34 @@ fn run_ledger(args: &[String], proofs: &str) -> Result<bool, String> {
     Ok(ok)
 }
 
-fn main() -> ExitCode {
+// `main -> ExitCode` loses the code on wasm32-wasip2: Rust 1.100 lowers it to
+// `wasi:cli/exit.exit(result)`, so ExitCode::from(2) reaches the host as 1
+// (wasmtime 50.0.2, measured on this binary). `std::process::exit` goes
+// through `exit-with-code` and keeps it, so every exit path uses it, native
+// included, and CI asserts 0, 1 and 2 through the component.
+fn main() {
+    std::process::exit(i32::from(real_main()));
+}
+
+fn real_main() -> u8 {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(|s| s.as_str()) {
         Some("--version") | Some("-V") => {
             println!("proof-audit {}", env!("CARGO_PKG_VERSION"));
-            return ExitCode::SUCCESS;
+            return 0;
         }
         Some("--help") | Some("-h") | None => {
             println!("{USAGE}");
-            return if args.is_empty() {
-                ExitCode::from(2)
-            } else {
-                ExitCode::SUCCESS
-            };
+            return if args.is_empty() { 2 } else { 0 };
         }
         _ => {}
     }
     match run(&args) {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::from(1),
+        Ok(true) => 0,
+        Ok(false) => 1,
         Err(e) => {
             eprintln!("proof-audit: {e}");
-            ExitCode::from(2)
+            2
         }
     }
 }
